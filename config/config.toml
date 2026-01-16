@@ -1,0 +1,65 @@
+# OpenHands Configuration
+# This file is deployed to /data/openhands/config/config.toml on the EC2 instance
+
+[core]
+# Base directory for workspace files
+workspace_base = "/opt/workspace_base"
+
+# Maximum number of concurrent conversations
+max_concurrent_conversations = 10
+
+# Maximum age of a conversation in seconds (24 hours)
+conversation_max_age_seconds = 86400
+
+# Default agent to use
+default_agent = "CodeActAgent"
+
+# NOTE: file_store settings are managed via environment variables in docker-compose.yml
+# (FILE_STORE=s3, FILE_STORE_PATH=<bucket-name>) because env vars take precedence over
+# config.toml, and we need to inject the actual bucket name dynamically from CDK.
+
+[llm]
+# AWS Bedrock Claude Opus 4.5 model with Global inference profile
+# Global endpoint routes requests to any commercial AWS Region for optimal performance
+model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+
+# AWS region for Bedrock API calls
+# This will be automatically set by the EC2 user data script
+aws_region_name = "${AWS_REGION}"
+
+# No API key needed - using EC2 Instance Profile (IAM Role)
+# The EC2 instance role has permissions to invoke Bedrock models
+
+[sandbox]
+# Sandbox timeout in seconds
+timeout = 300
+
+# NOTE: use_host_network is NOT enabled because it causes port 8000 conflicts
+# when multiple agent-server containers run simultaneously. Each conversation
+# spawns an agent-server that binds to port 8000, which fails with host network mode.
+# Dynamic ports (Flask apps) via /runtime/{port}/ will not work without this,
+# but multiple concurrent conversations are more important for usability.
+
+# GPU is not needed when using Bedrock (cloud inference)
+# enable_gpu = false
+
+# Note: Custom agent-server image is configured via environment variables in docker-compose.yml:
+# - AGENT_SERVER_IMAGE_REPOSITORY - The ECR repository for the custom agent-server image
+# - AGENT_SERVER_IMAGE_TAG - The tag for the custom agent-server image (e.g., boto3-v3)
+# The default agent-server doesn't include boto3, which is required by litellm for Bedrock
+
+[agent]
+# Disable browser tools to avoid Chromium dependency
+# Browser operations require Chromium which is not installed in agent-server containers
+enable_browsing = false
+
+# Disable MCP (Model Context Protocol) to avoid DNS resolution issues
+# The agent-server containers cannot resolve host.docker.internal for MCP connection
+enable_mcp = false
+
+[security]
+# Disable confirmation mode for automated workflows
+confirmation_mode = false
+
+# Use LLM-based security analyzer
+security_analyzer = "llm"

@@ -1,0 +1,2752 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
+{
+  "Outputs": {
+    "AlbArn": {
+      "Description": "ALB ARN",
+      "Value": {
+        "Ref": "OpenHandsAlb343FAEDA",
+      },
+    },
+    "AlbDnsName": {
+      "Description": "ALB DNS Name",
+      "Value": {
+        "Fn::GetAtt": [
+          "OpenHandsAlb343FAEDA",
+          "DNSName",
+        ],
+      },
+    },
+    "AsgName": {
+      "Description": "Auto Scaling Group Name",
+      "Value": {
+        "Ref": "OpenHandsAsgASG16C624EA",
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "SsmParameterValueawsserviceamiamazonlinuxlatestal2023amikernel61arm64C96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64",
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+    },
+  },
+  "Resources": {
+    "CpuAlarm87CA37A9": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
+          },
+        ],
+        "AlarmDescription": "CPU utilization exceeds 80%",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "Dimensions": [
+          {
+            "Name": "AutoScalingGroupName",
+            "Value": {
+              "Ref": "OpenHandsAsgASG16C624EA",
+            },
+          },
+        ],
+        "EvaluationPeriods": 2,
+        "MetricName": "CPUUtilization",
+        "Namespace": "AWS/EC2",
+        "Period": 300,
+        "Statistic": "Average",
+        "Threshold": 80,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "DiskAlarm26803A32": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
+          },
+        ],
+        "AlarmDescription": "Disk usage exceeds 85%",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "Dimensions": [
+          {
+            "Name": "AutoScalingGroupName",
+            "Value": {
+              "Ref": "OpenHandsAsgASG16C624EA",
+            },
+          },
+          {
+            "Name": "path",
+            "Value": "/data",
+          },
+        ],
+        "EvaluationPeriods": 2,
+        "MetricName": "disk_used_percent",
+        "Namespace": "CWAgent",
+        "Period": 300,
+        "Statistic": "Average",
+        "Threshold": 85,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "MemoryAlarm2E786DB4": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
+          },
+        ],
+        "AlarmDescription": "Memory utilization exceeds 85%",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "Dimensions": [
+          {
+            "Name": "AutoScalingGroupName",
+            "Value": {
+              "Ref": "OpenHandsAsgASG16C624EA",
+            },
+          },
+        ],
+        "EvaluationPeriods": 2,
+        "MetricName": "mem_used_percent",
+        "Namespace": "CWAgent",
+        "Period": 300,
+        "Statistic": "Average",
+        "Threshold": 85,
+        "TreatMissingData": "notBreaching",
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
+    "OpenHandsAlb343FAEDA": {
+      "Properties": {
+        "LoadBalancerAttributes": [
+          {
+            "Key": "deletion_protection.enabled",
+            "Value": "false",
+          },
+        ],
+        "Scheme": "internet-facing",
+        "SecurityGroups": [
+          {
+            "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAlbSecurityGroup86A59E99GroupIdE3A37BC7",
+          },
+        ],
+        "Subnets": [
+          "s-12345",
+          "s-67890",
+        ],
+        "Type": "application",
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+    },
+    "OpenHandsAlbHttpListener244F6A31": {
+      "Properties": {
+        "DefaultActions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "OpenHandsTargetGroupB296B707",
+            },
+            "Type": "forward",
+          },
+        ],
+        "LoadBalancerArn": {
+          "Ref": "OpenHandsAlb343FAEDA",
+        },
+        "Port": 80,
+        "Protocol": "HTTP",
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+    },
+    "OpenHandsAlbHttpListenerRuntimeRuleRuleEFBB1962": {
+      "Properties": {
+        "Actions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "RuntimeTargetGroup77A6315C",
+            },
+            "Type": "forward",
+          },
+        ],
+        "Conditions": [
+          {
+            "Field": "path-pattern",
+            "PathPatternConfig": {
+              "Values": [
+                "/runtime/*",
+              ],
+            },
+          },
+        ],
+        "ListenerArn": {
+          "Ref": "OpenHandsAlbHttpListener244F6A31",
+        },
+        "Priority": 10,
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+    },
+    "OpenHandsAsgASG16C624EA": {
+      "Properties": {
+        "HealthCheckGracePeriod": 600,
+        "HealthCheckType": "ELB",
+        "LaunchTemplate": {
+          "LaunchTemplateId": {
+            "Ref": "OpenHandsLaunchTemplate41AB5D4E",
+          },
+          "Version": {
+            "Fn::GetAtt": [
+              "OpenHandsLaunchTemplate41AB5D4E",
+              "LatestVersionNumber",
+            ],
+          },
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "NewInstancesProtectedFromScaleIn": false,
+        "TargetGroupARNs": [
+          {
+            "Ref": "OpenHandsTargetGroupB296B707",
+          },
+          {
+            "Ref": "RuntimeTargetGroup77A6315C",
+          },
+        ],
+        "VPCZoneIdentifier": [
+          "p-12345",
+          "p-67890",
+        ],
+      },
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "UpdatePolicy": {
+        "AutoScalingRollingUpdate": {
+          "SuspendProcesses": [
+            "HealthCheck",
+            "ReplaceUnhealthy",
+            "AZRebalance",
+            "AlarmNotification",
+            "ScheduledActions",
+            "InstanceRefresh",
+          ],
+        },
+        "AutoScalingScheduledAction": {
+          "IgnoreUnmodifiedGroupSizeProperties": true,
+        },
+      },
+    },
+    "OpenHandsLaunchTemplate41AB5D4E": {
+      "Properties": {
+        "LaunchTemplateData": {
+          "BlockDeviceMappings": [
+            {
+              "DeviceName": "/dev/xvda",
+              "Ebs": {
+                "Encrypted": true,
+                "Iops": 3000,
+                "Throughput": 125,
+                "VolumeSize": 30,
+                "VolumeType": "gp3",
+              },
+            },
+            {
+              "DeviceName": "/dev/sdf",
+              "Ebs": {
+                "DeleteOnTermination": false,
+                "Encrypted": true,
+                "Iops": 3000,
+                "Throughput": 125,
+                "VolumeSize": 100,
+                "VolumeType": "gp3",
+              },
+            },
+          ],
+          "IamInstanceProfile": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "OpenHandsLaunchTemplateProfile0C9EFCAE",
+                "Arn",
+              ],
+            },
+          },
+          "ImageId": {
+            "Ref": "SsmParameterValueawsserviceamiamazonlinuxlatestal2023amikernel61arm64C96584B6F00A464EAD1953AFF4B05118Parameter",
+          },
+          "InstanceType": "m7g.xlarge",
+          "MetadataOptions": {
+            "HttpTokens": "required",
+          },
+          "SecurityGroupIds": [
+            {
+              "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+            },
+          ],
+          "TagSpecifications": [
+            {
+              "ResourceType": "instance",
+              "Tags": [
+                {
+                  "Key": "Name",
+                  "Value": "TestComputeStack/OpenHandsLaunchTemplate",
+                },
+              ],
+            },
+            {
+              "ResourceType": "volume",
+              "Tags": [
+                {
+                  "Key": "Name",
+                  "Value": "TestComputeStack/OpenHandsLaunchTemplate",
+                },
+              ],
+            },
+          ],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Join": [
+                "",
+                [
+                  "#!/bin/bash
+#!/bin/bash
+set -ex
+exec > >(tee /var/log/user-data.log) 2>&1
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+error_handler() { aws sns publish --topic-arn "",
+                  {
+                    "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
+                  },
+                  "" --region "$REGION" --subject "OpenHands EC2 Failed" --message "Instance: $INSTANCE_ID, Line: $1" || true; exit 1; }
+trap 'error_handler $LINENO' ERR
+retry() { for i in 1 2 3; do "$@" && return 0; sleep 10; done; return 1; }
+retry dnf install -y docker
+mkdir -p /etc/docker
+echo '{"default-address-pools":[{"base":"172.17.0.0/12","size":24}],"log-driver":"json-file","log-opts":{"max-size":"100m","max-file":"3"}}' > /etc/docker/daemon.json
+systemctl enable --now docker
+usermod -aG docker ec2-user
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-Linux-aarch64" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
+retry dnf install -y amazon-cloudwatch-agent nginx
+echo '{"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"cpu":{"measurement":["cpu_usage_idle","cpu_usage_user"],"metrics_collection_interval":60,"totalcpu":true},"mem":{"measurement":["mem_used_percent"],"metrics_collection_interval":60},"disk":{"measurement":["disk_used_percent"],"metrics_collection_interval":60,"resources":["/","/data"]}},"append_dimensions":{"AutoScalingGroupName":"\${aws:AutoScalingGroupName}","InstanceId":"\${aws:InstanceId}"}}}' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+cat > /etc/nginx/nginx.conf << 'EOF'
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /run/nginx.pid;
+events { worker_connections 1024; use epoll; multi_accept on; }
+http {
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
+  access_log /var/log/nginx/access.log;
+  sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65;
+  server {
+    listen 8080; server_name _;
+    location /health { return 200 'OK'; add_header Content-Type text/plain; }
+    location ~ ^/runtime/(?<target_port>\\d+)(?<remaining_path>/.*)?$ {
+      set $proxy_path $remaining_path;
+      if ($proxy_path = "") { set $proxy_path "/"; }
+      proxy_pass http://127.0.0.1:$target_port$proxy_path$is_args$args;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_connect_timeout 60s; proxy_send_timeout 300s; proxy_read_timeout 300s;
+      proxy_buffering off;
+    }
+  }
+}
+EOF
+systemctl enable --now nginx
+for i in {1..60}; do [ -e /dev/nvme1n1 ] && break; sleep 5; done; [ -e /dev/nvme1n1 ] || exit 1
+blkid /dev/nvme1n1 || mkfs -t xfs /dev/nvme1n1
+mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab
+mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands
+RUNTIME_VERSION=$(aws ssm get-parameter --name "",
+                  {
+                    "Ref": "RuntimeVersionParam2CECFC75",
+                  },
+                  "" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "1.1-nikolaik")
+cat > /data/openhands/docker-compose.yml << EOF
+services:
+  openhands:
+    image: ",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f313b7674166dc7f3862766d142fbbdf62f1e6f4ec3e14532602d85dbd82a3aa",
+                  },
+                  "
+    container_name: openhands-app
+    restart: unless-stopped
+    environment:
+      - SANDBOX_USER_ID=0
+      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION
+      - WORKSPACE_MOUNT_PATH=/data/openhands/workspace
+      - LOG_ALL_EVENTS=true
+      - HIDE_LLM_SETTINGS=true
+      - USER_AUTH_CLASS=openhands.server.user_auth.cognito_user_auth.CognitoUserAuth
+      - LLM_MODEL=bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+      - LLM_AWS_REGION_NAME=us-west-2
+      - AWS_S3_BUCKET=",
+                  {
+                    "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+                  },
+                  "
+      - FILE_STORE=s3
+      - FILE_STORE_PATH=",
+                  {
+                    "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+                  },
+                  "
+      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"}}
+      - AGENT_SERVER_IMAGE_REPOSITORY=123456789012.dkr.ecr.us-west-2.",
+                  {
+                    "Ref": "AWS::URLSuffix",
+                  },
+                  "/cdk-hnb659fds-container-assets-123456789012-us-west-2
+      - AGENT_SERVER_IMAGE_TAG=3a6444823da5ec080bdbc8786ec89ff48dbdd5c7af437ca401211f4b13ecc72c
+      - AGENT_ENABLE_BROWSING=false
+      - AGENT_ENABLE_MCP=false
+      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}
+      - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
+      - DB_PORT=5432
+      - DB_NAME=openhands
+      - DB_USER=openhands_proxy
+      - DB_SSL=require
+      - DB_CLUSTER_ENDPOINT=mock-cluster.cluster-abc123.us-west-2.rds.amazonaws.com
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.docker:/root/.docker:ro
+      - /data/openhands/.openhands:/root/.openhands
+      - /data/openhands/workspace:/opt/workspace_base
+      - /data/openhands/config/config.toml:/app/config.toml:ro
+      - /data/openhands/config/database.env:/app/database.env:ro
+    ports:
+      - "3000:3000"
+    env_file:
+      - /data/openhands/config/database.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=86400
+    command: openhands-app
+EOF
+
+# Create config.toml (loaded from config/config.toml at CDK synth time)
+cat > /data/openhands/config/config.toml << CONFIG
+[core]
+workspace_base = "/opt/workspace_base"
+max_concurrent_conversations = 10
+conversation_max_age_seconds = 86400
+default_agent = "CodeActAgent"
+[llm]
+model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+aws_region_name = "\${REGION}"
+[sandbox]
+timeout = 300
+[agent]
+enable_browsing = false
+enable_mcp = false
+[security]
+confirmation_mode = false
+security_analyzer = "llm"
+CONFIG
+
+cat > /usr/local/bin/setup-db-credentials.sh << 'DBSCRIPT'
+#!/bin/bash
+set -e
+DB_HOST="mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com"
+DB_PORT="5432"
+DB_USER="openhands_proxy"
+DB_NAME="openhands"
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+# Get password from Secrets Manager
+SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id openhands/database/proxy-user --region "$REGION" --query SecretString --output text 2>/dev/null || echo "")
+if [ -z "$SECRET_VALUE" ]; then echo "ERROR: Failed to retrieve database secret"; exit 1; fi
+DB_PASS=$(echo "$SECRET_VALUE" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+ENCODED_PASS=$(python3 -c "import urllib.parse; print(urllib.parse.quote(\\"$DB_PASS\\", safe=\\"\\"))")
+mkdir -p /data/openhands/config
+echo "DB_HOST=$DB_HOST" > /data/openhands/config/database.env
+echo "DB_PORT=$DB_PORT" >> /data/openhands/config/database.env
+echo "DB_NAME=$DB_NAME" >> /data/openhands/config/database.env
+echo "DB_USER=$DB_USER" >> /data/openhands/config/database.env
+echo "DB_PASS=$DB_PASS" >> /data/openhands/config/database.env
+echo "DB_SSL=require" >> /data/openhands/config/database.env
+echo "DATABASE_URL=postgresql://\${DB_USER}:\${ENCODED_PASS}@\${DB_HOST}:\${DB_PORT}/\${DB_NAME}?sslmode=require" >> /data/openhands/config/database.env
+chmod 600 /data/openhands/config/database.env
+echo "Database credentials configured successfully"
+DBSCRIPT
+chmod +x /usr/local/bin/setup-db-credentials.sh
+/usr/local/bin/setup-db-credentials.sh
+cat > /etc/systemd/system/openhands.service << SERVICE
+[Unit]
+Description=OpenHands
+After=docker.service
+Requires=docker.service
+[Service]
+Type=simple
+WorkingDirectory=/data/openhands
+ExecStart=/usr/local/bin/docker-compose up
+ExecStop=/usr/local/bin/docker-compose down
+Restart=always
+User=root
+[Install]
+WantedBy=multi-user.target
+SERVICE
+aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ",
+                  {
+                    "Ref": "AWS::AccountId",
+                  },
+                  ".dkr.ecr.$REGION.amazonaws.com
+pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
+pull_with_retry "",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f313b7674166dc7f3862766d142fbbdf62f1e6f4ec3e14532602d85dbd82a3aa",
+                  },
+                  ""
+pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"
+pull_with_retry "",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3a6444823da5ec080bdbc8786ec89ff48dbdd5c7af437ca401211f4b13ecc72c",
+                  },
+                  ""
+set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
+systemctl daemon-reload && systemctl enable openhands && systemctl start openhands
+echo "OpenHands setup complete!"",
+                ],
+              ],
+            },
+          },
+        },
+        "TagSpecifications": [
+          {
+            "ResourceType": "launch-template",
+            "Tags": [
+              {
+                "Key": "Name",
+                "Value": "TestComputeStack/OpenHandsLaunchTemplate",
+              },
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::EC2::LaunchTemplate",
+    },
+    "OpenHandsLaunchTemplateProfile0C9EFCAE": {
+      "Properties": {
+        "Roles": [
+          {
+            "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefOpenHandsEc2RoleD46687489963EFBC",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::InstanceProfile",
+    },
+    "OpenHandsTargetGroupB296B707": {
+      "Properties": {
+        "HealthCheckIntervalSeconds": 30,
+        "HealthCheckPath": "/api/health",
+        "HealthCheckTimeoutSeconds": 5,
+        "HealthyThresholdCount": 2,
+        "Port": 3000,
+        "Protocol": "HTTP",
+        "TargetGroupAttributes": [
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "30",
+          },
+          {
+            "Key": "stickiness.enabled",
+            "Value": "false",
+          },
+        ],
+        "TargetType": "instance",
+        "UnhealthyThresholdCount": 3,
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+    },
+    "OpenHandsVersionParam702B5340": {
+      "Properties": {
+        "Description": "OpenHands Docker image version tag",
+        "Name": "/openhands/docker/openhands-version",
+        "Tier": "Standard",
+        "Type": "String",
+        "Value": "1.1.0",
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+    "RuntimeTargetGroup77A6315C": {
+      "Properties": {
+        "HealthCheckIntervalSeconds": 30,
+        "HealthCheckPath": "/health",
+        "HealthCheckTimeoutSeconds": 5,
+        "HealthyThresholdCount": 2,
+        "Port": 8080,
+        "Protocol": "HTTP",
+        "TargetGroupAttributes": [
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "30",
+          },
+          {
+            "Key": "stickiness.enabled",
+            "Value": "false",
+          },
+        ],
+        "TargetType": "instance",
+        "UnhealthyThresholdCount": 3,
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+    },
+    "RuntimeVersionParam2CECFC75": {
+      "Properties": {
+        "Description": "OpenHands Runtime Docker image version tag",
+        "Name": "/openhands/docker/runtime-version",
+        "Tier": "Standard",
+        "Type": "String",
+        "Value": "1.1-nikolaik",
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`OpenHands Infrastructure Stacks EdgeStack matches snapshot 1`] = `
+{
+  "Mappings": {
+    "AWSCloudFrontPartitionHostedZoneIdMap": {
+      "aws": {
+        "zoneId": "Z2FDTNDATAQYW2",
+      },
+      "aws-cn": {
+        "zoneId": "Z3RFFRIM2A3IF5",
+      },
+    },
+  },
+  "Outputs": {
+    "ClientSecretArn": {
+      "Description": "Cognito Client Secret ARN in Secrets Manager",
+      "Value": {
+        "Ref": "CognitoClientSecret800946F9",
+      },
+    },
+    "CognitoDomainUrl": {
+      "Description": "Cognito Domain URL",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "UserPoolCognitoDomainD6C7F9FA",
+            },
+            ".auth.us-east-1.amazoncognito.com",
+          ],
+        ],
+      },
+    },
+    "CustomDomain": {
+      "Description": "Custom Domain URL",
+      "Value": "https://openhands.example.com",
+    },
+    "DistributionDomainName": {
+      "Description": "CloudFront Distribution Domain Name",
+      "Value": {
+        "Fn::GetAtt": [
+          "Distribution830FAC52",
+          "DomainName",
+        ],
+      },
+    },
+    "DistributionId": {
+      "Description": "CloudFront Distribution ID",
+      "Value": {
+        "Ref": "Distribution830FAC52",
+      },
+    },
+    "UserPoolClientId": {
+      "Description": "Cognito User Pool Client ID",
+      "Value": {
+        "Ref": "UserPoolWebAppClientCD2D5CB1",
+      },
+    },
+    "UserPoolId": {
+      "Description": "Cognito User Pool ID",
+      "Value": {
+        "Ref": "UserPool6BA7E5F2",
+      },
+    },
+    "WebAclArn": {
+      "Description": "WAF WebACL ARN",
+      "Value": {
+        "Fn::GetAtt": [
+          "WebAcl",
+          "Arn",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "AWS679f53fac002430cb0da5b7982bd22872D164C4C": {
+      "DependsOn": [
+        "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "bc8ef58951f4c88e641dd23090e9d2e2e61c7530a07960e767522941e959b625.zip",
+        },
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs22.x",
+        "Timeout": 120,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AliasRecord851000D2": {
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": {
+            "Fn::GetAtt": [
+              "Distribution830FAC52",
+              "DomainName",
+            ],
+          },
+          "HostedZoneId": {
+            "Fn::FindInMap": [
+              "AWSCloudFrontPartitionHostedZoneIdMap",
+              {
+                "Ref": "AWS::Partition",
+              },
+              "zoneId",
+            ],
+          },
+        },
+        "HostedZoneId": "Z0123456789ABC",
+        "Name": "openhands.example.com.",
+        "Type": "A",
+      },
+      "Type": "AWS::Route53::RecordSet",
+    },
+    "AuthFunctionA1CD5E0F": {
+      "DependsOn": [
+        "AuthFunctionRole4D23EDCC",
+      ],
+      "Properties": {
+        "Code": {
+          "ZipFile": {
+            "Fn::Join": [
+              "",
+              [
+                "
+const https = require('https');
+const crypto = require('crypto');
+
+// Configuration (embedded at deploy time - Lambda@Edge cannot access regional services)
+const CONFIG = {
+  userPoolId: '",
+                {
+                  "Ref": "UserPool6BA7E5F2",
+                },
+                "',
+  clientId: '",
+                {
+                  "Ref": "UserPoolWebAppClientCD2D5CB1",
+                },
+                "',
+  clientSecret: '",
+                {
+                  "Fn::GetAtt": [
+                    "UserPoolWebAppClientDescribeCognitoUserPoolClient2F6BCD92",
+                    "UserPoolClient.ClientSecret",
+                  ],
+                },
+                "',
+  cognitoDomain: '",
+                {
+                  "Ref": "UserPoolCognitoDomainD6C7F9FA",
+                },
+                ".auth.us-east-1.amazoncognito.com',
+  jwksUri: 'https://cognito-idp.us-east-1.amazonaws.com/",
+                {
+                  "Ref": "UserPool6BA7E5F2",
+                },
+                "/.well-known/jwks.json',
+  issuer: 'https://cognito-idp.us-east-1.amazonaws.com/",
+                {
+                  "Ref": "UserPool6BA7E5F2",
+                },
+                "',
+  callbackPath: '/_callback',
+  logoutPath: '/_logout',
+  region: 'us-east-1',
+};
+
+// JWKS cache (in-memory, persists across warm invocations)
+let jwksCache = null;
+let jwksCacheTime = 0;
+const JWKS_CACHE_TTL = 3600000; // 1 hour
+
+function base64UrlDecode(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  return Buffer.from(str, 'base64').toString();
+}
+
+function base64UrlToBuffer(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  return Buffer.from(str, 'base64');
+}
+
+// Fetch JWKS from Cognito
+async function fetchJwks() {
+  const now = Date.now();
+  if (jwksCache && (now - jwksCacheTime) < JWKS_CACHE_TTL) {
+    return jwksCache;
+  }
+
+  return new Promise((resolve, reject) => {
+    https.get(CONFIG.jwksUri, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          jwksCache = JSON.parse(data);
+          jwksCacheTime = now;
+          resolve(jwksCache);
+        } catch (e) {
+          reject(new Error('Failed to parse JWKS: ' + e.message));
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Find the correct key from JWKS
+function findKey(jwks, kid) {
+  return jwks.keys.find(key => key.kid === kid);
+}
+
+// Convert JWK to PEM format for verification
+function jwkToPem(jwk) {
+  if (jwk.kty !== 'RSA') {
+    throw new Error('Unsupported key type: ' + jwk.kty);
+  }
+
+  const n = base64UrlToBuffer(jwk.n);
+  const e = base64UrlToBuffer(jwk.e);
+
+  // ASN.1 DER length encoding helper
+  function encodeLength(len) {
+    if (len < 128) {
+      return Buffer.from([len]);
+    } else if (len < 256) {
+      return Buffer.from([0x81, len]);
+    } else {
+      return Buffer.from([0x82, (len >> 8) & 0xff, len & 0xff]);
+    }
+  }
+
+  // Integer encoding helper
+  function encodeInteger(buf) {
+    // Add leading zero if high bit is set (to indicate positive number)
+    if (buf[0] & 0x80) {
+      buf = Buffer.concat([Buffer.from([0x00]), buf]);
+    }
+    return Buffer.concat([Buffer.from([0x02]), encodeLength(buf.length), buf]);
+  }
+
+  // Sequence encoding helper
+  function encodeSequence(content) {
+    return Buffer.concat([Buffer.from([0x30]), encodeLength(content.length), content]);
+  }
+
+  // BitString encoding helper (with proper length handling)
+  function encodeBitString(content) {
+    const len = content.length + 1; // +1 for unused bits byte
+    return Buffer.concat([Buffer.from([0x03]), encodeLength(len), Buffer.from([0x00]), content]);
+  }
+
+  const nEncoded = encodeInteger(n);
+  const eEncoded = encodeInteger(e);
+  const rsaPublicKey = encodeSequence(Buffer.concat([nEncoded, eEncoded]));
+
+  // RSA OID: 1.2.840.113549.1.1.1
+  const rsaOid = Buffer.from([0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00]);
+  const algorithmIdentifier = encodeSequence(rsaOid);
+
+  // Wrap public key in BitString with proper length encoding
+  const bitString = encodeBitString(rsaPublicKey);
+
+  const publicKeyInfo = encodeSequence(Buffer.concat([algorithmIdentifier, bitString]));
+
+  // Convert to PEM
+  const base64 = publicKeyInfo.toString('base64');
+  const lines = base64.match(/.{1,64}/g) || [];
+  return '-----BEGIN PUBLIC KEY-----\\n' + lines.join('\\n') + '\\n-----END PUBLIC KEY-----';
+}
+
+// Verify JWT signature using JWKS
+async function verifyTokenSignature(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      console.error('Invalid token format');
+      return null;
+    }
+
+    const [headerB64, payloadB64, signatureB64] = parts;
+    const header = JSON.parse(base64UrlDecode(headerB64));
+    const payload = JSON.parse(base64UrlDecode(payloadB64));
+
+    // Verify algorithm
+    if (header.alg !== 'RS256') {
+      console.error('Unsupported algorithm:', header.alg);
+      return null;
+    }
+
+    // Fetch JWKS and find the key
+    const jwks = await fetchJwks();
+    const key = findKey(jwks, header.kid);
+    if (!key) {
+      console.error('Key not found in JWKS:', header.kid);
+      return null;
+    }
+
+    // Convert JWK to PEM
+    const pem = jwkToPem(key);
+
+    // Verify signature
+    const signatureInput = headerB64 + '.' + payloadB64;
+    const signature = base64UrlToBuffer(signatureB64);
+
+    const verifier = crypto.createVerify('RSA-SHA256');
+    verifier.update(signatureInput);
+
+    if (!verifier.verify(pem, signature)) {
+      console.error('Signature verification failed');
+      return null;
+    }
+
+    // Verify issuer
+    if (payload.iss !== CONFIG.issuer) {
+      console.error('Invalid issuer:', payload.iss);
+      return null;
+    }
+
+    // Verify expiration
+    if (payload.exp && payload.exp < Date.now() / 1000) {
+      console.error('Token expired');
+      return null;
+    }
+
+    // Verify audience (for id_token) or client_id (for access_token)
+    if (payload.aud !== CONFIG.clientId && payload.client_id !== CONFIG.clientId) {
+      console.error('Invalid audience/client_id');
+      return null;
+    }
+
+    // Verify token_use for id_token
+    if (payload.token_use && payload.token_use !== 'id') {
+      console.error('Invalid token_use:', payload.token_use);
+      return null;
+    }
+
+    return payload;
+  } catch (e) {
+    console.error('Token verification error:', e);
+    return null;
+  }
+}
+
+function getCookie(cookies, name) {
+  if (!cookies) return null;
+  for (const cookie of cookies) {
+    const match = cookie.value.match(new RegExp(\`\${name}=([^;]+)\`));
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function parseQueryString(qs) {
+  if (!qs) return {};
+  return qs.split('&').reduce((acc, pair) => {
+    const [key, value] = pair.split('=');
+    acc[decodeURIComponent(key)] = decodeURIComponent(value || '');
+    return acc;
+  }, {});
+}
+
+function buildLoginUrl(request) {
+  const host = request.headers.host[0].value;
+  const uri = request.uri;
+  const querystring = request.querystring || '';
+  const state = Buffer.from(JSON.stringify({ uri, querystring })).toString('base64url');
+
+  return \`https://\${CONFIG.cognitoDomain}/login?response_type=code&client_id=\${CONFIG.clientId}&redirect_uri=https://\${host}\${CONFIG.callbackPath}&state=\${state}&scope=openid+email+profile\`;
+}
+
+async function exchangeCodeForTokens(code, redirectUri) {
+  return new Promise((resolve, reject) => {
+    const auth = Buffer.from(\`\${CONFIG.clientId}:\${CONFIG.clientSecret}\`).toString('base64');
+    const postData = \`grant_type=authorization_code&code=\${code}&redirect_uri=\${encodeURIComponent(redirectUri)}&client_id=\${CONFIG.clientId}\`;
+
+    const options = {
+      hostname: CONFIG.cognitoDomain,
+      port: 443,
+      path: '/oauth2/token',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': \`Basic \${auth}\`,
+        'Content-Length': Buffer.byteLength(postData),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error(\`Failed to parse token response: \${data}\`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+exports.handler = async (event) => {
+  const request = event.Records[0].cf.request;
+  const uri = request.uri;
+  const cookies = request.headers.cookie;
+  const host = request.headers.host[0].value;
+
+  // Handle callback from Cognito
+  if (uri === CONFIG.callbackPath) {
+    try {
+      const params = parseQueryString(request.querystring);
+      const code = params.code;
+      const state = params.state;
+
+      if (!code) {
+        console.error('No code in callback');
+        return {
+          status: '400',
+          statusDescription: 'Bad Request',
+          body: 'Missing authorization code',
+        };
+      }
+
+      // Exchange code for tokens
+      const redirectUri = \`https://\${host}\${CONFIG.callbackPath}\`;
+      const tokens = await exchangeCodeForTokens(code, redirectUri);
+
+      if (!tokens.id_token) {
+        console.error('No id_token in response:', tokens);
+        return {
+          status: '500',
+          statusDescription: 'Internal Server Error',
+          body: 'Failed to get tokens',
+        };
+      }
+
+      // Verify the id_token signature before setting cookie
+      const payload = await verifyTokenSignature(tokens.id_token);
+      if (!payload) {
+        console.error('Token verification failed after exchange');
+        return {
+          status: '500',
+          statusDescription: 'Internal Server Error',
+          body: 'Token verification failed',
+        };
+      }
+
+      // Decode state to get original destination
+      let destination = '/';
+      if (state) {
+        try {
+          const stateData = JSON.parse(Buffer.from(state, 'base64url').toString());
+          destination = stateData.uri || '/';
+          if (stateData.querystring) {
+            destination += '?' + stateData.querystring;
+          }
+        } catch (e) {
+          console.error('Failed to parse state:', e);
+        }
+      }
+
+      // Calculate cookie expiry (1 day - matches id_token validity)
+      const expiry = new Date(Date.now() + 86400000).toUTCString();
+
+      return {
+        status: '302',
+        statusDescription: 'Found',
+        headers: {
+          location: [{ key: 'Location', value: destination }],
+          'set-cookie': [
+            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
+          ],
+        },
+      };
+    } catch (e) {
+      console.error('Callback error:', e);
+      return {
+        status: '500',
+        statusDescription: 'Internal Server Error',
+        body: 'Authentication failed: ' + e.message,
+      };
+    }
+  }
+
+  // Handle logout
+  if (uri === CONFIG.logoutPath) {
+    const logoutUrl = \`https://\${CONFIG.cognitoDomain}/logout?client_id=\${CONFIG.clientId}&logout_uri=https://\${host}/\`;
+    return {
+      status: '302',
+      statusDescription: 'Found',
+      headers: {
+        location: [{ key: 'Location', value: logoutUrl }],
+        'set-cookie': [{ key: 'Set-Cookie', value: 'id_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure' }],
+      },
+    };
+  }
+
+  // Check for valid token with full JWKS signature verification
+  const idToken = getCookie(cookies, 'id_token');
+  if (idToken) {
+    const payload = await verifyTokenSignature(idToken);
+    if (payload) {
+      // Token is valid (signature verified)
+      // Clear any existing x-cognito-* headers to prevent spoofing
+      delete request.headers['x-cognito-user-id'];
+      delete request.headers['x-cognito-email'];
+      delete request.headers['x-cognito-email-verified'];
+
+      // Inject verified user information as headers for downstream services
+      request.headers['x-cognito-user-id'] = [{
+        key: 'X-Cognito-User-Id',
+        value: payload.sub
+      }];
+      request.headers['x-cognito-email'] = [{
+        key: 'X-Cognito-Email',
+        value: payload.email || ''
+      }];
+      request.headers['x-cognito-email-verified'] = [{
+        key: 'X-Cognito-Email-Verified',
+        value: String(payload.email_verified || false)
+      }];
+
+      return request;
+    }
+  }
+
+  // No valid token, redirect to login
+  return {
+    status: '302',
+    statusDescription: 'Found',
+    headers: {
+      location: [{ key: 'Location', value: buildLoginUrl(request) }],
+    },
+  };
+};
+",
+              ],
+            ],
+          },
+        },
+        "Handler": "index.handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "AuthFunctionRole4D23EDCC",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Timeout": 5,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AuthFunctionCurrentVersionDB17CE867954f71365dd826b5576d66a094f7fba": {
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true,
+      },
+      "Properties": {
+        "FunctionName": {
+          "Ref": "AuthFunctionA1CD5E0F",
+        },
+      },
+      "Type": "AWS::Lambda::Version",
+    },
+    "AuthFunctionRole4D23EDCC": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "edgelambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "Certificate4E7ABB08": {
+      "Properties": {
+        "DomainName": "openhands.example.com",
+        "DomainValidationOptions": [
+          {
+            "DomainName": "openhands.example.com",
+            "HostedZoneId": "Z0123456789ABC",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "TestEdgeStack/Certificate",
+          },
+        ],
+        "ValidationMethod": "DNS",
+      },
+      "Type": "AWS::CertificateManager::Certificate",
+    },
+    "CognitoClientSecret800946F9": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "Cognito User Pool Client Secret for OpenHands",
+        "Name": "openhands/cognito-client-secret",
+        "SecretString": {
+          "Fn::GetAtt": [
+            "UserPoolWebAppClientDescribeCognitoUserPoolClient2F6BCD92",
+            "UserPoolClient.ClientSecret",
+          ],
+        },
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "CorsHeadersPolicy085CC81B": {
+      "Properties": {
+        "ResponseHeadersPolicyConfig": {
+          "Comment": "Adds CORS headers for credentialed requests",
+          "CorsConfig": {
+            "AccessControlAllowCredentials": true,
+            "AccessControlAllowHeaders": {
+              "Items": [
+                "Accept",
+                "Accept-Language",
+                "Content-Language",
+                "Content-Type",
+                "Authorization",
+                "Cache-Control",
+                "Pragma",
+                "Origin",
+                "X-Requested-With",
+              ],
+            },
+            "AccessControlAllowMethods": {
+              "Items": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "PATCH",
+                "POST",
+                "DELETE",
+              ],
+            },
+            "AccessControlAllowOrigins": {
+              "Items": [
+                "https://openhands.example.com",
+              ],
+            },
+            "AccessControlExposeHeaders": {
+              "Items": [
+                "Content-Length",
+                "Content-Type",
+                "ETag",
+                "Cache-Control",
+              ],
+            },
+            "AccessControlMaxAgeSec": 86400,
+            "OriginOverride": true,
+          },
+          "Name": "OpenHands-CORS-Headers-123456789012",
+        },
+      },
+      "Type": "AWS::CloudFront::ResponseHeadersPolicy",
+    },
+    "CustomCrossRegionExportReaderCustomResourceProviderHandler46647B68": {
+      "DependsOn": [
+        "CustomCrossRegionExportReaderCustomResourceProviderRole10531BBD",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "d41c8e6342cd078b5ea5aec11522bdb605eae00f4bb98a3fb0b44c827e9b5ca9.zip",
+        },
+        "Handler": "__entrypoint__.handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomCrossRegionExportReaderCustomResourceProviderRole10531BBD",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs22.x",
+        "Timeout": 900,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CustomCrossRegionExportReaderCustomResourceProviderRole10531BBD": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "ssm:AddTagsToResource",
+                    "ssm:RemoveTagsFromResource",
+                    "ssm:GetParameters",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:",
+                        {
+                          "Ref": "AWS::Partition",
+                        },
+                        ":ssm:us-east-1:123456789012:parameter/cdk/exports/TestEdgeStack/*",
+                      ],
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "Inline",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "Distribution830FAC52": {
+      "Properties": {
+        "DistributionConfig": {
+          "Aliases": [
+            "openhands.example.com",
+          ],
+          "CacheBehaviors": [
+            {
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "PATCH",
+                "POST",
+                "DELETE",
+              ],
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "CachedMethods": [
+                "GET",
+                "HEAD",
+              ],
+              "Compress": true,
+              "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+              "PathPattern": "/runtime/*",
+              "ResponseHeadersPolicyId": {
+                "Ref": "CorsHeadersPolicy085CC81B",
+              },
+              "TargetOriginId": "TestEdgeStackDistributionOrigin18490990F",
+              "ViewerProtocolPolicy": "redirect-to-https",
+            },
+          ],
+          "Comment": "OpenHands CloudFront Distribution",
+          "DefaultCacheBehavior": {
+            "AllowedMethods": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "PUT",
+              "PATCH",
+              "POST",
+              "DELETE",
+            ],
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "CachedMethods": [
+              "GET",
+              "HEAD",
+            ],
+            "Compress": true,
+            "LambdaFunctionAssociations": [
+              {
+                "EventType": "viewer-request",
+                "IncludeBody": false,
+                "LambdaFunctionARN": {
+                  "Ref": "AuthFunctionCurrentVersionDB17CE867954f71365dd826b5576d66a094f7fba",
+                },
+              },
+            ],
+            "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+            "ResponseHeadersPolicyId": {
+              "Ref": "CorsHeadersPolicy085CC81B",
+            },
+            "TargetOriginId": "TestEdgeStackDistributionOrigin18490990F",
+            "ViewerProtocolPolicy": "redirect-to-https",
+          },
+          "Enabled": true,
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "Origins": [
+            {
+              "CustomOriginConfig": {
+                "OriginKeepaliveTimeout": 60,
+                "OriginProtocolPolicy": "http-only",
+                "OriginReadTimeout": 60,
+                "OriginSSLProtocols": [
+                  "TLSv1.2",
+                ],
+              },
+              "DomainName": {
+                "Fn::GetAtt": [
+                  "ExportsReader8B249524",
+                  "/cdk/exports/TestEdgeStack/TestComputeStackuswest2FnGetAttOpenHandsAlb343FAEDADNSNameC8E8FDEC",
+                ],
+              },
+              "Id": "TestEdgeStackDistributionOrigin18490990F",
+            },
+          ],
+          "PriceClass": "PriceClass_100",
+          "ViewerCertificate": {
+            "AcmCertificateArn": {
+              "Ref": "Certificate4E7ABB08",
+            },
+            "MinimumProtocolVersion": "TLSv1.2_2021",
+            "SslSupportMethod": "sni-only",
+          },
+          "WebACLId": {
+            "Fn::GetAtt": [
+              "WebAcl",
+              "Arn",
+            ],
+          },
+        },
+      },
+      "Type": "AWS::CloudFront::Distribution",
+    },
+    "ExportsReader8B249524": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "ReaderProps": {
+          "imports": {
+            "/cdk/exports/TestEdgeStack/TestComputeStackuswest2FnGetAttOpenHandsAlb343FAEDADNSNameC8E8FDEC": "{{resolve:ssm:/cdk/exports/TestEdgeStack/TestComputeStackuswest2FnGetAttOpenHandsAlb343FAEDADNSNameC8E8FDEC}}",
+          },
+          "prefix": "TestEdgeStack",
+          "region": "us-east-1",
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomCrossRegionExportReaderCustomResourceProviderHandler46647B68",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "Custom::CrossRegionExportReader",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "UserPool6BA7E5F2": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "AccountRecoverySetting": {
+          "RecoveryMechanisms": [
+            {
+              "Name": "verified_email",
+              "Priority": 1,
+            },
+          ],
+        },
+        "AdminCreateUserConfig": {
+          "AllowAdminCreateUserOnly": true,
+        },
+        "AutoVerifiedAttributes": [
+          "email",
+        ],
+        "EmailVerificationMessage": "The verification code to your new account is {####}",
+        "EmailVerificationSubject": "Verify your new account",
+        "EnabledMfas": [
+          "SOFTWARE_TOKEN_MFA",
+        ],
+        "MfaConfiguration": "OPTIONAL",
+        "Policies": {
+          "PasswordPolicy": {
+            "MinimumLength": 12,
+            "RequireLowercase": true,
+            "RequireNumbers": true,
+            "RequireSymbols": true,
+            "RequireUppercase": true,
+          },
+        },
+        "Schema": [
+          {
+            "Mutable": true,
+            "Name": "email",
+            "Required": true,
+          },
+        ],
+        "SmsVerificationMessage": "The verification code to your new account is {####}",
+        "UsernameAttributes": [
+          "email",
+        ],
+        "VerificationMessageTemplate": {
+          "DefaultEmailOption": "CONFIRM_WITH_CODE",
+          "EmailMessage": "The verification code to your new account is {####}",
+          "EmailSubject": "Verify your new account",
+          "SmsMessage": "The verification code to your new account is {####}",
+        },
+      },
+      "Type": "AWS::Cognito::UserPool",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "UserPoolCognitoDomainD6C7F9FA": {
+      "Properties": {
+        "Domain": {
+          "Fn::Join": [
+            "",
+            [
+              "openhands-",
+              {
+                "Ref": "AWS::AccountId",
+              },
+            ],
+          ],
+        },
+        "UserPoolId": {
+          "Ref": "UserPool6BA7E5F2",
+        },
+      },
+      "Type": "AWS::Cognito::UserPoolDomain",
+    },
+    "UserPoolWebAppClientCD2D5CB1": {
+      "Properties": {
+        "AccessTokenValidity": 60,
+        "AllowedOAuthFlows": [
+          "code",
+        ],
+        "AllowedOAuthFlowsUserPoolClient": true,
+        "AllowedOAuthScopes": [
+          "openid",
+          "email",
+          "profile",
+        ],
+        "CallbackURLs": [
+          "https://openhands.example.com/_callback",
+        ],
+        "ExplicitAuthFlows": [
+          "ALLOW_USER_PASSWORD_AUTH",
+          "ALLOW_USER_SRP_AUTH",
+          "ALLOW_REFRESH_TOKEN_AUTH",
+        ],
+        "GenerateSecret": true,
+        "IdTokenValidity": 1440,
+        "LogoutURLs": [
+          "https://openhands.example.com/",
+        ],
+        "PreventUserExistenceErrors": "ENABLED",
+        "RefreshTokenValidity": 43200,
+        "SupportedIdentityProviders": [
+          "COGNITO",
+        ],
+        "TokenValidityUnits": {
+          "AccessToken": "minutes",
+          "IdToken": "minutes",
+          "RefreshToken": "minutes",
+        },
+        "UserPoolId": {
+          "Ref": "UserPool6BA7E5F2",
+        },
+      },
+      "Type": "AWS::Cognito::UserPoolClient",
+    },
+    "UserPoolWebAppClientDescribeCognitoUserPoolClient2F6BCD92": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "UserPoolWebAppClientDescribeCognitoUserPoolClientCustomResourcePolicyE5658F8D",
+      ],
+      "Properties": {
+        "Create": {
+          "Fn::Join": [
+            "",
+            [
+              "{"region":"us-east-1","service":"CognitoIdentityServiceProvider","action":"describeUserPoolClient","parameters":{"UserPoolId":"",
+              {
+                "Ref": "UserPool6BA7E5F2",
+              },
+              "","ClientId":"",
+              {
+                "Ref": "UserPoolWebAppClientCD2D5CB1",
+              },
+              ""},"physicalResourceId":{"id":"",
+              {
+                "Ref": "UserPoolWebAppClientCD2D5CB1",
+              },
+              ""},"logApiResponseData":false}",
+            ],
+          ],
+        },
+        "InstallLatestAwsSdk": false,
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd22872D164C4C",
+            "Arn",
+          ],
+        },
+        "Update": {
+          "Fn::Join": [
+            "",
+            [
+              "{"region":"us-east-1","service":"CognitoIdentityServiceProvider","action":"describeUserPoolClient","parameters":{"UserPoolId":"",
+              {
+                "Ref": "UserPool6BA7E5F2",
+              },
+              "","ClientId":"",
+              {
+                "Ref": "UserPoolWebAppClientCD2D5CB1",
+              },
+              ""},"physicalResourceId":{"id":"",
+              {
+                "Ref": "UserPoolWebAppClientCD2D5CB1",
+              },
+              ""},"logApiResponseData":false}",
+            ],
+          ],
+        },
+      },
+      "Type": "Custom::DescribeCognitoUserPoolClient",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "UserPoolWebAppClientDescribeCognitoUserPoolClientCustomResourcePolicyE5658F8D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "cognito-idp:DescribeUserPoolClient",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "UserPool6BA7E5F2",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "UserPoolWebAppClientDescribeCognitoUserPoolClientCustomResourcePolicyE5658F8D",
+        "Roles": [
+          {
+            "Ref": "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "WebAcl": {
+      "Properties": {
+        "DefaultAction": {
+          "Allow": {},
+        },
+        "Rules": [
+          {
+            "Name": "AWSManagedRulesCommonRuleSet",
+            "OverrideAction": {
+              "None": {},
+            },
+            "Priority": 1,
+            "Statement": {
+              "ManagedRuleGroupStatement": {
+                "Name": "AWSManagedRulesCommonRuleSet",
+                "RuleActionOverrides": [
+                  {
+                    "ActionToUse": {
+                      "Count": {},
+                    },
+                    "Name": "SizeRestrictions_BODY",
+                  },
+                ],
+                "VendorName": "AWS",
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "AWSManagedRulesCommonRuleSet",
+              "SampledRequestsEnabled": true,
+            },
+          },
+          {
+            "Name": "AWSManagedRulesKnownBadInputsRuleSet",
+            "OverrideAction": {
+              "None": {},
+            },
+            "Priority": 2,
+            "Statement": {
+              "ManagedRuleGroupStatement": {
+                "Name": "AWSManagedRulesKnownBadInputsRuleSet",
+                "VendorName": "AWS",
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "AWSManagedRulesKnownBadInputsRuleSet",
+              "SampledRequestsEnabled": true,
+            },
+          },
+          {
+            "Action": {
+              "Block": {},
+            },
+            "Name": "RateLimitRule",
+            "Priority": 3,
+            "Statement": {
+              "RateBasedStatement": {
+                "AggregateKeyType": "IP",
+                "Limit": 50000,
+              },
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "RateLimitRule",
+              "SampledRequestsEnabled": true,
+            },
+          },
+        ],
+        "Scope": "CLOUDFRONT",
+        "VisibilityConfig": {
+          "CloudWatchMetricsEnabled": true,
+          "MetricName": "OpenHandsWebAcl",
+          "SampledRequestsEnabled": true,
+        },
+      },
+      "Type": "AWS::WAFv2::WebACL",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`OpenHands Infrastructure Stacks MonitoringStack matches snapshot 1`] = `
+{
+  "Outputs": {
+    "AlertTopicArn": {
+      "Description": "SNS Alert Topic ARN",
+      "Value": {
+        "Ref": "AlertTopic2720D535",
+      },
+    },
+    "DashboardUrl": {
+      "Description": "CloudWatch Dashboard URL",
+      "Value": "https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#dashboards:name=OpenHands-Monitoring",
+    },
+    "DataBucketName": {
+      "Description": "S3 Bucket for OpenHands data persistence",
+      "Value": {
+        "Ref": "DataBucketE3889A50",
+      },
+    },
+    "LogGroupName": {
+      "Description": "CloudWatch Log Group Name",
+      "Value": {
+        "Ref": "AppLogGroup7D8CD952",
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "AlertTopic2720D535": {
+      "Properties": {
+        "DisplayName": "OpenHands Alerts",
+      },
+      "Type": "AWS::SNS::Topic",
+    },
+    "AppLogGroup7D8CD952": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": "/openhands/application",
+        "RetentionInDays": 30,
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "DataBucketE3889A50": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256",
+              },
+            },
+          ],
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7,
+              },
+              "Id": "CleanupOldVersions",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30,
+              },
+              "Status": "Enabled",
+            },
+          ],
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true,
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled",
+        },
+      },
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "DataBucketPolicy3231C704": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "DataBucketE3889A50",
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "DataBucketE3889A50",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "DataBucketE3889A50",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+      },
+      "Type": "AWS::S3::BucketPolicy",
+    },
+    "OpenHandsBackupPlan21FAD152": {
+      "Properties": {
+        "BackupPlan": {
+          "BackupPlanName": "OpenHands-Daily-Backup",
+          "BackupPlanRule": [
+            {
+              "CompletionWindowMinutes": 120,
+              "Lifecycle": {
+                "DeleteAfterDays": 14,
+              },
+              "RuleName": "DailyBackup",
+              "ScheduleExpression": "cron(0 3 * * ? *)",
+              "StartWindowMinutes": 60,
+              "TargetBackupVault": {
+                "Fn::GetAtt": [
+                  "OpenHandsBackupPlanVaultC4597176",
+                  "BackupVaultName",
+                ],
+              },
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Backup::BackupPlan",
+    },
+    "OpenHandsBackupPlanOpenHandsBackupSelectionCAB97D14": {
+      "Properties": {
+        "BackupPlanId": {
+          "Fn::GetAtt": [
+            "OpenHandsBackupPlan21FAD152",
+            "BackupPlanId",
+          ],
+        },
+        "BackupSelection": {
+          "IamRoleArn": {
+            "Fn::GetAtt": [
+              "OpenHandsBackupPlanOpenHandsBackupSelectionRole7901107E",
+              "Arn",
+            ],
+          },
+          "ListOfTags": [
+            {
+              "ConditionKey": "backup",
+              "ConditionType": "STRINGEQUALS",
+              "ConditionValue": "true",
+            },
+          ],
+          "SelectionName": "OpenHands-EBS-Selection",
+        },
+      },
+      "Type": "AWS::Backup::BackupSelection",
+    },
+    "OpenHandsBackupPlanOpenHandsBackupSelectionRole7901107E": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "backup.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "OpenHandsBackupPlanVaultC4597176": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "BackupVaultName": "estMonitoringStackOpenHandsBackupPlanVault7B35F892",
+      },
+      "Type": "AWS::Backup::BackupVault",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "OpenHandsDashboardE5483B9E": {
+      "Properties": {
+        "DashboardBody": "{"widgets":[{"type":"text","width":24,"height":2,"x":0,"y":0,"properties":{"markdown":"# OpenHands Monitoring Dashboard\\n\\nASG-specific alarms are managed by the Compute stack."}}]}",
+        "DashboardName": "OpenHands-Monitoring",
+      },
+      "Type": "AWS::CloudWatch::Dashboard",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`OpenHands Infrastructure Stacks NetworkStack matches snapshot 1`] = `
+{
+  "Outputs": {
+    "VpcId": {
+      "Description": "VPC ID",
+      "Value": "vpc-12345",
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "BedrockRuntimeEndpointD9440E01": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.bedrock-runtime",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "CloudWatchLogsEndpointF23EDC4F": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.logs",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "Ec2MessagesEndpoint440704A5": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ec2messages",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "EcrApiEndpointB01DFFD7": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ecr.api",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "EcrDkrEndpoint2A32680E": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ecr.dkr",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "S3EndpointD570F362": {
+      "Properties": {
+        "RouteTableIds": [
+          "rtb-12345p",
+          "rtb-57890p",
+          "rtb-12345s",
+          "rtb-67890s",
+        ],
+        "ServiceName": {
+          "Fn::Join": [
+            "",
+            [
+              "com.amazonaws.",
+              {
+                "Ref": "AWS::Region",
+              },
+              ".s3",
+            ],
+          ],
+        },
+        "VpcEndpointType": "Gateway",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "SecretsManagerEndpoint5E83C66B": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.secretsmanager",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "SsmEndpoint986CF28C": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ssm",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "SsmMessagesEndpoint3405F98B": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ssmmessages",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "VpcEndpointSg00AAF2D5": {
+      "Properties": {
+        "GroupDescription": "Security group for VPC Endpoints",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "255.255.255.255/32",
+            "Description": "Disallow all traffic",
+            "FromPort": 252,
+            "IpProtocol": "icmp",
+            "ToPort": 86,
+          },
+        ],
+        "SecurityGroupIngress": [
+          {
+            "CidrIp": "1.2.3.4/5",
+            "Description": "Allow HTTPS from VPC",
+            "FromPort": 443,
+            "IpProtocol": "tcp",
+            "ToPort": 443,
+          },
+        ],
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
+{
+  "Outputs": {
+    "Ec2RoleArn": {
+      "Description": "EC2 Instance Role ARN",
+      "Value": {
+        "Fn::GetAtt": [
+          "OpenHandsEc2RoleD4668748",
+          "Arn",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "AlbSecurityGroup86A59E99": {
+      "Properties": {
+        "GroupDescription": "Security group for Application Load Balancer",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "AlbSecurityGroupfrompl82a045eb80AFE76D69": {
+      "Properties": {
+        "Description": "Allow HTTP from CloudFront",
+        "FromPort": 80,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "AlbSecurityGroup86A59E99",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "SourcePrefixListId": "pl-82a045eb",
+        "ToPort": 80,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "AlbSecurityGrouptoTestSecurityStackEc2SecurityGroup55A42D313000C2D6BB59": {
+      "Properties": {
+        "Description": "Allow traffic to OpenHands app",
+        "DestinationSecurityGroupId": {
+          "Fn::GetAtt": [
+            "Ec2SecurityGroup55889913",
+            "GroupId",
+          ],
+        },
+        "FromPort": 3000,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "AlbSecurityGroup86A59E99",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "ToPort": 3000,
+      },
+      "Type": "AWS::EC2::SecurityGroupEgress",
+    },
+    "AlbSecurityGrouptoTestSecurityStackEc2SecurityGroup55A42D318080E731A33C": {
+      "Properties": {
+        "Description": "Allow traffic to nginx runtime proxy",
+        "DestinationSecurityGroupId": {
+          "Fn::GetAtt": [
+            "Ec2SecurityGroup55889913",
+            "GroupId",
+          ],
+        },
+        "FromPort": 8080,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "AlbSecurityGroup86A59E99",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "ToPort": 8080,
+      },
+      "Type": "AWS::EC2::SecurityGroupEgress",
+    },
+    "Ec2SecurityGroup55889913": {
+      "Properties": {
+        "GroupDescription": "Security group for OpenHands EC2 instances",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow HTTPS outbound for Docker registry",
+            "FromPort": 443,
+            "IpProtocol": "tcp",
+            "ToPort": 443,
+          },
+        ],
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "Ec2SecurityGroupfromTestSecurityStackAlbSecurityGroupF68B86B13000E689486E": {
+      "Properties": {
+        "Description": "Allow traffic from ALB to OpenHands app",
+        "FromPort": 3000,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "Ec2SecurityGroup55889913",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "AlbSecurityGroup86A59E99",
+            "GroupId",
+          ],
+        },
+        "ToPort": 3000,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "Ec2SecurityGroupfromTestSecurityStackAlbSecurityGroupF68B86B18080E114F9D4": {
+      "Properties": {
+        "Description": "Allow traffic from ALB to nginx runtime proxy",
+        "FromPort": 8080,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "Ec2SecurityGroup55889913",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "AlbSecurityGroup86A59E99",
+            "GroupId",
+          ],
+        },
+        "ToPort": 8080,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "Ec2SecurityGrouptoTestNetworkStackVpcEndpointSg4E3FE0954430713D399": {
+      "Properties": {
+        "Description": "Allow HTTPS to VPC Endpoints",
+        "DestinationSecurityGroupId": {
+          "Fn::ImportValue": "TestNetworkStack:ExportsOutputFnGetAttVpcEndpointSg00AAF2D5GroupId9FB5E70F",
+        },
+        "FromPort": 443,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "Ec2SecurityGroup55889913",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "ToPort": 443,
+      },
+      "Type": "AWS::EC2::SecurityGroupEgress",
+    },
+    "OpenHandsEc2RoleD4668748": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "IAM role for OpenHands EC2 instances",
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/AmazonSSMManagedInstanceCore",
+              ],
+            ],
+          },
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/CloudWatchAgentServerPolicy",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "OpenHandsEc2RoleDefaultPolicy0D07380E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+                "arn:aws:bedrock:*::foundation-model/us.anthropic.claude-*",
+                "arn:aws:bedrock:us-west-2:123456789012:inference-profile/*anthropic.claude*",
+                "arn:aws:bedrock:*:123456789012:inference-profile/global.anthropic.claude*",
+              ],
+              "Sid": "BedrockAccess",
+            },
+            {
+              "Action": "secretsmanager:GetSecretValue",
+              "Effect": "Allow",
+              "Resource": "arn:aws:secretsmanager:us-west-2:123456789012:secret:openhands/*",
+              "Sid": "SecretsManagerAccess",
+            },
+            {
+              "Action": "ecr:GetAuthorizationToken",
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "EcrAuthorizationToken",
+            },
+            {
+              "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+                "logs:DescribeLogStreams",
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-west-2:123456789012:log-group:/openhands/*",
+              "Sid": "CloudWatchLogsAccess",
+            },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::ImportValue": "TestMonitoringStack:ExportsOutputFnGetAttDataBucketE3889A50Arn98F8399F",
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::ImportValue": "TestMonitoringStack:ExportsOutputFnGetAttDataBucketE3889A50Arn98F8399F",
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+              "Sid": "S3DataBucketAccess",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "OpenHandsEc2RoleDefaultPolicy0D07380E",
+        "Roles": [
+          {
+            "Ref": "OpenHandsEc2RoleD4668748",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "OpenHandsInstanceProfile": {
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "OpenHandsEc2RoleD4668748",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::InstanceProfile",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

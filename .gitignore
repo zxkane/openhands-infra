@@ -1,8 +1,28 @@
 *.js
 !jest.config.js
+!docker/*.js
 *.d.ts
 node_modules
 
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+
+# Claude Code local files
+*.local.*
+.local.json
+CLAUDE.local.md
+
+# Environment files
+.env
+.env.*
+
+# CDK context (environment-specific lookups)
+cdk.context.json
+docker/agent-server/software-agent-sdk/
+
+# Python virtual environments and cache
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
