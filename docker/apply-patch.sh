@@ -173,74 +173,9 @@ PYEOF
   fi
 fi
 
-# Patch 4: MCP extra_hosts fix for agent-server containers
-# This is the fix from OpenHands PR #12236 (merged 2026-01-03, not in v1.1.0)
-# Agent-server containers need extra_hosts to resolve host.docker.internal for MCP
-# Without this, MCP servers cannot connect back to the main app container
-SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
-if [ -f "$SANDBOX_SERVICE_FILE" ]; then
-  if grep -q "extra_hosts={'host.docker.internal': 'host-gateway'}" "$SANDBOX_SERVICE_FILE"; then
-    echo "MCP extra_hosts patch already applied"
-  else
-    python3 << 'PYEOF'
-import sys
-
-try:
-    file_path = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
-
-    with open(file_path, 'r') as f:
-        content = f.read()
-
-    # Find the containers.run call and add extra_hosts parameter
-    # This matches the exact pattern in v1.1.0
-    old_pattern = '''            container = self.docker_client.containers.run(  # type: ignore[call-overload]
-                image=sandbox_spec.id,
-                command=sandbox_spec.command,  # Use default command from image
-                remove=False,
-                name=container_name,
-                environment=env_vars,
-                ports=port_mappings,
-                volumes=volumes,
-                working_dir=sandbox_spec.working_dir,
-                labels=labels,
-                detach=True,
-                # Use Docker's tini init process to ensure proper signal handling and reaping of
-                # zombie child processes.
-                init=True,
-            )'''
-
-    new_pattern = '''            container = self.docker_client.containers.run(  # type: ignore[call-overload]
-                image=sandbox_spec.id,
-                command=sandbox_spec.command,  # Use default command from image
-                remove=False,
-                name=container_name,
-                environment=env_vars,
-                ports=port_mappings,
-                volumes=volumes,
-                working_dir=sandbox_spec.working_dir,
-                labels=labels,
-                detach=True,
-                # Use Docker's tini init process to ensure proper signal handling and reaping of
-                # zombie child processes.
-                init=True,
-                # Fix from PR #12236: Allow agent-server containers to resolve host.docker.internal
-                # for MCP connections and webhook callbacks
-                extra_hosts={'host.docker.internal': 'host-gateway'},
-            )'''
-
-    if old_pattern in content:
-        content = content.replace(old_pattern, new_pattern)
-        with open(file_path, 'w') as f:
-            f.write(content)
-        print("MCP extra_hosts patch applied successfully")
-    else:
-        print("MCP extra_hosts patch pattern not found (may already be patched or code changed)")
-except Exception as e:
-    print(f"ERROR: Failed to apply MCP extra_hosts patch: {e}", file=sys.stderr)
-    sys.exit(1)
-PYEOF
-  fi
-fi
+# Patch 4: REMOVED - MCP extra_hosts fix is now in OpenHands v1.2.0 (PR #12236)
+# Agent-server containers now have extra_hosts={'host.docker.internal': 'host-gateway'} by default
+echo "Patch 4 (MCP extra_hosts) REMOVED - already in OpenHands v1.2.0"
 
 # Detect Python version (3.12 or 3.13) for patching
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')

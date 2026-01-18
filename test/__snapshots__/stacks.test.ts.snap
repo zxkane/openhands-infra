@@ -370,13 +370,13 @@ RUNTIME_VERSION=$(aws ssm get-parameter --name "",
                   {
                     "Ref": "RuntimeVersionParam2CECFC75",
                   },
-                  "" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "1.1-nikolaik")
+                  "" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "1.2-nikolaik")
 cat > /data/openhands/docker-compose.yml << EOF
 services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f313b7674166dc7f3862766d142fbbdf62f1e6f4ec3e14532602d85dbd82a3aa",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:605a5436091a2bef89f41a85b3aa3f65bfc16f8b4d18219603c281b08bf25f60",
                   },
                   "
     container_name: openhands-app
@@ -447,7 +447,7 @@ cat > /data/openhands/config/config.toml << CONFIG
 [core]
 workspace_base = "/opt/workspace_base"
 max_concurrent_conversations = 10
-conversation_max_age_seconds = 86400
+conversation_max_age_seconds = 15552000
 default_agent = "CodeActAgent"
 [llm]
 model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
@@ -512,7 +512,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f313b7674166dc7f3862766d142fbbdf62f1e6f4ec3e14532602d85dbd82a3aa",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:605a5436091a2bef89f41a85b3aa3f65bfc16f8b4d18219603c281b08bf25f60",
                   },
                   ""
 pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"
@@ -583,7 +583,7 @@ echo "OpenHands setup complete!"",
         "Name": "/openhands/docker/openhands-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.1.0",
+        "Value": "1.2.1",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -617,7 +617,7 @@ echo "OpenHands setup complete!"",
         "Name": "/openhands/docker/runtime-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.1-nikolaik",
+        "Value": "1.2-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
     },

@@ -29,9 +29,9 @@ import {
  * Images are built for ARM64 (Graviton) architecture using Docker buildx.
  * See docker/ directory for Dockerfile contents.
  */
-const DEFAULT_OPENHANDS_VERSION = '1.1.0';
-// Runtime version matching OpenHands 1.1.x - see docker-compose.yml in OpenHands repo
-const DEFAULT_RUNTIME_VERSION = '1.1-nikolaik';
+const DEFAULT_OPENHANDS_VERSION = '1.2.1';
+// Runtime version matching OpenHands 1.2.x - see docker-compose.yml in OpenHands repo
+const DEFAULT_RUNTIME_VERSION = '1.2-nikolaik';
 
 /**
  * Read OpenHands config.toml from the config directory.
