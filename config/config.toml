@@ -8,8 +8,9 @@ workspace_base = "/opt/workspace_base"
 # Maximum number of concurrent conversations
 max_concurrent_conversations = 10
 
-# Maximum age of a conversation in seconds (24 hours)
-conversation_max_age_seconds = 86400
+# Maximum age of a conversation in seconds (180 days)
+# Default is 10 days (864000), we extend to 180 days for better user experience
+conversation_max_age_seconds = 15552000
 
 # Default agent to use
 default_agent = "CodeActAgent"
