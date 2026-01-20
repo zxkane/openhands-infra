@@ -109,25 +109,56 @@ export interface ComputeStackProps extends cdk.StackProps {
 }
 
 /**
- * Nginx configuration for runtime WebSocket proxy (compact).
- * Routes /runtime/{port}/... to localhost:{port}/...
+ * OpenResty configuration for runtime WebSocket proxy with dynamic container routing.
+ * Routes /runtime/{conversation_id}/{port}/... to container_ip:{port}/...
+ * Uses Lua to discover container IPs via Docker API based on conversation_id label.
  */
-const NGINX_RUNTIME_PROXY_CONFIG = `worker_processes auto;
-error_log /var/log/nginx/error.log warn;
-pid /run/nginx.pid;
+const OPENRESTY_CONFIG = `worker_processes auto;
+error_log /var/log/openresty/error.log warn;
+pid /usr/local/openresty/nginx/logs/nginx.pid;
 events { worker_connections 1024; use epoll; multi_accept on; }
 http {
-  include /etc/nginx/mime.types;
+  lua_package_path "/usr/local/openresty/lualib/?.lua;;";
   default_type application/octet-stream;
-  access_log /var/log/nginx/access.log;
+  access_log /var/log/openresty/access.log;
+  server_tokens off;
+  more_clear_headers Server;
   sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65;
   server {
     listen 8080; server_name _;
     location /health { return 200 'OK'; add_header Content-Type text/plain; }
-    location ~ ^/runtime/(?<target_port>\\d+)(?<remaining_path>/.*)?$ {
+    location ~ ^/runtime/(?<conv_id>[a-f0-9]+)/(?<target_port>\\d+)(?<remaining_path>/.*)?$ {
+      set $container_ip "";
+      set $internal_port "";
       set $proxy_path $remaining_path;
       if ($proxy_path = "") { set $proxy_path "/"; }
-      proxy_pass http://127.0.0.1:$target_port$proxy_path$is_args$args;
+      access_by_lua_block {
+        local discovery = require "docker_discovery"
+        local ip,port = discovery.find_container(ngx.var.conv_id, ngx.var.target_port)
+        if ip and port then
+          ngx.var.container_ip = ip
+          ngx.var.internal_port = port
+          ngx.log(ngx.INFO, "Routing /runtime/", ngx.var.conv_id, "/", ngx.var.target_port, " to ", ip, ":", port)
+        else
+          ngx.log(ngx.WARN, "No container found for conversation: ", ngx.var.conv_id)
+          ngx.status = 502
+          ngx.say("No container found for conversation " .. ngx.var.conv_id)
+          return ngx.exit(502)
+        end
+      }
+      proxy_pass http://$container_ip:$internal_port$proxy_path$is_args$args;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_connect_timeout 60s; proxy_send_timeout 300s; proxy_read_timeout 300s;
+      proxy_buffering off;
+    }
+    location / {
+      proxy_pass http://127.0.0.1:3000;
       proxy_http_version 1.1;
       proxy_set_header Upgrade $http_upgrade;
       proxy_set_header Connection "upgrade";
@@ -140,6 +171,25 @@ http {
     }
   }
 }`;
+
+// Lua script for Docker container discovery - minified to fit 16KB user data limit
+// Routes system ports (PrivatePort 8000/8001) to their PrivatePort, and user app ports to PublicPort.
+// Logic: System services (agent-server, VSCode) listen on PrivatePort; user apps ($WORKER_N) listen on PublicPort.
+const LUA_DOCKER_DISCOVERY = `local http=require"resty.http" local cjson=require"cjson" local _M={}
+function _M.find_container(cid,hp)
+local h=http.new() local ok,e=h:connect("unix:/var/run/docker.sock") if not ok then return nil,nil end
+local r,e=h:request({path="/containers/json",headers={["Host"]="localhost"}}) if not r then return nil,nil end
+local b=r:read_body() local ok2,cs=pcall(cjson.decode,b) if not ok2 then return nil,nil end
+for _,c in ipairs(cs) do local lb=c.Labels or {} if lb["conversation_id"]==cid then
+local ip=nil local ns=c.NetworkSettings and c.NetworkSettings.Networks
+if ns then for _,n in pairs(ns) do if n.IPAddress and n.IPAddress~="" then ip=n.IPAddress break end end end
+if ip then
+local pts=c.Ports or {} for _,p in ipairs(pts) do if p.PublicPort and tostring(p.PublicPort)==hp then local pp=p.PrivatePort if pp==8000 or pp==8001 then return ip,tostring(pp) else return ip,hp end end end
+return ip,hp end
+end end
+return nil,nil
+end
+return _M`;
 
 /**
  * ComputeStack - Creates ASG, Launch Template, ALB, and EBS configuration
@@ -238,12 +288,20 @@ export class ComputeStack extends cdk.Stack {
       'echo \'{"default-address-pools":[{"base":"172.17.0.0/12","size":24}],"log-driver":"json-file","log-opts":{"max-size":"100m","max-file":"3"}}\' > /etc/docker/daemon.json',
       'systemctl enable --now docker',
       'usermod -aG docker ec2-user',
+      'chmod 666 /var/run/docker.sock',
       'curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-Linux-aarch64" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose',
-      'retry dnf install -y amazon-cloudwatch-agent nginx',
+      'retry dnf install -y amazon-cloudwatch-agent',
+      // Install OpenResty for dynamic container routing via Lua
+      'wget -q https://openresty.org/package/amazon/openresty.repo -O /etc/yum.repos.d/openresty.repo',
+      'dnf check-update || true',  // check-update returns 100 when updates available, not an error
+      'retry dnf install -y openresty openresty-opm openresty-resty',
+      'HOME=/root /usr/local/openresty/bin/opm get ledgetech/lua-resty-http',  // opm requires HOME
+      'mkdir -p /var/log/openresty',
       'echo \'{"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"cpu":{"measurement":["cpu_usage_idle","cpu_usage_user"],"metrics_collection_interval":60,"totalcpu":true},"mem":{"measurement":["mem_used_percent"],"metrics_collection_interval":60},"disk":{"measurement":["disk_used_percent"],"metrics_collection_interval":60,"resources":["/","/data"]}},"append_dimensions":{"AutoScalingGroupName":"${aws:AutoScalingGroupName}","InstanceId":"${aws:InstanceId}"}}}\' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json',
       '/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json',
-      `cat > /etc/nginx/nginx.conf << 'EOF'\n${NGINX_RUNTIME_PROXY_CONFIG}\nEOF`,
-      'systemctl enable --now nginx',
+      `cat > /usr/local/openresty/nginx/conf/nginx.conf << 'EOF'\n${OPENRESTY_CONFIG}\nEOF`,
+      `cat > /usr/local/openresty/lualib/docker_discovery.lua << 'LUA'\n${LUA_DOCKER_DISCOVERY}\nLUA`,
+      'systemctl enable --now openresty',
       'for i in {1..60}; do [ -e /dev/nvme1n1 ] && break; sleep 5; done; [ -e /dev/nvme1n1 ] || exit 1',
       'blkid /dev/nvme1n1 || mkfs -t xfs /dev/nvme1n1',
       'mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab',

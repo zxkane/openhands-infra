@@ -1,10 +1,32 @@
 <script>
-// OpenHands localhost URL fix - rewrites localhost/host.docker.internal URLs to /runtime/{port}/...
+// OpenHands localhost URL fix - rewrites localhost/host.docker.internal URLs to /runtime/{conversation_id}/{port}/...
 // Handles both localhost:{port} and host.docker.internal:{port} patterns
+// conversation_id is extracted from the current page URL (/conversations/{uuid})
 (function() {
   // Pattern matches localhost or host.docker.internal with port
   var wsPattern = /^wss?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
   var httpPattern = /^https?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
+
+  // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
+  function getConversationId() {
+    var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
+    if (match) {
+      // Remove hyphens from UUID to get hex format (matches sandbox_id = conversation_id.hex)
+      return match[1].replace(/-/g, '');
+    }
+    return null;
+  }
+
+  // Build runtime URL with conversation_id
+  function buildRuntimeUrl(port, path) {
+    var convId = getConversationId();
+    if (convId) {
+      return window.location.origin + '/runtime/' + convId + '/' + port + (path || '/');
+    }
+    // Fallback: use old format without conversation_id (won't work with new router)
+    console.warn("No conversation_id found, runtime routing may fail");
+    return window.location.origin + '/runtime/' + port + (path || '/');
+  }
 
   var origWS = window.WebSocket;
   window.WebSocket = function(url, protocols) {
@@ -12,7 +34,12 @@
     var m = url.match(wsPattern);
     if (m) {
       var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      newUrl = proto + "//" + window.location.host + "/runtime/" + m[2] + m[3];
+      var convId = getConversationId();
+      if (convId) {
+        newUrl = proto + "//" + window.location.host + "/runtime/" + convId + "/" + m[2] + m[3];
+      } else {
+        newUrl = proto + "//" + window.location.host + "/runtime/" + m[2] + m[3];
+      }
       console.log("WS patched:", url, "->", newUrl);
     }
     return protocols ? new origWS(newUrl, protocols) : new origWS(newUrl);
@@ -29,14 +56,14 @@
     if (typeof url === "string") {
       var m = url.match(httpPattern);
       if (m) {
-        newUrl = window.location.origin + "/runtime/" + m[2] + m[3];
+        newUrl = buildRuntimeUrl(m[2], m[3]);
 
         // Normalize git paths - convert absolute workspace paths to relative
         // The agent-server's git router expects "." for the workspace root
         // Frontend sends "/workspace/project" which the backend interprets as a subdirectory,
         // prepending /workspace/project/ and causing: "/workspace/project/project"
-        // Note: URL at this point includes /runtime/{port}/ prefix, e.g.:
-        // https://domain/runtime/38793/api/git/changes/%2Fworkspace%2Fproject
+        // Note: URL at this point includes /runtime/{conv_id}/{port}/ prefix, e.g.:
+        // https://domain/runtime/abc123/38793/api/git/changes/%2Fworkspace%2Fproject
         if (newUrl.includes('/api/git/')) {
           // Handle URL-encoded paths (%2F = /)
           // Case 1: Exact workspace root - .../api/git/changes/%2Fworkspace%2Fproject -> .../api/git/changes/.
@@ -63,10 +90,10 @@
     if (typeof url === "string") {
       var m = url.match(httpPattern);
       if (m) {
-        newUrl = window.location.origin + "/runtime/" + m[2] + m[3];
+        newUrl = buildRuntimeUrl(m[2], m[3]);
 
         // Normalize git paths - convert absolute workspace paths to relative
-        // Note: URL at this point includes /runtime/{port}/ prefix
+        // Note: URL at this point includes /runtime/{conv_id}/{port}/ prefix
         if (newUrl.includes('/api/git/')) {
           // Handle URL-encoded paths (%2F = /)
           newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
@@ -82,7 +109,7 @@
     return origOpen.call(this, method, newUrl, async, user, pass);
   };
 
-  console.log("OpenHands localhost/host.docker.internal URL fix loaded");
+  console.log("OpenHands localhost/host.docker.internal URL fix loaded (with conversation_id routing)");
 })();
 
 // Auto-close AI settings modal when LLM is already configured via config.toml
@@ -234,13 +261,28 @@
 
 // Rewrite localhost URLs in displayed text (chat messages, etc.)
 // The AI agent outputs URLs like "http://localhost:51745" which users cannot access
-// This rewrites them to the accessible path-based URL: https://{domain}/runtime/{port}/
+// This rewrites them to the accessible path-based URL: https://{domain}/runtime/{conversation_id}/{port}/
 (function() {
   var urlPattern = /https?:\/\/(localhost|host\.docker\.internal):(\d+)(\/[^\s<>"')\]]*)?/gi;
 
+  // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
+  function getConversationId() {
+    var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
+    if (match) {
+      return match[1].replace(/-/g, '');
+    }
+    return null;
+  }
+
   function rewriteTextUrls(text) {
+    var convId = getConversationId();
     return text.replace(urlPattern, function(match, host, port, path) {
-      var newUrl = window.location.origin + '/runtime/' + port + (path || '/');
+      var newUrl;
+      if (convId) {
+        newUrl = window.location.origin + '/runtime/' + convId + '/' + port + (path || '/');
+      } else {
+        newUrl = window.location.origin + '/runtime/' + port + (path || '/');
+      }
       console.log('Text URL rewritten:', match, '->', newUrl);
       return newUrl;
     });

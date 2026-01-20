@@ -337,6 +337,311 @@ PYEOF
   fi
 fi
 
+# Patch 10: Add conversation_id label to sandbox containers
+# This enables dynamic routing via OpenResty - each container is labeled with its conversation_id
+# so the Lua router can find the correct container IP for /runtime/{conversation_id}/{port}/ URLs
+# sandbox_id parameter in docker_sandbox_service.py IS conversation_id.hex (from live_status_app_conversation_service.py)
+SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+if [ -f "$SANDBOX_SERVICE_FILE" ]; then
+  if grep -q "'conversation_id': sandbox_id" "$SANDBOX_SERVICE_FILE"; then
+    echo "conversation_id label patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # Find the labels dict in create() method and add conversation_id
+    # Original pattern:
+    #   labels = {
+    #       'sandbox_spec_id': sandbox_spec.id,
+    #   }
+    old_pattern = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+        }"""
+
+    new_code = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+        }"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(file_path, 'w') as f:
+            f.write(content)
+        print("conversation_id label patch applied successfully")
+    else:
+        print("conversation_id label patch pattern not found (code structure may have changed)")
+except Exception as e:
+    print(f"ERROR: Failed to apply conversation_id label patch: {e}", file=sys.stderr)
+    # Don't exit - let app try to start
+PYEOF
+  fi
+fi
+
+# Patch 11: Generate conversation_id BEFORE sandbox creation
+# This ensures the conversation_id is available when starting the sandbox, so the
+# container label matches the URL format used by the frontend (/runtime/{conversation_id.hex}/{port}/)
+# Without this patch, sandbox_id could be None when conversation_id is not provided in the request,
+# causing a random base62 ID to be generated instead of the conversation UUID hex.
+CONV_SERVICE_FILE="/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+if [ -f "$CONV_SERVICE_FILE" ]; then
+  if grep -q "# Patch 11: Ensure conversation_id exists" "$CONV_SERVICE_FILE"; then
+    echo "conversation_id generation patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # Find the sandbox_id_str generation code and add early conversation_id generation
+    # Original pattern:
+    #         if not task.request.sandbox_id:
+    #             # Convert conversation_id to hex string if present
+    #             sandbox_id_str = (
+    #                 task.request.conversation_id.hex
+    #                 if task.request.conversation_id is not None
+    #                 else None
+    #             )
+    old_pattern = """        if not task.request.sandbox_id:
+            # Convert conversation_id to hex string if present
+            sandbox_id_str = (
+                task.request.conversation_id.hex
+                if task.request.conversation_id is not None
+                else None
+            )"""
+
+    new_code = """        if not task.request.sandbox_id:
+            # Patch 11: Ensure conversation_id exists before sandbox creation
+            # This is needed for OpenResty dynamic routing to work correctly
+            # The container label needs to match the URL format: /runtime/{conversation_id.hex}/{port}/
+            if task.request.conversation_id is None:
+                from uuid import uuid4
+                task.request.conversation_id = uuid4()
+            sandbox_id_str = task.request.conversation_id.hex"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(file_path, 'w') as f:
+            f.write(content)
+        print("conversation_id generation patch applied successfully")
+    else:
+        print("conversation_id generation patch pattern not found (code structure may have changed)")
+except Exception as e:
+    print(f"ERROR: Failed to apply conversation_id generation patch: {e}", file=sys.stderr)
+    # Don't exit - let app try to start
+PYEOF
+  fi
+fi
+
+# Patch 12: Add webhook headers for agent-server to openhands-app authentication
+# When agent-server sends webhook callbacks to openhands-app, it needs to include
+# the X-Session-API-Key header for authentication. Without this, webhook endpoints
+# return 401 Unauthorized and conversations fail to initialize properly.
+# The WebhookSpec class supports a 'headers' field that must be set via OH_WEBHOOKS_0_HEADERS env var.
+SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+if [ -f "$SANDBOX_SERVICE_FILE" ]; then
+  if grep -q "OH_WEBHOOKS_0_HEADERS" "$SANDBOX_SERVICE_FILE"; then
+    echo "webhook headers patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # Add json import if not present
+    if 'import json' not in content:
+        # Add after the first import block
+        content = content.replace('import logging', 'import json\nimport logging', 1)
+
+    # Find the env_vars assignment for WEBHOOK_CALLBACK_VARIABLE and add HEADERS
+    # Original pattern (the lines may vary slightly):
+    #         env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
+    #             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
+    #         )
+    # We need to add after this:
+    #         env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
+
+    old_pattern = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
+            f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
+        )"""
+
+    new_code = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
+            f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
+        )
+        # Patch 12: Add webhook headers for authentication
+        # Agent-server needs X-Session-API-Key header when calling back to openhands-app
+        env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(file_path, 'w') as f:
+            f.write(content)
+        print("webhook headers patch applied successfully")
+    else:
+        print("webhook headers patch pattern not found (code structure may have changed)")
+except Exception as e:
+    print(f"ERROR: Failed to apply webhook headers patch: {e}", file=sys.stderr)
+    # Don't exit - let app try to start
+PYEOF
+  fi
+fi
+
+# Patch 13: Fix user_id not saved in background task
+# When a conversation is created, the HTTP request completes after the first yield,
+# and the rest of _start_app_conversation runs in a background task (asyncio.create_task).
+# At that point, self.user_context.get_user_id() returns None because the request context
+# is closed. The fix is to use task.created_by_user_id which was captured at the start.
+CONV_SERVICE_FILE="/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+if [ -f "$CONV_SERVICE_FILE" ]; then
+  if grep -q "# Patch 13: Reuse user_id from task" "$CONV_SERVICE_FILE"; then
+    echo "user_id background task patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # Find the code that gets user_id again after sandbox start
+    # Original pattern:
+    #             # Store info...
+    #             user_id = await self.user_context.get_user_id()
+    old_pattern = """            # Store info...
+            user_id = await self.user_context.get_user_id()"""
+
+    new_code = """            # Store info...
+            # Patch 13: Reuse user_id from task instead of calling user_context.get_user_id()
+            # By this point, the HTTP request context is closed (running in background task)
+            # so user_context.get_user_id() would return None
+            user_id = task.created_by_user_id"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(file_path, 'w') as f:
+            f.write(content)
+        print("user_id background task patch applied successfully")
+    else:
+        print("user_id background task patch pattern not found (code structure may have changed)")
+except Exception as e:
+    print(f"ERROR: Failed to apply user_id background task patch: {e}", file=sys.stderr)
+    # Don't exit - let app try to start
+PYEOF
+  fi
+fi
+
+# Patch 14: Fix webhook 401 by allowing None created_by_user_id in sandbox validation
+# The docker_sandbox_service doesn't store user_id in container labels, so sandbox_info.created_by_user_id
+# is always None. The valid_conversation function compares this with app_conversation_info.created_by_user_id
+# (which has the actual user ID), causing a mismatch and AuthError.
+# Since the session API key validation already proves the request is from the correct sandbox,
+# we can safely skip the user_id comparison when sandbox_info.created_by_user_id is None.
+WEBHOOK_ROUTER_FILE="/app/openhands/app_server/event_callback/webhook_router.py"
+if [ -f "$WEBHOOK_ROUTER_FILE" ]; then
+  if grep -q "sandbox_info.created_by_user_id is not None and" "$WEBHOOK_ROUTER_FILE"; then
+    echo "webhook valid_conversation patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/event_callback/webhook_router.py"
+
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # Find the user_id comparison in valid_conversation and add None check
+    # Original pattern:
+    #     if app_conversation_info.created_by_user_id != sandbox_info.created_by_user_id:
+    old_pattern = "if app_conversation_info.created_by_user_id != sandbox_info.created_by_user_id:"
+
+    # New pattern: allow None sandbox_info.created_by_user_id
+    new_code = """if sandbox_info.created_by_user_id is not None and app_conversation_info.created_by_user_id != sandbox_info.created_by_user_id:"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(file_path, 'w') as f:
+            f.write(content)
+        print("webhook valid_conversation patch applied successfully")
+    else:
+        print("webhook valid_conversation patch pattern not found (code structure may have changed)")
+except Exception as e:
+    print(f"ERROR: Failed to apply webhook valid_conversation patch: {e}", file=sys.stderr)
+    # Don't exit - let app try to start
+PYEOF
+  fi
+fi
+
+# Patch 15: Fix webhook on_conversation_update to preserve existing user_id
+# When the agent-server sends a webhook before the background task saves the conversation,
+# the on_conversation_update handler creates the conversation with sandbox_info.created_by_user_id
+# which is None (since Docker containers don't store user_id). This causes the user_id to be
+# saved as empty string, making the conversation invisible in the user's list.
+# Fix: Preserve the existing created_by_user_id if the conversation already exists in the database.
+WEBHOOK_ROUTER_FILE="/app/openhands/app_server/event_callback/webhook_router.py"
+if [ -f "$WEBHOOK_ROUTER_FILE" ]; then
+  if grep -q "existing.created_by_user_id or sandbox_info.created_by_user_id" "$WEBHOOK_ROUTER_FILE"; then
+    echo "webhook user_id preservation patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/event_callback/webhook_router.py"
+
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # In on_conversation_update, change:
+    #     created_by_user_id=sandbox_info.created_by_user_id,
+    # to:
+    #     created_by_user_id=existing.created_by_user_id or sandbox_info.created_by_user_id,
+    # This preserves the user_id from the database if the conversation already exists
+
+    # We need to be careful to only replace the one in on_conversation_update, not in valid_conversation
+    # The one in on_conversation_update is inside AppConversationInfo(... created_by_user_id=sandbox_info.created_by_user_id,
+
+    old_pattern = """app_conversation_info = AppConversationInfo(
+        id=conversation_info.id,
+        title=existing.title or f'Conversation {conversation_info.id.hex}',
+        sandbox_id=sandbox_info.id,
+        created_by_user_id=sandbox_info.created_by_user_id,"""
+
+    new_code = """app_conversation_info = AppConversationInfo(
+        id=conversation_info.id,
+        title=existing.title or f'Conversation {conversation_info.id.hex}',
+        sandbox_id=sandbox_info.id,
+        created_by_user_id=existing.created_by_user_id or sandbox_info.created_by_user_id,"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(file_path, 'w') as f:
+            f.write(content)
+        print("webhook user_id preservation patch applied successfully")
+    else:
+        print("webhook user_id preservation patch pattern not found (code structure may have changed)")
+except Exception as e:
+    print(f"ERROR: Failed to apply webhook user_id preservation patch: {e}", file=sys.stderr)
+    # Don't exit - let app try to start
+PYEOF
+  fi
+fi
+
 echo "Starting OpenHands..."
 
 # Execute the original entrypoint
