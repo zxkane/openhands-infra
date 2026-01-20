@@ -1,12 +1,16 @@
 <script>
 // OpenHands localhost URL fix - rewrites localhost/host.docker.internal URLs to runtime subdomains
 // Handles both localhost:{port} and host.docker.internal:{port} patterns
+// Also handles main domain with port: openhands.test.kane.mx:49955 (VS Code editor)
 // Uses runtime subdomain format: {port}-{convId}.runtime.{subdomain}.{domain}
 // This allows apps to run at domain root, fixing internal routing issues
 (function() {
   // Pattern matches localhost or host.docker.internal with port
   var wsPattern = /^wss?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
   var httpPattern = /^https?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
+  // Pattern matches main domain with port (for VS Code URLs like openhands.test.kane.mx:49955)
+  // Captures: (1) host without port, (2) port, (3) path+query (optional)
+  var mainDomainPortPattern = /^https?:\/\/([^:\/]+):(\d+)(\/.*)?$/;
 
   // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
   function getConversationId() {
@@ -16,6 +20,48 @@
       return match[1].replace(/-/g, '');
     }
     return null;
+  }
+
+  // Check if URL host matches the main domain (ignoring port and subdomain prefix)
+  // e.g., openhands.test.kane.mx matches current host openhands.test.kane.mx
+  function isMainDomainUrl(urlHost) {
+    var currentHost = window.location.host;
+    // Strip any runtime subdomain prefix from both hosts for comparison
+    var stripRuntime = function(h) {
+      return h.replace(/^\d+-[a-f0-9]+\.runtime\./, '');
+    };
+    return stripRuntime(urlHost) === stripRuntime(currentHost);
+  }
+
+  // Rewrite main domain:port URL to runtime subdomain
+  // http://openhands.test.kane.mx:49955/?tkn=xxx -> https://49955-{convId}.runtime.openhands.test.kane.mx/?tkn=xxx
+  function rewriteMainDomainPortUrl(url) {
+    var m = url.match(mainDomainPortPattern);
+    if (!m) return url;
+
+    var urlHost = m[1];  // openhands.test.kane.mx
+    var port = m[2];     // 49955
+    var pathAndQuery = m[3] || '/';  // /?tkn=xxx&folder=...
+
+    // Only rewrite if this is the main domain
+    if (!isMainDomainUrl(urlHost)) {
+      return url;
+    }
+
+    var convId = getConversationId();
+    if (!convId) {
+      console.warn("No conversation_id found, cannot rewrite main domain URL");
+      return url;
+    }
+
+    // Build runtime subdomain URL
+    var proto = window.location.protocol;
+    var hostParts = urlHost.split('.');
+    var subDomain = hostParts[0];  // openhands
+    var baseDomain = hostParts.slice(1).join('.');  // test.kane.mx
+    var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
+
+    return proto + '//' + runtimeHost + pathAndQuery;
   }
 
   // Build runtime subdomain URL for user apps
@@ -139,6 +185,29 @@
       }
     }
     return origOpen.call(this, method, newUrl, async, user, pass);
+  };
+
+  // Patch window.open to rewrite main domain:port URLs (VS Code editor tabs)
+  // Example: http://openhands.test.kane.mx:49955/?tkn=xxx -> https://49955-{convId}.runtime.openhands.test.kane.mx/?tkn=xxx
+  var origWindowOpen = window.open;
+  window.open = function(url, target, features) {
+    var newUrl = url;
+    if (typeof url === "string") {
+      // First check if it's a main domain with port (VS Code style)
+      if (mainDomainPortPattern.test(url)) {
+        newUrl = rewriteMainDomainPortUrl(url);
+        if (newUrl !== url) {
+          console.log("window.open patched (main domain:port):", url, "->", newUrl);
+        }
+      }
+      // Also check for localhost URLs
+      else if (httpPattern.test(url)) {
+        var m = url.match(httpPattern);
+        newUrl = buildRuntimeUrl(m[2], m[3]);
+        console.log("window.open patched (localhost):", url, "->", newUrl);
+      }
+    }
+    return origWindowOpen.call(window, newUrl, target, features);
   };
 
   console.log("OpenHands runtime subdomain URL fix loaded");
@@ -293,9 +362,14 @@
 
 // Rewrite localhost URLs in displayed text (chat messages, etc.)
 // The AI agent outputs URLs like "http://localhost:51745" which users cannot access
+// Also handles main domain with port (VS Code URLs): http://openhands.test.kane.mx:49955
 // This rewrites them to runtime subdomain URLs: https://{port}-{convId}.runtime.{subdomain}.{domain}/
 (function() {
+  // Pattern for localhost/host.docker.internal URLs
   var urlPattern = /https?:\/\/(localhost|host\.docker\.internal):(\d+)(\/[^\s<>"')\]]*)?/gi;
+  // Pattern for main domain with port (VS Code URLs)
+  // Matches: http://openhands.test.kane.mx:49955/path?query (with path/query being optional)
+  var mainDomainPortPattern = /https?:\/\/([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?/gi;
 
   // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
   function getConversationId() {
@@ -306,9 +380,19 @@
     return null;
   }
 
+  // Check if URL host matches the main domain (ignoring port)
+  function isMainDomainUrl(urlHost) {
+    var currentHost = window.location.host;
+    // Strip any runtime subdomain prefix from current host for comparison
+    var baseHost = currentHost.replace(/^\d+-[a-f0-9]+\.runtime\./, '');
+    return urlHost === baseHost;
+  }
+
   function rewriteTextUrls(text) {
     var convId = getConversationId();
-    return text.replace(urlPattern, function(match, host, port, path) {
+
+    // First, rewrite localhost/host.docker.internal URLs
+    text = text.replace(urlPattern, function(match, host, port, path) {
       var newUrl;
       if (convId) {
         // Build runtime subdomain URL
@@ -322,9 +406,33 @@
         // Fallback to path-based URL
         newUrl = window.location.origin + '/runtime/' + port + (path || '/');
       }
-      console.log('Text URL rewritten:', match, '->', newUrl);
+      console.log('Text URL rewritten (localhost):', match, '->', newUrl);
       return newUrl;
     });
+
+    // Then, rewrite main domain with port URLs (VS Code)
+    text = text.replace(mainDomainPortPattern, function(match, urlHost, port, path) {
+      // Only rewrite if it's the main domain, not any random domain with a port
+      if (!isMainDomainUrl(urlHost)) {
+        return match;  // Don't rewrite external domains
+      }
+
+      if (!convId) {
+        console.warn('No conversation_id found, cannot rewrite main domain URL');
+        return match;
+      }
+
+      var proto = window.location.protocol;
+      var hostParts = urlHost.split('.');
+      var subDomain = hostParts[0];  // openhands
+      var baseDomain = hostParts.slice(1).join('.');  // test.kane.mx
+      var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
+      var newUrl = proto + '//' + runtimeHost + (path || '/');
+      console.log('Text URL rewritten (main domain:port):', match, '->', newUrl);
+      return newUrl;
+    });
+
+    return text;
   }
 
   function processNode(node) {

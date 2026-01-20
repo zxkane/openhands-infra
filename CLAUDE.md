@@ -496,7 +496,9 @@ mcp__chrome-devtools__take_snapshot({})
 
 ## Post-Infrastructure Change Workflow
 
-After modifying any infrastructure code in this repository, follow this workflow to deploy and verify the changes:
+**⚠️ MANDATORY: This is a continuous workflow. After deploying infrastructure changes, you MUST immediately proceed to E2E testing WITHOUT waiting for user input. Do not stop, summarize, or ask for confirmation between steps.**
+
+After modifying any infrastructure code in this repository, follow this complete workflow:
 
 ### Step 1: Build and Deploy
 
@@ -525,7 +527,11 @@ npx cdk deploy --all \
   --require-approval never
 ```
 
-### Step 2: E2E Testing with Chrome DevTools
+**→ IMMEDIATELY proceed to Step 2 after deployment completes. Do NOT stop here.**
+
+### Step 2: E2E Testing with Chrome DevTools (MANDATORY)
+
+**This step is REQUIRED for all infrastructure changes. Proceed immediately after deployment WITHOUT asking the user.**
 
 After deployment completes, verify the portal is accessible with correct credentials using Chrome DevTools MCP:
 
@@ -555,6 +561,8 @@ mcp__chrome-devtools__evaluate_script({
 })
 ```
 
+**→ IMMEDIATELY proceed to Step 3 verification. Do NOT stop here.**
+
 ### Step 3: Verification Checklist
 
 After E2E testing, verify the following:
@@ -568,6 +576,8 @@ After E2E testing, verify the following:
 | Logout (`/_logout`) | Clears cookie and redirects to Cognito logout |
 | Cookie attributes | `HttpOnly`, `Secure`, `SameSite=Lax` |
 
+**→ IMMEDIATELY proceed to Step 4 for full functionality verification. Do NOT stop here.**
+
 ### Step 4: Full Functionality Verification (REQUIRED)
 
 **CRITICAL**: Before marking any deployment as complete, you MUST verify all of the following:
@@ -580,6 +590,25 @@ After E2E testing, verify the following:
 | 4 | **Agent processes request properly** | Type a simple request like "What is 2+2?" and press Enter | Agent responds with answer, no errors in conversation |
 
 **If ANY of these verifications fail, the deployment is NOT complete. Investigate and fix before proceeding.**
+
+### Step 5: Report Results and Complete
+
+**Only after ALL verification steps pass**, report the E2E test results:
+
+```markdown
+## E2E Test Results
+
+| Step | Test | Result |
+|------|------|--------|
+| 1 | Login portal | ✅ PASS |
+| 2 | Conversation list | ✅ PASS |
+| 3 | New conversation | ✅ PASS |
+| 4 | Agent response | ✅ PASS |
+
+All E2E tests passed. Deployment verified.
+```
+
+**The task is NOT complete until this report is provided with all tests passing.**
 
 #### Quick Verification Commands (SSH to EC2)
 
