@@ -38,6 +38,7 @@ export class EdgeStack extends cdk.Stack {
 
     const { config, alb } = props;
     const fullDomain = `${config.subDomain}.${config.domainName}`;
+    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.test.kane.mx
 
     // ========================================
     // Route 53 & Certificate
@@ -50,8 +51,10 @@ export class EdgeStack extends cdk.Stack {
     });
 
     // ACM Certificate for CloudFront (must be in us-east-1)
+    // Includes both main domain and runtime wildcard as SAN
     const certificate = new acm.Certificate(this, 'Certificate', {
       domainName: fullDomain,
+      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.openhands.test.kane.mx
       validation: acm.CertificateValidation.fromDns(hostedZone),
     });
 
@@ -422,11 +425,30 @@ async function exchangeCodeForTokens(code, redirectUri) {
   });
 }
 
+// Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
+function parseRuntimeSubdomain(host) {
+  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
+  const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
+  if (match) {
+    return { port: match[1], convId: match[2], isRuntime: true };
+  }
+  return { isRuntime: false };
+}
+
 exports.handler = async (event) => {
   const request = event.Records[0].cf.request;
   const uri = request.uri;
   const cookies = request.headers.cookie;
   const host = request.headers.host[0].value;
+
+  // Check if this is a runtime subdomain request
+  const runtime = parseRuntimeSubdomain(host);
+  if (runtime.isRuntime) {
+    // Rewrite URI to /runtime/{cid}/{port}/... format for ALB routing
+    request.uri = '/runtime/' + runtime.convId + '/' + runtime.port + uri;
+    // Runtime requests skip Cognito auth - they use session token auth
+    return request;
+  }
 
   // Handle callback from Cognito
   if (uri === CONFIG.callbackPath) {
@@ -566,6 +588,75 @@ exports.handler = async (event) => {
     const authFunctionVersion = authFunction.currentVersion;
 
     // ========================================
+    // Lambda@Edge for Runtime Security Headers
+    // ========================================
+
+    const securityHeadersFunctionRole = new iam.Role(this, 'SecurityHeadersFunctionRole', {
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('lambda.amazonaws.com'),
+        new iam.ServicePrincipal('edgelambda.amazonaws.com'),
+      ),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+    });
+
+    // Lambda@Edge function for origin-response - adds security headers for runtime requests
+    const securityHeadersFunction = new lambda.Function(this, 'SecurityHeadersFunction', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline(`
+// Origin Response Handler - adds security headers for runtime requests
+exports.handler = async (event) => {
+  const response = event.Records[0].cf.response;
+  const request = event.Records[0].cf.request;
+  const host = request.headers.host ? request.headers.host[0].value : '';
+
+  // Check if this is a runtime request (runtime subdomain)
+  if (host.includes('.runtime.')) {
+    const headers = response.headers;
+
+    // Security headers - protect against cross-runtime attacks
+    headers['x-frame-options'] = [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }];
+    headers['x-content-type-options'] = [{ key: 'X-Content-Type-Options', value: 'nosniff' }];
+    headers['x-xss-protection'] = [{ key: 'X-XSS-Protection', value: '1; mode=block' }];
+    headers['referrer-policy'] = [{ key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' }];
+    headers['content-security-policy'] = [{
+      key: 'Content-Security-Policy',
+      value: "frame-ancestors 'self'; default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:;"
+    }];
+
+    // Cookie security - rewrite Set-Cookie headers for isolation
+    if (headers['set-cookie']) {
+      headers['set-cookie'] = headers['set-cookie'].map(cookie => {
+        let value = cookie.value;
+        // Remove any Domain attribute (ensures cookie only valid for exact host)
+        value = value.replace(/;\\s*Domain=[^;]*/gi, '');
+        // Add Secure attribute if not present
+        if (!/;\\s*Secure/i.test(value)) {
+          value += '; Secure';
+        }
+        // Add SameSite=Strict if not present
+        if (!/;\\s*SameSite/i.test(value)) {
+          value += '; SameSite=Strict';
+        }
+        return { key: 'Set-Cookie', value };
+      });
+    }
+  }
+
+  return response;
+};
+`),
+      role: securityHeadersFunctionRole,
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+    });
+
+    // Create version for Lambda@Edge
+    const securityHeadersFunctionVersion = securityHeadersFunction.currentVersion;
+
+    // ========================================
     // WAF WebACL
     // ========================================
 
@@ -684,9 +775,13 @@ exports.handler = async (event) => {
     });
 
     // CloudFront Distribution
+    // Includes both main domain and runtime wildcard
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: 'OpenHands CloudFront Distribution',
-      domainNames: [fullDomain],
+      domainNames: [
+        fullDomain,                  // openhands.test.kane.mx (main app)
+        `*.${runtimeDomain}`,        // *.runtime.openhands.test.kane.mx (runtime subdomains)
+      ],
       certificate: certificate,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
@@ -699,14 +794,22 @@ exports.handler = async (event) => {
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
         responseHeadersPolicy: responseHeadersPolicy,
-        edgeLambdas: [{
-          eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
-          functionVersion: authFunctionVersion,
-          includeBody: false,
-        }],
+        edgeLambdas: [
+          {
+            eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+            functionVersion: authFunctionVersion,
+            includeBody: false,
+          },
+          {
+            eventType: cloudfront.LambdaEdgeEventType.ORIGIN_RESPONSE,
+            functionVersion: securityHeadersFunctionVersion,
+            includeBody: false,
+          },
+        ],
       },
-      // Runtime proxy behavior - NO Lambda@Edge auth
-      // Runtime containers authenticate via session tokens in the WebSocket URL
+      // Runtime proxy behavior - NO Lambda@Edge auth (path-based fallback)
+      // This behavior is kept for backwards compatibility with /runtime/* path routing
+      // New runtime subdomain requests are handled by the default behavior with auth bypass
       additionalBehaviors: {
         '/runtime/*': {
           origin: httpOrigin,
@@ -722,12 +825,22 @@ exports.handler = async (event) => {
     });
 
     // ========================================
-    // Route 53 DNS Record
+    // Route 53 DNS Records
     // ========================================
 
+    // Main domain record: openhands.test.kane.mx
     new route53.ARecord(this, 'AliasRecord', {
       zone: hostedZone,
       recordName: config.subDomain,
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.CloudFrontTarget(distribution)
+      ),
+    });
+
+    // Runtime wildcard record: *.runtime.openhands.test.kane.mx
+    new route53.ARecord(this, 'RuntimeWildcardRecord', {
+      zone: hostedZone,
+      recordName: `*.runtime.${config.subDomain}`,
       target: route53.RecordTarget.fromAlias(
         new route53Targets.CloudFrontTarget(distribution)
       ),

@@ -12,12 +12,16 @@ User → CloudFront (WAF+Lambda@Edge Auth) → VPC Origin → Internal ALB → E
                                                               VPC Endpoints → Bedrock / CloudWatch Logs
                                                                                 ↓
                                                               RDS Proxy → Aurora Serverless v2 PostgreSQL
+
+Runtime Apps:
+{port}-{convId}.runtime.{subdomain}.{domain} → CloudFront → Lambda@Edge → OpenResty → Docker Container
 ```
 
 Key features:
 - **CloudFront VPC Origin**: Connects directly to internal ALB without exposing it to the internet
 - **Internal ALB**: No public IP, accessible only via CloudFront VPC Origin
 - **Self-Healing Architecture**: Conversation history persists across EC2 instance replacements
+- **Runtime Subdomain Routing**: User apps accessible via `{port}-{convId}.runtime.{subdomain}.{domain}` with proper in-app routing
 
 ## Features
 
@@ -30,6 +34,7 @@ Key features:
 - **Security**: Cognito auth (30-day session), WAF, VPC Endpoints, private subnets, Secrets Manager
 - **Monitoring**: CloudWatch Logs, Alarms, Dashboard
 - **Backup**: AWS Backup with 14-day retention, Aurora automatic backups (35 days)
+- **Runtime Subdomain**: Apps run at domain root with proper internal routing and cookie isolation
 
 ## Prerequisites
 
@@ -188,6 +193,50 @@ Cognito token validity configuration:
 | Refresh Token | 30 days | Used to obtain new tokens |
 
 Users stay logged in for up to 30 days without re-authentication.
+
+## Runtime Subdomain Routing
+
+When AI agents run applications (e.g., Flask, Node.js) inside the sandbox, they are accessible via dedicated runtime subdomains:
+
+```
+https://{port}-{convId}.runtime.{subdomain}.{domain}/
+```
+
+**Example**: `https://5000-abc123def456.runtime.openhands.example.com/`
+
+### Benefits
+
+| Feature | Benefit |
+|---------|---------|
+| Domain Root | Apps run at `/` - internal routes (e.g., `/add`, `/api`) work correctly |
+| Cookie Isolation | Each runtime has isolated cookies (no cross-runtime cookie leakage) |
+| Security Headers | X-Frame-Options, CSP, X-XSS-Protection automatically applied |
+| No Authentication | Runtime subdomains bypass Cognito (apps are public within the conversation) |
+
+### Architecture
+
+```
+User Browser
+    ↓
+https://5000-{convId}.runtime.openhands.example.com/
+    ↓
+CloudFront (matches *.runtime.* wildcard certificate)
+    ↓
+Lambda@Edge (viewer-request: parse subdomain, rewrite URI to /runtime/{convId}/{port}/...)
+    ↓
+ALB → EC2 → OpenResty
+    ↓
+Lua Docker Discovery (find container by convId, route to container IP:port)
+    ↓
+User App (Flask/Node.js/etc. inside sandbox container)
+```
+
+### Security Considerations
+
+- **Cookie Isolation**: Cookies set by runtime apps are scoped to the exact subdomain only
+- **No Domain Attribute**: Cookies don't leak to parent domain or other subdomains
+- **SameSite=Strict**: Cross-site requests don't carry cookies
+- **Security Headers**: Lambda@Edge origin-response adds protective headers
 
 ## Security
 

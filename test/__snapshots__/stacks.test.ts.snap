@@ -407,7 +407,7 @@ for _,c in ipairs(cs) do local lb=c.Labels or {} if lb["conversation_id"]==cid t
 local ip=nil local ns=c.NetworkSettings and c.NetworkSettings.Networks
 if ns then for _,n in pairs(ns) do if n.IPAddress and n.IPAddress~="" then ip=n.IPAddress break end end end
 if ip then
-local pts=c.Ports or {} for _,p in ipairs(pts) do if p.PublicPort and tostring(p.PublicPort)==hp then local pp=p.PrivatePort if pp==8000 or pp==8001 then return ip,tostring(pp) else return ip,hp end end end
+local pts=c.Ports or {} for _,p in ipairs(pts) do if p.PublicPort and tostring(p.PublicPort)==hp then return ip,tostring(p.PrivatePort) end end
 return ip,hp end
 end end
 return nil,nil
@@ -429,7 +429,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:76b101471b6e2ebb95713c3baf2889f128a2dfdbe4d3e76f08bc7fd0c23d07aa",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:73ede23590ac08d19a42f8e36f632cb84c4c18b7096252786cffd118ac9bc432",
                   },
                   "
     container_name: openhands-app
@@ -565,7 +565,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:76b101471b6e2ebb95713c3baf2889f128a2dfdbe4d3e76f08bc7fd0c23d07aa",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:73ede23590ac08d19a42f8e36f632cb84c4c18b7096252786cffd118ac9bc432",
                   },
                   ""
 pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"
@@ -1159,11 +1159,30 @@ async function exchangeCodeForTokens(code, redirectUri) {
   });
 }
 
+// Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
+function parseRuntimeSubdomain(host) {
+  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
+  const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
+  if (match) {
+    return { port: match[1], convId: match[2], isRuntime: true };
+  }
+  return { isRuntime: false };
+}
+
 exports.handler = async (event) => {
   const request = event.Records[0].cf.request;
   const uri = request.uri;
   const cookies = request.headers.cookie;
   const host = request.headers.host[0].value;
+
+  // Check if this is a runtime subdomain request
+  const runtime = parseRuntimeSubdomain(host);
+  if (runtime.isRuntime) {
+    // Rewrite URI to /runtime/{cid}/{port}/... format for ALB routing
+    request.uri = '/runtime/' + runtime.convId + '/' + runtime.port + uri;
+    // Runtime requests skip Cognito auth - they use session token auth
+    return request;
+  }
 
   // Handle callback from Cognito
   if (uri === CONFIG.callbackPath) {
@@ -1311,7 +1330,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE867954f71365dd826b5576d66a094f7fba": {
+    "AuthFunctionCurrentVersionDB17CE86154e9cf7902fc3395742de9807520671": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -1368,6 +1387,13 @@ exports.handler = async (event) => {
             "DomainName": "openhands.example.com",
             "HostedZoneId": "Z0123456789ABC",
           },
+          {
+            "DomainName": "*.runtime.openhands.example.com",
+            "HostedZoneId": "Z0123456789ABC",
+          },
+        ],
+        "SubjectAlternativeNames": [
+          "*.runtime.openhands.example.com",
         ],
         "Tags": [
           {
@@ -1524,6 +1550,7 @@ exports.handler = async (event) => {
         "DistributionConfig": {
           "Aliases": [
             "openhands.example.com",
+            "*.runtime.openhands.example.com",
           ],
           "CacheBehaviors": [
             {
@@ -1573,7 +1600,14 @@ exports.handler = async (event) => {
                 "EventType": "viewer-request",
                 "IncludeBody": false,
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE867954f71365dd826b5576d66a094f7fba",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE86154e9cf7902fc3395742de9807520671",
+                },
+              },
+              {
+                "EventType": "origin-response",
+                "IncludeBody": false,
+                "LambdaFunctionARN": {
+                  "Ref": "SecurityHeadersFunctionCurrentVersion1FC2948E070e97089821193f02cd7e9b4063582b",
                 },
               },
             ],
@@ -1643,6 +1677,143 @@ exports.handler = async (event) => {
       },
       "Type": "Custom::CrossRegionExportReader",
       "UpdateReplacePolicy": "Delete",
+    },
+    "RuntimeWildcardRecord40ECEBBE": {
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": {
+            "Fn::GetAtt": [
+              "Distribution830FAC52",
+              "DomainName",
+            ],
+          },
+          "HostedZoneId": {
+            "Fn::FindInMap": [
+              "AWSCloudFrontPartitionHostedZoneIdMap",
+              {
+                "Ref": "AWS::Partition",
+              },
+              "zoneId",
+            ],
+          },
+        },
+        "HostedZoneId": "Z0123456789ABC",
+        "Name": "*.runtime.openhands.example.com.",
+        "Type": "A",
+      },
+      "Type": "AWS::Route53::RecordSet",
+    },
+    "SecurityHeadersFunction224E3783": {
+      "DependsOn": [
+        "SecurityHeadersFunctionRoleA2DFD644",
+      ],
+      "Properties": {
+        "Code": {
+          "ZipFile": "
+// Origin Response Handler - adds security headers for runtime requests
+exports.handler = async (event) => {
+  const response = event.Records[0].cf.response;
+  const request = event.Records[0].cf.request;
+  const host = request.headers.host ? request.headers.host[0].value : '';
+
+  // Check if this is a runtime request (runtime subdomain)
+  if (host.includes('.runtime.')) {
+    const headers = response.headers;
+
+    // Security headers - protect against cross-runtime attacks
+    headers['x-frame-options'] = [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }];
+    headers['x-content-type-options'] = [{ key: 'X-Content-Type-Options', value: 'nosniff' }];
+    headers['x-xss-protection'] = [{ key: 'X-XSS-Protection', value: '1; mode=block' }];
+    headers['referrer-policy'] = [{ key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' }];
+    headers['content-security-policy'] = [{
+      key: 'Content-Security-Policy',
+      value: "frame-ancestors 'self'; default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:;"
+    }];
+
+    // Cookie security - rewrite Set-Cookie headers for isolation
+    if (headers['set-cookie']) {
+      headers['set-cookie'] = headers['set-cookie'].map(cookie => {
+        let value = cookie.value;
+        // Remove any Domain attribute (ensures cookie only valid for exact host)
+        value = value.replace(/;\\s*Domain=[^;]*/gi, '');
+        // Add Secure attribute if not present
+        if (!/;\\s*Secure/i.test(value)) {
+          value += '; Secure';
+        }
+        // Add SameSite=Strict if not present
+        if (!/;\\s*SameSite/i.test(value)) {
+          value += '; SameSite=Strict';
+        }
+        return { key: 'Set-Cookie', value };
+      });
+    }
+  }
+
+  return response;
+};
+",
+        },
+        "Handler": "index.handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "SecurityHeadersFunctionRoleA2DFD644",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Timeout": 5,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "SecurityHeadersFunctionCurrentVersion1FC2948E070e97089821193f02cd7e9b4063582b": {
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true,
+      },
+      "Properties": {
+        "FunctionName": {
+          "Ref": "SecurityHeadersFunction224E3783",
+        },
+      },
+      "Type": "AWS::Lambda::Version",
+    },
+    "SecurityHeadersFunctionRoleA2DFD644": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "edgelambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
     },
     "UserPool6BA7E5F2": {
       "DeletionPolicy": "Retain",

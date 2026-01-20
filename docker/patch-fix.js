@@ -1,7 +1,8 @@
 <script>
-// OpenHands localhost URL fix - rewrites localhost/host.docker.internal URLs to /runtime/{conversation_id}/{port}/...
+// OpenHands localhost URL fix - rewrites localhost/host.docker.internal URLs to runtime subdomains
 // Handles both localhost:{port} and host.docker.internal:{port} patterns
-// conversation_id is extracted from the current page URL (/conversations/{uuid})
+// Uses runtime subdomain format: {port}-{convId}.runtime.{subdomain}.{domain}
+// This allows apps to run at domain root, fixing internal routing issues
 (function() {
   // Pattern matches localhost or host.docker.internal with port
   var wsPattern = /^wss?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
@@ -17,15 +18,34 @@
     return null;
   }
 
-  // Build runtime URL with conversation_id
-  function buildRuntimeUrl(port, path) {
+  // Build runtime subdomain URL for user apps
+  // Transforms: openhands.test.kane.mx -> {port}-{convId}.runtime.openhands.test.kane.mx
+  // For API paths (/api/..., /sockets/...), use path-based routing to preserve authentication
+  function buildRuntimeUrl(port, path, usePathBased) {
     var convId = getConversationId();
-    if (convId) {
+    if (!convId) {
+      console.warn("No conversation_id found, using path-based runtime URL");
+      return window.location.origin + '/runtime/' + port + (path || '/');
+    }
+
+    // API calls need authentication via main domain, use path-based routing
+    // This includes: /api/*, /sockets/* - these require session cookies
+    if (usePathBased || (path && (path.startsWith('/api/') || path.startsWith('/sockets/')))) {
       return window.location.origin + '/runtime/' + convId + '/' + port + (path || '/');
     }
-    // Fallback: use old format without conversation_id (won't work with new router)
-    console.warn("No conversation_id found, runtime routing may fail");
-    return window.location.origin + '/runtime/' + port + (path || '/');
+
+    // User apps use subdomain routing for proper relative path resolution
+    var proto = window.location.protocol;
+    var host = window.location.host;
+
+    // Parse host to build runtime subdomain
+    // e.g., openhands.test.kane.mx -> 5000-abc123.runtime.openhands.test.kane.mx
+    var parts = host.split('.');
+    var subDomain = parts[0];  // openhands
+    var baseDomain = parts.slice(1).join('.');  // test.kane.mx
+
+    var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
+    return proto + '//' + runtimeHost + (path || '/');
   }
 
   var origWS = window.WebSocket;
@@ -33,12 +53,28 @@
     var newUrl = url;
     var m = url.match(wsPattern);
     if (m) {
-      var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       var convId = getConversationId();
-      if (convId) {
-        newUrl = proto + "//" + window.location.host + "/runtime/" + convId + "/" + m[2] + m[3];
+      var wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      var path = m[3] || '/';
+
+      // Agent sockets need authentication, use path-based routing
+      if (path.startsWith('/sockets/')) {
+        if (convId) {
+          newUrl = wsProto + "//" + window.location.host + "/runtime/" + convId + "/" + m[2] + path;
+        } else {
+          newUrl = wsProto + "//" + window.location.host + "/runtime/" + m[2] + path;
+        }
+      } else if (convId) {
+        // User app WebSockets use subdomain routing
+        var host = window.location.host;
+        var parts = host.split('.');
+        var subDomain = parts[0];
+        var baseDomain = parts.slice(1).join('.');
+        var runtimeHost = m[2] + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
+        newUrl = wsProto + "//" + runtimeHost + path;
       } else {
-        newUrl = proto + "//" + window.location.host + "/runtime/" + m[2] + m[3];
+        // Fallback to path-based URL
+        newUrl = wsProto + "//" + window.location.host + "/runtime/" + m[2] + path;
       }
       console.log("WS patched:", url, "->", newUrl);
     }
@@ -60,10 +96,7 @@
 
         // Normalize git paths - convert absolute workspace paths to relative
         // The agent-server's git router expects "." for the workspace root
-        // Frontend sends "/workspace/project" which the backend interprets as a subdirectory,
-        // prepending /workspace/project/ and causing: "/workspace/project/project"
-        // Note: URL at this point includes /runtime/{conv_id}/{port}/ prefix, e.g.:
-        // https://domain/runtime/abc123/38793/api/git/changes/%2Fworkspace%2Fproject
+        // Note: URL is now at runtime subdomain root, so git paths are simpler
         if (newUrl.includes('/api/git/')) {
           // Handle URL-encoded paths (%2F = /)
           // Case 1: Exact workspace root - .../api/git/changes/%2Fworkspace%2Fproject -> .../api/git/changes/.
@@ -93,7 +126,6 @@
         newUrl = buildRuntimeUrl(m[2], m[3]);
 
         // Normalize git paths - convert absolute workspace paths to relative
-        // Note: URL at this point includes /runtime/{conv_id}/{port}/ prefix
         if (newUrl.includes('/api/git/')) {
           // Handle URL-encoded paths (%2F = /)
           newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
@@ -109,7 +141,7 @@
     return origOpen.call(this, method, newUrl, async, user, pass);
   };
 
-  console.log("OpenHands localhost/host.docker.internal URL fix loaded (with conversation_id routing)");
+  console.log("OpenHands runtime subdomain URL fix loaded");
 })();
 
 // Auto-close AI settings modal when LLM is already configured via config.toml
@@ -261,7 +293,7 @@
 
 // Rewrite localhost URLs in displayed text (chat messages, etc.)
 // The AI agent outputs URLs like "http://localhost:51745" which users cannot access
-// This rewrites them to the accessible path-based URL: https://{domain}/runtime/{conversation_id}/{port}/
+// This rewrites them to runtime subdomain URLs: https://{port}-{convId}.runtime.{subdomain}.{domain}/
 (function() {
   var urlPattern = /https?:\/\/(localhost|host\.docker\.internal):(\d+)(\/[^\s<>"')\]]*)?/gi;
 
@@ -279,8 +311,15 @@
     return text.replace(urlPattern, function(match, host, port, path) {
       var newUrl;
       if (convId) {
-        newUrl = window.location.origin + '/runtime/' + convId + '/' + port + (path || '/');
+        // Build runtime subdomain URL
+        var proto = window.location.protocol;
+        var hostParts = window.location.host.split('.');
+        var subDomain = hostParts[0];  // openhands
+        var baseDomain = hostParts.slice(1).join('.');  // test.kane.mx
+        var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
+        newUrl = proto + '//' + runtimeHost + (path || '/');
       } else {
+        // Fallback to path-based URL
         newUrl = window.location.origin + '/runtime/' + port + (path || '/');
       }
       console.log('Text URL rewritten:', match, '->', newUrl);

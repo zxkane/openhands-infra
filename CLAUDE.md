@@ -115,6 +115,43 @@ Each stack exposes an `output` property (typed in `lib/interfaces.ts`) consumed 
 | `lib/compute-stack.ts` | EC2 ASG, Launch Template, Internal ALB |
 | `lib/edge-stack.ts` | Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 |
 | `config/config.toml` | OpenHands application configuration (LLM, sandbox, security) |
+| `docker/patch-fix.js` | Frontend JavaScript patches (URL rewriting, settings auto-config, runtime subdomain routing) |
+| `test/E2E_TEST_CASES.md` | Comprehensive E2E test cases with acceptance criteria |
+
+### Runtime Subdomain Routing
+
+User applications running inside sandbox containers are accessible via dedicated runtime subdomains:
+
+```
+https://{port}-{convId}.runtime.{subdomain}.{domain}/
+```
+
+**Example**: `https://5000-b691f4c32a1c407f92dd20c77818f7a8.runtime.openhands.test.kane.mx/`
+
+**Request Flow**:
+```
+Browser → CloudFront → Lambda@Edge (parse subdomain) → ALB → OpenResty → Lua Docker Discovery → Container App
+```
+
+**Key Components**:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| ACM Certificate | `lib/edge-stack.ts` | Wildcard cert includes `*.runtime.{subdomain}.{domain}` SAN |
+| Route 53 | `lib/edge-stack.ts` | Wildcard A record `*.runtime.{subdomain}` → CloudFront |
+| Lambda@Edge viewer-request | `lib/edge-stack.ts` | Parses `{port}-{convId}.runtime.*` and rewrites URI to `/runtime/{convId}/{port}/...` |
+| Lambda@Edge origin-response | `lib/edge-stack.ts` | Adds security headers (X-Frame-Options, CSP, cookie isolation) |
+| Lua Docker Discovery | `lib/compute-stack.ts` | Finds container by conversation_id label, routes to container IP + port |
+| Frontend Patch | `docker/patch-fix.js` | Rewrites `localhost:port` URLs to runtime subdomain format |
+
+**URL Rewriting (patch-fix.js)**:
+- API calls (`/api/*`, `/sockets/*`) → Path-based routing (preserves authentication)
+- User app requests → Subdomain routing (apps run at domain root)
+
+**Why Subdomain Routing?**
+- Apps run at domain root (`/`) instead of `/runtime/{cid}/{port}/`
+- Internal routes like `/add`, `/api/users` resolve correctly
+- Each runtime has isolated cookies (security)
 
 ## EC2 User Data
 
@@ -206,6 +243,16 @@ aws elbv2 describe-target-health \
 ```
 
 ## E2E Testing with Chrome DevTools
+
+> **Comprehensive Test Cases**: For detailed, step-by-step E2E test cases with acceptance criteria, see [`test/E2E_TEST_CASES.md`](test/E2E_TEST_CASES.md). This file contains:
+> - TC-001: Deploy Infrastructure
+> - TC-002: Create Test User in Cognito
+> - TC-003: Login via Chrome DevTools
+> - TC-004: Verify Conversation List
+> - TC-005: Start New Conversation
+> - TC-006: Execute Flask Todo App Prompt
+> - TC-007: Verify Runtime Application Accessible
+> - TC-008: Verify In-App Routing
 
 ### Prerequisites
 
@@ -411,12 +458,14 @@ mcp__chrome-devtools__list_console_messages({})
 **Expected URL Display**:
 | Original (localhost) | Rewritten (accessible) |
 |---------------------|------------------------|
-| `http://localhost:5000` | `https://<subdomain>.<domain-name>/runtime/5000/` |
+| `http://localhost:5000` | `https://5000-<convId>.runtime.<subdomain>.<domain-name>/` |
 
 **Expected Console Logs**:
 ```
-Text URL rewritten: http://localhost:5000 -> https://<subdomain>.<domain-name>/runtime/5000/
+Text URL rewritten: http://localhost:5000 -> https://5000-<convId>.runtime.<subdomain>.<domain-name>/
 ```
+
+> **Note**: Runtime URLs now use subdomain routing (`{port}-{convId}.runtime.{subdomain}.{domain}`) instead of path-based routing. This ensures internal app routes work correctly since apps run at the domain root.
 
 #### Step 6: Verify Flask App is Accessible
 
@@ -425,8 +474,8 @@ Click the rewritten URL or navigate directly to verify the Flask app is running.
 ```javascript
 // If URL is clickable in chat, click it
 mcp__chrome-devtools__click({ uid: "<flask-url-link-uid>" })
-// Or navigate directly
-mcp__chrome-devtools__navigate_page({ url: "https://<subdomain>.<domain-name>/runtime/5000/", type: "url" })
+// Or navigate directly (using runtime subdomain)
+mcp__chrome-devtools__navigate_page({ url: "https://5000-<convId>.runtime.<subdomain>.<domain-name>/", type: "url" })
 mcp__chrome-devtools__take_snapshot({})
 ```
 
@@ -441,8 +490,9 @@ mcp__chrome-devtools__take_snapshot({})
 | 3 | Changes panel loads | Network request 200, files displayed | ✅ |
 | 4 | Git path correct | No 500 error, no path duplication | ✅ |
 | 5 | AI agent responds | Status changes to "Running" | ✅ |
-| 6 | URL rewritten | localhost → /runtime/{port}/ | ✅ |
+| 6 | URL rewritten | localhost → `{port}-{convId}.runtime.{domain}/` | ✅ |
 | 7 | Runtime accessible | Flask app returns "Hello World" | ✅ |
+| 8 | In-app routing works | Internal routes resolve correctly | ✅ |
 
 ## Post-Infrastructure Change Workflow
 

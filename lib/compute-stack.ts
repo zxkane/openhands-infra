@@ -173,8 +173,10 @@ http {
 }`;
 
 // Lua script for Docker container discovery - minified to fit 16KB user data limit
-// Routes system ports (PrivatePort 8000/8001) to their PrivatePort, and user app ports to PublicPort.
-// Logic: System services (agent-server, VSCode) listen on PrivatePort; user apps ($WORKER_N) listen on PublicPort.
+// Maps PublicPort (host port) to container IP + PrivatePort (container internal port).
+// For system ports with PublicPort mappings, returns the matching PrivatePort.
+// For user app ports (not in port mappings), returns the requested port directly since
+// user apps run inside the container and listen on that port.
 const LUA_DOCKER_DISCOVERY = `local http=require"resty.http" local cjson=require"cjson" local _M={}
 function _M.find_container(cid,hp)
 local h=http.new() local ok,e=h:connect("unix:/var/run/docker.sock") if not ok then return nil,nil end
@@ -184,7 +186,7 @@ for _,c in ipairs(cs) do local lb=c.Labels or {} if lb["conversation_id"]==cid t
 local ip=nil local ns=c.NetworkSettings and c.NetworkSettings.Networks
 if ns then for _,n in pairs(ns) do if n.IPAddress and n.IPAddress~="" then ip=n.IPAddress break end end end
 if ip then
-local pts=c.Ports or {} for _,p in ipairs(pts) do if p.PublicPort and tostring(p.PublicPort)==hp then local pp=p.PrivatePort if pp==8000 or pp==8001 then return ip,tostring(pp) else return ip,hp end end end
+local pts=c.Ports or {} for _,p in ipairs(pts) do if p.PublicPort and tostring(p.PublicPort)==hp then return ip,tostring(p.PrivatePort) end end
 return ip,hp end
 end end
 return nil,nil
