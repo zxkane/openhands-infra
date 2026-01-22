@@ -369,7 +369,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c1fa0c8107eef46fa9878cfbaed745678090eacb4f3da7257a42f239c6516e14",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:09c332788278a7e29340b03cdbb35c50bae20eb8ea7249c0cc2c1f99f61da2de",
                   },
                   "
     container_name: openhands-app
@@ -505,7 +505,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c1fa0c8107eef46fa9878cfbaed745678090eacb4f3da7257a42f239c6516e14",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:09c332788278a7e29340b03cdbb35c50bae20eb8ea7249c0cc2c1f99f61da2de",
                   },
                   ""
 pull_with_retry "",
@@ -1113,7 +1113,7 @@ async function exchangeCodeForTokens(code, redirectUri) {
 
 // Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
 function parseRuntimeSubdomain(host) {
-  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
+  // Match: {port}-{convId}.runtime.{subdomain}.{domain}
   const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
   if (match) {
     return { port: match[1], convId: match[2], isRuntime: true };
@@ -1317,7 +1317,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE8656f192134e9e9151418775b9f6b689fd": {
+    "AuthFunctionCurrentVersionDB17CE863140111abfd899373221769e37190ab8": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -1561,7 +1561,7 @@ exports.handler = async (event) => {
                   "EventType": "viewer-request",
                   "IncludeBody": false,
                   "LambdaFunctionARN": {
-                    "Ref": "AuthFunctionCurrentVersionDB17CE8656f192134e9e9151418775b9f6b689fd",
+                    "Ref": "AuthFunctionCurrentVersionDB17CE863140111abfd899373221769e37190ab8",
                   },
                 },
               ],
@@ -1596,7 +1596,7 @@ exports.handler = async (event) => {
                 "EventType": "viewer-request",
                 "IncludeBody": false,
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE8656f192134e9e9151418775b9f6b689fd",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE863140111abfd899373221769e37190ab8",
                 },
               },
               {

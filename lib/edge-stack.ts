@@ -38,7 +38,7 @@ export class EdgeStack extends cdk.Stack {
 
     const { config, alb } = props;
     const fullDomain = `${config.subDomain}.${config.domainName}`;
-    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.test.kane.mx
+    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.{subdomain}.{domain}
 
     // ========================================
     // Route 53 & Certificate
@@ -54,7 +54,7 @@ export class EdgeStack extends cdk.Stack {
     // Includes both main domain and runtime wildcard as SAN
     const certificate = new acm.Certificate(this, 'Certificate', {
       domainName: fullDomain,
-      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.openhands.test.kane.mx
+      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.{subdomain}.{domain}
       validation: acm.CertificateValidation.fromDns(hostedZone),
     });
 
@@ -432,7 +432,7 @@ async function exchangeCodeForTokens(code, redirectUri) {
 
 // Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
 function parseRuntimeSubdomain(host) {
-  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
+  // Match: {port}-{convId}.runtime.{subdomain}.{domain}
   const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
   if (match) {
     return { port: match[1], convId: match[2], isRuntime: true };
@@ -819,8 +819,8 @@ exports.handler = async (event) => {
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: 'OpenHands CloudFront Distribution',
       domainNames: [
-        fullDomain,                  // openhands.test.kane.mx (main app)
-        `*.${runtimeDomain}`,        // *.runtime.openhands.test.kane.mx (runtime subdomains)
+        fullDomain,                  // {subdomain}.{domain} (main app)
+        `*.${runtimeDomain}`,        // *.runtime.{subdomain}.{domain} (runtime subdomains)
       ],
       certificate: certificate,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
@@ -876,7 +876,7 @@ exports.handler = async (event) => {
     // Route 53 DNS Records
     // ========================================
 
-    // Main domain record: openhands.test.kane.mx
+    // Main domain record: {subdomain}.{domain}
     new route53.ARecord(this, 'AliasRecord', {
       zone: hostedZone,
       recordName: config.subDomain,
@@ -885,7 +885,7 @@ exports.handler = async (event) => {
       ),
     });
 
-    // Runtime wildcard record: *.runtime.openhands.test.kane.mx
+    // Runtime wildcard record: *.runtime.{subdomain}.{domain}
     new route53.ARecord(this, 'RuntimeWildcardRecord', {
       zone: hostedZone,
       recordName: `*.runtime.${config.subDomain}`,

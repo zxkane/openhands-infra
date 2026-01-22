@@ -87,6 +87,25 @@ Scope: runtime, edge, compute, security, etc.
 | security-checks | SAST/secrets scan | Fix security issues |
 | infrastructure-scan | CDK/CloudFormation validation | Fix IaC issues |
 
+### No Environment-Specific Information in Source Control
+
+**CRITICAL**: This is an open source project. Source-controlled files must NOT contain:
+
+| Prohibited | Use Instead |
+|------------|-------------|
+| Real domain names (e.g., `test.kane.mx`) | Placeholders: `{domain}`, `{subdomain}.{domain}` |
+| AWS account IDs (except `123456789012`) | Placeholder: `<aws-account-id>` or `123456789012` |
+| Real resource ARNs | Generic ARNs with placeholders |
+| IP addresses | Placeholders: `<ip-address>` |
+| Email addresses | Placeholders: `<email>`, `user@example.com` |
+
+**Allowed placeholders**: `{domain}`, `{subdomain}`, `{port}`, `{convId}`, `<aws-account-id>`, `123456789012` (AWS documentation standard), `example.com`
+
+**Where environment-specific info belongs**:
+- `CLAUDE.local.md` - User's local project instructions (gitignored)
+- `.env` files - Environment variables (gitignored)
+- `cdk.context.json` - CDK lookup cache (gitignored)
+
 ## Common Commands
 
 ```bash
@@ -212,7 +231,7 @@ User applications running inside sandbox containers are accessible via dedicated
 https://{port}-{convId}.runtime.{subdomain}.{domain}/
 ```
 
-**Example**: `https://5000-b691f4c32a1c407f92dd20c77818f7a8.runtime.openhands.test.kane.mx/`
+**Example**: `https://5000-{convId}.runtime.{subdomain}.{domain}/`
 
 **Request Flow**:
 ```

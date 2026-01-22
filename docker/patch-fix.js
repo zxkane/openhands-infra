@@ -1,14 +1,14 @@
 <script>
 // OpenHands localhost URL fix - rewrites localhost/host.docker.internal URLs to runtime subdomains
 // Handles both localhost:{port} and host.docker.internal:{port} patterns
-// Also handles main domain with port: openhands.test.kane.mx:49955 (VS Code editor)
+// Also handles main domain with port: {subdomain}.{domain}:{port} (VS Code editor)
 // Uses runtime subdomain format: {port}-{convId}.runtime.{subdomain}.{domain}
 // This allows apps to run at domain root, fixing internal routing issues
 (function() {
   // Pattern matches localhost or host.docker.internal with port
   var wsPattern = /^wss?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
   var httpPattern = /^https?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
-  // Pattern matches main domain with port (for VS Code URLs like openhands.test.kane.mx:49955)
+  // Pattern matches main domain with port (for VS Code URLs like {subdomain}.{domain}:{port})
   // Captures: (1) host without port, (2) port, (3) path+query (optional)
   var mainDomainPortPattern = /^https?:\/\/([^:\/]+):(\d+)(\/.*)?$/;
 
@@ -23,7 +23,7 @@
   }
 
   // Check if URL host matches the main domain (ignoring port and subdomain prefix)
-  // e.g., openhands.test.kane.mx matches current host openhands.test.kane.mx
+  // e.g., {subdomain}.{domain} matches current host {subdomain}.{domain}
   function isMainDomainUrl(urlHost) {
     var currentHost = window.location.host;
     // Strip any runtime subdomain prefix from both hosts for comparison
@@ -34,13 +34,13 @@
   }
 
   // Rewrite main domain:port URL to runtime subdomain
-  // http://openhands.test.kane.mx:49955/?tkn=xxx -> https://49955-{convId}.runtime.openhands.test.kane.mx/?tkn=xxx
+  // http://{subdomain}.{domain}:{port}/?tkn=xxx -> https://{port}-{convId}.runtime.{subdomain}.{domain}/?tkn=xxx
   function rewriteMainDomainPortUrl(url) {
     var m = url.match(mainDomainPortPattern);
     if (!m) return url;
 
-    var urlHost = m[1];  // openhands.test.kane.mx
-    var port = m[2];     // 49955
+    var urlHost = m[1];  // {subdomain}.{domain}
+    var port = m[2];     // {port}
     var pathAndQuery = m[3] || '/';  // /?tkn=xxx&folder=...
 
     // Only rewrite if this is the main domain
@@ -57,15 +57,15 @@
     // Build runtime subdomain URL
     var proto = window.location.protocol;
     var hostParts = urlHost.split('.');
-    var subDomain = hostParts[0];  // openhands
-    var baseDomain = hostParts.slice(1).join('.');  // test.kane.mx
+    var subDomain = hostParts[0];  // {subdomain}
+    var baseDomain = hostParts.slice(1).join('.');  // {domain}
     var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
 
     return proto + '//' + runtimeHost + pathAndQuery;
   }
 
   // Build runtime subdomain URL for user apps
-  // Transforms: openhands.test.kane.mx -> {port}-{convId}.runtime.openhands.test.kane.mx
+  // Transforms: {subdomain}.{domain} -> {port}-{convId}.runtime.{subdomain}.{domain}
   // For API paths (/api/..., /sockets/...), use path-based routing to preserve authentication
   function buildRuntimeUrl(port, path, usePathBased) {
     var convId = getConversationId();
@@ -85,10 +85,10 @@
     var host = window.location.host;
 
     // Parse host to build runtime subdomain
-    // e.g., openhands.test.kane.mx -> 5000-abc123.runtime.openhands.test.kane.mx
+    // e.g., {subdomain}.{domain} -> {port}-{convId}.runtime.{subdomain}.{domain}
     var parts = host.split('.');
-    var subDomain = parts[0];  // openhands
-    var baseDomain = parts.slice(1).join('.');  // test.kane.mx
+    var subDomain = parts[0];  // {subdomain}
+    var baseDomain = parts.slice(1).join('.');  // {domain}
 
     var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
     return proto + '//' + runtimeHost + (path || '/');
@@ -191,7 +191,7 @@
   };
 
   // Patch window.open to rewrite main domain:port URLs (VS Code editor tabs)
-  // Example: http://openhands.test.kane.mx:49955/?tkn=xxx -> https://49955-{convId}.runtime.openhands.test.kane.mx/?tkn=xxx
+  // Example: http://{subdomain}.{domain}:49955/?tkn=xxx -> https://49955-{convId}.runtime.{subdomain}.{domain}/?tkn=xxx
   var origWindowOpen = window.open;
   window.open = function(url, target, features) {
     var newUrl = url;
@@ -365,15 +365,15 @@
 
 // Rewrite localhost URLs in displayed text (chat messages, etc.)
 // The AI agent outputs URLs like "http://localhost:51745" which users cannot access
-// Also handles main domain with port (VS Code URLs): http://openhands.test.kane.mx:49955
+// Also handles main domain with port (VS Code URLs): http://{subdomain}.{domain}:49955
 // This rewrites them to runtime subdomain URLs: https://{port}-{convId}.runtime.{subdomain}.{domain}/
 (function() {
   // Pattern for localhost/host.docker.internal URLs
   var urlPattern = /https?:\/\/(localhost|host\.docker\.internal):(\d+)(\/[^\s<>"')\]]*)?/gi;
   // Pattern for main domain with port (VS Code URLs)
-  // Matches: http://openhands.test.kane.mx:49955/path?query (with path/query being optional)
+  // Matches: http://{subdomain}.{domain}:49955/path?query (with path/query being optional)
   // Excludes runtime subdomains: {port}-{hex}.runtime.* using negative lookahead
-  // This prevents matching URLs like: https://5000-abc123.runtime.openhands.test.kane.mx/
+  // This prevents matching URLs like: https://5000-abc123.runtime.{subdomain}.{domain}/
   // SECURITY NOTE: This regex only matches URLs for rewriting, not for security decisions.
   // Actual domain validation happens via CloudFront (only accepts configured domains) and
   // Lambda@Edge (verifies JWT from our Cognito pool). Rewritten URLs always point to
@@ -408,7 +408,7 @@
         var proto = window.location.protocol;
         var hostParts = window.location.host.split('.');
         var subDomain = hostParts[0];  // openhands
-        var baseDomain = hostParts.slice(1).join('.');  // test.kane.mx
+        var baseDomain = hostParts.slice(1).join('.');  // {domain}
         var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
         newUrl = proto + '//' + runtimeHost + (path || '/');
       } else {
@@ -434,7 +434,7 @@
       var proto = window.location.protocol;
       var hostParts = urlHost.split('.');
       var subDomain = hostParts[0];  // openhands
-      var baseDomain = hostParts.slice(1).join('.');  // test.kane.mx
+      var baseDomain = hostParts.slice(1).join('.');  // {domain}
       var runtimeHost = port + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
       var newUrl = proto + '//' + runtimeHost + (path || '/');
       console.log('Text URL rewritten (main domain:port):', match, '->', newUrl);
