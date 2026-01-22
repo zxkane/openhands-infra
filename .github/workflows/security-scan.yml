@@ -65,10 +65,11 @@ jobs:
           git secrets --register-aws
           git secrets --install
 
-          # Scan only current working tree (not git history)
-          # Using --no-index to scan files without checking git history
-          # This avoids flagging secrets in old commits that have since been removed
-          if git secrets --scan --no-index; then
+          # Scan only tracked files in the current commit (not history or untracked files)
+          # Using git ls-files to list only tracked files, avoiding:
+          # 1. Git history (old commits that may have since been cleaned)
+          # 2. Untracked/ignored files like cdk.context.json, .env, CLAUDE.local.md
+          if git ls-files -z | xargs -0 git secrets --scan --; then
             echo "secrets_found=false" >> $GITHUB_OUTPUT
           else
             echo "secrets_found=true" >> $GITHUB_OUTPUT
