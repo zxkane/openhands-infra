@@ -93,7 +93,7 @@ Scope: runtime, edge, compute, security, etc.
 
 | Prohibited | Use Instead |
 |------------|-------------|
-| Real domain names (e.g., `test.kane.mx`) | Placeholders: `{domain}`, `{subdomain}.{domain}` |
+| Real domain names (e.g., `mycompany.com`) | Placeholders: `{domain}`, `{subdomain}.{domain}`, or `example.com` |
 | AWS account IDs (except `123456789012`) | Placeholder: `<aws-account-id>` or `123456789012` |
 | Real resource ARNs | Generic ARNs with placeholders |
 | IP addresses | Placeholders: `<ip-address>` |
