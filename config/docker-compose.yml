@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   openhands:
-    image: 845861764576.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest
+    image: ${ECR_REGISTRY}/openhands-custom:latest
     container_name: openhands-app
     restart: unless-stopped
     environment:
