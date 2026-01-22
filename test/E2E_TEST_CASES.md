@@ -415,6 +415,29 @@ Submit a prompt to create and run a simple Flask application.
 | 4 | Application URL displayed | Runtime URL appears in chat |
 | 5 | URL is rewritten correctly | URL format: `https://<port>-<convId>.runtime.<domain>/` |
 
+### How Arbitrary Port Routing Works
+
+Runtime subdomains support **any port** inside sandbox containers (5000, 3000, 8080, etc.):
+
+**Request Flow**:
+```
+URL: https://5000-{convId}.runtime.{domain}/
+     ↓
+Lambda@Edge: Extracts port=5000, convId
+     ↓
+OpenResty: /runtime/{convId}/{port}/
+     ↓
+Lua: Find container by conversation_id label
+     Get container IP from NetworkSettings.Networks.bridge.IPAddress
+     → container_ip = 172.17.0.X
+     → Return (container_ip, 5000)
+     ↓
+nginx: proxy_pass http://172.17.0.X:5000/
+     → 200 OK
+```
+
+**Key Point**: No Docker port mapping required. EC2 host routes directly to container IP via Docker bridge network.
+
 ### Timeout Configuration
 
 | Stage | Maximum Wait Time |
@@ -559,6 +582,196 @@ Verify that internal application routes work correctly with runtime subdomain ro
 
 ---
 
+## TC-009: Verify Web App Subdomain Access
+
+### Description
+Verify that web applications running in sandbox containers are accessible via runtime subdomain URLs. This test ensures the runtime subdomain routing works correctly and doesn't get incorrectly processed by other URL rewriting rules.
+
+### Prerequisites
+- TC-006 completed (Flask app created and running)
+- Conversation ID from TC-006
+
+### Steps
+
+1. Get the runtime subdomain URL from TC-006
+   ```
+   Format: https://<port>-<conversationId>.runtime.<subdomain>.<domain>/
+   Example: https://5000-7c15e423fbd44f8f8bf483a481daa4d9.runtime.openhands.test.kane.mx/
+   ```
+
+2. Navigate directly to the runtime subdomain URL
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://5000-<convId>.runtime.<subdomain>.<domain>/",
+     type: "url"
+   })
+   ```
+
+3. Wait for page to load
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Hello World",
+     timeout: 30000
+   })
+   ```
+
+4. Take snapshot to verify content
+   ```javascript
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+5. Verify URL is not being incorrectly rewritten by checking console logs
+   ```javascript
+   mcp__chrome-devtools__list_console_messages({
+     types: ["log"]
+   })
+   ```
+
+6. Test internal routes (if app has them)
+   ```javascript
+   // Navigate to an internal route
+   mcp__chrome-devtools__navigate_page({
+     url: "https://5000-<convId>.runtime.<subdomain>.<domain>/api/health",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Runtime subdomain URL is accessible | Page loads without errors |
+| 2 | SSL certificate is valid | No certificate warnings for wildcard `*.runtime.<subdomain>.<domain>` |
+| 3 | App content renders correctly | "Hello World" or expected content visible |
+| 4 | URL is NOT double-processed | No console logs showing runtime URLs being rewritten again |
+| 5 | Internal routes work | `/api/*`, `/static/*` routes resolve correctly |
+| 6 | Cookies are isolated | Cookies set only for runtime subdomain |
+
+### Console Log Verification
+
+Check that runtime subdomain URLs are NOT being matched by `mainDomainPortPattern`:
+
+```javascript
+// GOOD: No console logs for runtime subdomain URLs being rewritten
+// BAD: Logs like "Text URL rewritten: https://5000-xxx.runtime.domain:443 -> ..."
+```
+
+The fix uses a negative lookahead `(?!\d+-[a-f0-9]+\.runtime\.)` to exclude runtime subdomains from the VS Code URL rewriter.
+
+### Security Headers Verification
+
+| Header | Expected Value |
+|--------|----------------|
+| X-Frame-Options | SAMEORIGIN |
+| X-Content-Type-Options | nosniff |
+| Content-Security-Policy | frame-ancestors 'self' https://<subdomain>.<domain> |
+| Set-Cookie | Domain=`5000-<convId>.runtime.<subdomain>.<domain>` (isolated) |
+
+---
+
+## TC-010: Verify VS Code URL Rewriting
+
+### Description
+Verify that VS Code editor URLs (main domain with port) are correctly rewritten to runtime subdomain format. This test ensures the VS Code URL rewriting feature works without affecting already-correct runtime subdomain URLs.
+
+### Prerequisites
+- TC-005 completed (Conversation created)
+- An agent task that triggers VS Code editor (e.g., code editing task)
+
+### Steps
+
+1. Start a new conversation or use existing one
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/conversations/<convId>",
+     type: "url"
+   })
+   ```
+
+2. Wait for agent to be ready
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 180000
+   })
+   ```
+
+3. Submit a task that may trigger VS Code editor
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Open VS Code editor and create a simple Python file"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+4. Monitor console logs for URL rewriting
+   ```javascript
+   mcp__chrome-devtools__list_console_messages({
+     types: ["log"]
+   })
+   ```
+
+5. Look for VS Code URL patterns in agent output or browser behavior
+   ```
+   Original: http://openhands.test.kane.mx:49955/?tkn=xxx&folder=/workspace
+   Rewritten: https://49955-<convId>.runtime.openhands.test.kane.mx/?tkn=xxx&folder=/workspace
+   ```
+
+6. Verify the rewritten URL works
+   ```javascript
+   // If VS Code URL is displayed, navigate to it
+   mcp__chrome-devtools__navigate_page({
+     url: "<rewritten-vscode-url>",
+     type: "url"
+   })
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | VS Code URLs are detected | `mainDomainPortPattern` matches `<domain>:<port>` format |
+| 2 | VS Code URLs are rewritten | Console shows "window.open patched (main domain:port):" |
+| 3 | Rewritten URL is accessible | VS Code editor loads at runtime subdomain |
+| 4 | Runtime subdomains NOT affected | No double-rewriting of `*.runtime.*` URLs |
+| 5 | Query parameters preserved | Token (`tkn`), folder, and other params remain intact |
+
+### URL Rewriting Logic
+
+The `mainDomainPortPattern` regex with fix:
+```javascript
+// Pattern: https?:\/\/(?!\d+-[a-f0-9]+\.runtime\.)([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?
+//
+// Matches: http://openhands.test.kane.mx:49955/?tkn=xxx
+// Does NOT match: https://5000-abc123.runtime.openhands.test.kane.mx/
+```
+
+### Expected Console Logs
+
+**For VS Code URLs:**
+```
+window.open patched (main domain:port): http://openhands.test.kane.mx:49955/?tkn=xxx -> https://49955-<convId>.runtime.openhands.test.kane.mx/?tkn=xxx
+```
+
+**For Runtime Subdomain URLs (should NOT appear):**
+```
+// These logs should NOT exist for runtime subdomain URLs:
+// Text URL rewritten (main domain:port): https://5000-xxx.runtime.domain/...
+```
+
+### Test Matrix
+
+| URL Type | Example | Should Be Rewritten | Expected Result |
+|----------|---------|---------------------|-----------------|
+| VS Code (main domain + port) | `http://openhands.test.kane.mx:49955/` | ✅ Yes | `https://49955-<convId>.runtime.openhands.test.kane.mx/` |
+| Runtime subdomain | `https://5000-abc123.runtime.openhands.test.kane.mx/` | ❌ No | Unchanged |
+| localhost | `http://localhost:5000/` | ✅ Yes | `https://5000-<convId>.runtime.openhands.test.kane.mx/` |
+| External domain with port | `http://example.com:8080/` | ❌ No | Unchanged (not main domain) |
+
+---
+
 ## Test Summary Checklist
 
 Use this checklist to track test execution:
@@ -573,6 +786,8 @@ Use this checklist to track test execution:
 | TC-006 | Execute Flask Prompt | [ ] | |
 | TC-007 | Verify Runtime Accessible | [ ] | |
 | TC-008 | Verify In-App Routing | [ ] | |
+| TC-009 | Verify Web App Subdomain Access | [ ] | |
+| TC-010 | Verify VS Code URL Rewriting | [ ] | |
 
 ## Troubleshooting Guide
 

@@ -112,10 +112,11 @@ Each stack exposes an `output` property (typed in `lib/interfaces.ts`) consumed 
 | `lib/security-stack.ts` | IAM Roles, Security Groups |
 | `lib/monitoring-stack.ts` | CloudWatch Logs, Alarms, Dashboard, Backup, S3 Data Bucket |
 | `lib/database-stack.ts` | Aurora Serverless v2 PostgreSQL with IAM Authentication |
-| `lib/compute-stack.ts` | EC2 ASG, Launch Template, Internal ALB |
+| `lib/compute-stack.ts` | EC2 ASG, Launch Template, Internal ALB, OpenResty container |
 | `lib/edge-stack.ts` | Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 |
 | `config/config.toml` | OpenHands application configuration (LLM, sandbox, security) |
 | `docker/patch-fix.js` | Frontend JavaScript patches (URL rewriting, settings auto-config, runtime subdomain routing) |
+| `docker/openresty/` | OpenResty proxy container (Dockerfile, nginx.conf, docker_discovery.lua) |
 | `test/E2E_TEST_CASES.md` | Comprehensive E2E test cases with acceptance criteria |
 
 ### Runtime Subdomain Routing
@@ -152,6 +153,24 @@ Browser → CloudFront → Lambda@Edge (parse subdomain) → ALB → OpenResty �
 - Apps run at domain root (`/`) instead of `/runtime/{cid}/{port}/`
 - Internal routes like `/add`, `/api/users` resolve correctly
 - Each runtime has isolated cookies (security)
+
+### Runtime Port Access
+
+Runtime subdomains support access to **any port** inside sandbox containers:
+- `https://5000-{convId}.runtime.{subdomain}.{domain}/` → Flask app on port 5000
+- `https://3000-{convId}.runtime.{subdomain}.{domain}/` → Express app on port 3000
+- `https://8080-{convId}.runtime.{subdomain}.{domain}/` → Any web server
+
+**How it works**: OpenResty queries Docker API to get the container's bridge network IP, then proxies directly to `container_ip:any_port`. No Docker port mapping required.
+
+**Technical Details**:
+- Lua script finds container by `conversation_id` label
+- Gets container IP from `NetworkSettings.Networks` (iterates all networks)
+- Port routing logic:
+  1. First tries direct connection to `container_ip:requested_port` (100ms TCP probe)
+  2. If unreachable, looks up Docker port mapping (PublicPort → PrivatePort)
+  3. Falls back to requested port if no mapping found
+- OpenResty runs as container on same Docker network as sandboxes
 
 ## EC2 User Data
 

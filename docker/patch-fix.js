@@ -103,13 +103,15 @@
       var wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
       var path = m[3] || '/';
 
-      // Agent sockets need authentication, use path-based routing
+      // Agent event sockets (/sockets/events/*) need path-based routing to agent-server
+      // The conversation URL points to agent-server which handles event sockets
       if (path.startsWith('/sockets/')) {
         if (convId) {
           newUrl = wsProto + "//" + window.location.host + "/runtime/" + convId + "/" + m[2] + path;
         } else {
           newUrl = wsProto + "//" + window.location.host + "/runtime/" + m[2] + path;
         }
+        console.log("WS patched (agent sockets):", url, "->", newUrl);
       } else if (convId) {
         // User app WebSockets use subdomain routing
         var host = window.location.host;
@@ -118,11 +120,12 @@
         var baseDomain = parts.slice(1).join('.');
         var runtimeHost = m[2] + '-' + convId + '.runtime.' + subDomain + '.' + baseDomain;
         newUrl = wsProto + "//" + runtimeHost + path;
+        console.log("WS patched (subdomain):", url, "->", newUrl);
       } else {
         // Fallback to path-based URL
         newUrl = wsProto + "//" + window.location.host + "/runtime/" + m[2] + path;
+        console.log("WS patched (fallback):", url, "->", newUrl);
       }
-      console.log("WS patched:", url, "->", newUrl);
     }
     return protocols ? new origWS(newUrl, protocols) : new origWS(newUrl);
   };
@@ -369,7 +372,9 @@
   var urlPattern = /https?:\/\/(localhost|host\.docker\.internal):(\d+)(\/[^\s<>"')\]]*)?/gi;
   // Pattern for main domain with port (VS Code URLs)
   // Matches: http://openhands.test.kane.mx:49955/path?query (with path/query being optional)
-  var mainDomainPortPattern = /https?:\/\/([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?/gi;
+  // Excludes runtime subdomains: {port}-{hex}.runtime.* using negative lookahead
+  // This prevents matching URLs like: https://5000-abc123.runtime.openhands.test.kane.mx/
+  var mainDomainPortPattern = /https?:\/\/(?!\d+-[a-f0-9]+\.runtime\.)([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?/gi;
 
   // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
   function getConversationId() {
