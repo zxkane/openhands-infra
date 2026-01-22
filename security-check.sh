@@ -99,6 +99,8 @@ echo ""
 # Check 7: Secrets in tracked files
 echo "Checking for secrets in tracked files..."
 if command -v git-secrets &> /dev/null; then
+    # Allow placeholder AWS account ID used in tests and CDK examples
+    git secrets --add --allowed '123456789012' 2>/dev/null || true
     # Only scan tracked files, not git history or untracked/gitignored files
     # This avoids false positives from local config files like cdk.context.json
     if ! git ls-files -z | xargs -0 git secrets --scan -- 2>/dev/null; then

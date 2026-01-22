@@ -65,6 +65,10 @@ jobs:
           git secrets --register-aws
           git secrets --install
 
+          # Allow placeholder AWS account ID used in tests and CDK examples
+          # 123456789012 is the standard placeholder used in AWS docs and CDK
+          git secrets --add --allowed '123456789012'
+
           # Scan only tracked files in the current commit (not history or untracked files)
           # Using git ls-files to list only tracked files, avoiding:
           # 1. Git history (old commits that may have since been cleaned)
