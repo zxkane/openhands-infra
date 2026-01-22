@@ -3,6 +3,15 @@
 -- Since OpenResty runs in a container on the same bridge network as sandboxes,
 -- it can route directly to container ports without going through host port mappings.
 --
+-- SECURITY NOTE: Docker socket access (/var/run/docker.sock)
+-- This module requires read-only access to Docker socket to query container metadata.
+-- Mitigations in place:
+-- 1. Socket mounted read-only (:ro) in docker-compose.yml
+-- 2. Only performs GET requests to /containers/json endpoint (read-only operations)
+-- 3. Does not create, modify, or delete containers
+-- 4. OpenResty container runs with minimal privileges (no --privileged flag)
+-- 5. OpenHands app container also requires Docker socket for sandbox management
+--
 -- PORT ROUTING LOGIC:
 -- The URL contains a port number that maps to services inside the container:
 -- - System ports (8000=agent-server, 8001=vscode): Docker exposes these on random host ports

@@ -714,7 +714,7 @@ try:
     #         labels = {
     #             'sandbox_spec_id': sandbox_spec.id,
     #             'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-    #             'user_id': user_id or '',  # Patch 16: Enable cross-user authorization
+    #             'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
     #         }
     old_labels = """labels = {
             'sandbox_spec_id': sandbox_spec.id,
@@ -724,7 +724,7 @@ try:
     new_labels = """labels = {
             'sandbox_spec_id': sandbox_spec.id,
             'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-            'user_id': user_id or '',  # Patch 16: Enable cross-user authorization
+            'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
         }"""
 
     if old_labels in content:
@@ -738,7 +738,7 @@ try:
         new_labels_orig = """labels = {
             'sandbox_spec_id': sandbox_spec.id,
             'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-            'user_id': user_id or '',  # Patch 16: Enable cross-user authorization
+            'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
         }"""
         if old_labels_orig in content:
             content = content.replace(old_labels_orig, new_labels_orig)

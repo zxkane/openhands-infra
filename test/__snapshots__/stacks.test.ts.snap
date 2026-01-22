@@ -346,7 +346,7 @@ services:
   openresty:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:fe089a9a9999eb3db2f1e05e11342558e4139784f66a7f2045c849a68876b97c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:4115af5adc3a08250074539a75e77b471d139bb9ab2548684f8560c904011a31",
                   },
                   "
     container_name: openresty-proxy
@@ -354,6 +354,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      # SECURITY: Docker socket access required for container discovery (read-only)
+      # OpenResty queries /containers/json to find sandbox container IPs for routing
+      # Mitigations: mounted :ro, only GET requests, no container modifications
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       - openhands
@@ -366,7 +369,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:724dd80d4cfc69b9c4f40cb0eda0984f5d72c5d09982a8a55734060d1db064e7",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c1fa0c8107eef46fa9878cfbaed745678090eacb4f3da7257a42f239c6516e14",
                   },
                   "
     container_name: openhands-app
@@ -502,12 +505,12 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:724dd80d4cfc69b9c4f40cb0eda0984f5d72c5d09982a8a55734060d1db064e7",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c1fa0c8107eef46fa9878cfbaed745678090eacb4f3da7257a42f239c6516e14",
                   },
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:fe089a9a9999eb3db2f1e05e11342558e4139784f66a7f2045c849a68876b97c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:4115af5adc3a08250074539a75e77b471d139bb9ab2548684f8560c904011a31",
                   },
                   ""
 pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"
@@ -861,7 +864,11 @@ const CONFIG = {
   callbackPath: '/_callback',
   logoutPath: '/_logout',
   region: 'us-east-1',
-  cookieDomain: '.example.com',  // Use base domain for cookie sharing across all subdomains including *.runtime.{fullDomain}
+  // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
+  // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
+  // The broader scope is REQUIRED for runtime functionality - restricting to .{subdomain}.{domain}
+  // would break access to runtime subdomains. WAF and Lambda@Edge provide additional protection.
+  cookieDomain: '.example.com',
 };
 
 // JWKS cache (in-memory, persists across warm invocations)
@@ -1310,7 +1317,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE86657dd0af9ed82f479ae819281587ee71": {
+    "AuthFunctionCurrentVersionDB17CE8656f192134e9e9151418775b9f6b689fd": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -1554,7 +1561,7 @@ exports.handler = async (event) => {
                   "EventType": "viewer-request",
                   "IncludeBody": false,
                   "LambdaFunctionARN": {
-                    "Ref": "AuthFunctionCurrentVersionDB17CE86657dd0af9ed82f479ae819281587ee71",
+                    "Ref": "AuthFunctionCurrentVersionDB17CE8656f192134e9e9151418775b9f6b689fd",
                   },
                 },
               ],
@@ -1589,7 +1596,7 @@ exports.handler = async (event) => {
                 "EventType": "viewer-request",
                 "IncludeBody": false,
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE86657dd0af9ed82f479ae819281587ee71",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE8656f192134e9e9151418775b9f6b689fd",
                 },
               },
               {

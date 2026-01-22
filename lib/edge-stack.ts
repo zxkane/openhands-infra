@@ -183,7 +183,11 @@ const CONFIG = {
   callbackPath: '/_callback',
   logoutPath: '/_logout',
   region: '${this.region}',
-  cookieDomain: '.${config.domainName}',  // Use base domain for cookie sharing across all subdomains including *.runtime.{fullDomain}
+  // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
+  // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
+  // The broader scope is REQUIRED for runtime functionality - restricting to .{subdomain}.{domain}
+  // would break access to runtime subdomains. WAF and Lambda@Edge provide additional protection.
+  cookieDomain: '.${config.domainName}',
 };
 
 // JWKS cache (in-memory, persists across warm invocations)

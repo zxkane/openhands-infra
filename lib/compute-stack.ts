@@ -237,7 +237,10 @@ export class ComputeStack extends cdk.Stack {
       '    ports:',
       '      - "8080:8080"',  // ALB connects to this port for runtime traffic
       '    volumes:',
-      '      - /var/run/docker.sock:/var/run/docker.sock:ro',  // For Docker API discovery
+      '      # SECURITY: Docker socket access required for container discovery (read-only)',
+      '      # OpenResty queries /containers/json to find sandbox container IPs for routing',
+      '      # Mitigations: mounted :ro, only GET requests, no container modifications',
+      '      - /var/run/docker.sock:/var/run/docker.sock:ro',
       '    depends_on:',
       '      - openhands',
       '    logging:',

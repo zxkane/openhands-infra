@@ -374,6 +374,10 @@
   // Matches: http://openhands.test.kane.mx:49955/path?query (with path/query being optional)
   // Excludes runtime subdomains: {port}-{hex}.runtime.* using negative lookahead
   // This prevents matching URLs like: https://5000-abc123.runtime.openhands.test.kane.mx/
+  // SECURITY NOTE: This regex only matches URLs for rewriting, not for security decisions.
+  // Actual domain validation happens via CloudFront (only accepts configured domains) and
+  // Lambda@Edge (verifies JWT from our Cognito pool). Rewritten URLs always point to
+  // our runtime subdomain, never to external domains.
   var mainDomainPortPattern = /https?:\/\/(?!\d+-[a-f0-9]+\.runtime\.)([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?/gi;
 
   // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
