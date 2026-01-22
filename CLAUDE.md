@@ -2,6 +2,91 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Workflow
+
+**IMPORTANT**: Claude Code MUST follow this workflow for all feature development and bug fixes.
+
+### Workflow Steps
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. CREATE BRANCH                                               │
+│     git checkout -b feat/<feature-name> or fix/<bug-name>       │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  2. IMPLEMENT CHANGES                                           │
+│     - Write code                                                │
+│     - Update unit tests (npm run test)                          │
+│     - Update E2E test cases if needed (test/E2E_TEST_CASES.md)  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  3. LOCAL VERIFICATION                                          │
+│     - npm run build                                             │
+│     - npm run test                                              │
+│     - npx cdk deploy --all (deploy to AWS)                      │
+│     - Run E2E tests via Chrome DevTools MCP                     │
+│     - Verify ALL tests pass before proceeding                   │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  4. COMMIT AND CREATE PR                                        │
+│     - git add -A && git commit -m "type(scope): description"    │
+│     - git push -u origin <branch-name>                          │
+│     - Create PR via GitHub MCP or gh CLI                        │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  5. WAIT FOR PR CHECKS                                          │
+│     - Monitor GitHub Actions checks                             │
+│     - If checks FAIL → Return to Step 2, fix issues             │
+│     - If checks PASS → Proceed to Step 6                        │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  6. ADDRESS REVIEWER BOT FINDINGS                               │
+│     - Review Amazon Q Developer comments                        │
+│     - Review other automated security/code review findings      │
+│     - Fix issues or add documentation explaining design choice  │
+│     - Push fixes and wait for checks again                      │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  7. READY FOR MERGE                                             │
+│     - All checks passed                                         │
+│     - All reviewer comments addressed                           │
+│     - PR is mergeable                                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Branch Naming Convention
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| Feature | `feat/<name>` | `feat/cross-user-authorization` |
+| Bug fix | `fix/<name>` | `fix/websocket-connection` |
+| Refactor | `refactor/<name>` | `refactor/openresty-container` |
+| Documentation | `docs/<name>` | `docs/runtime-routing` |
+
+### Commit Message Format
+
+```
+type(scope): description
+
+Types: feat, fix, docs, refactor, test, chore
+Scope: runtime, edge, compute, security, etc.
+```
+
+### PR Checks to Monitor
+
+| Check | Description | Action if Failed |
+|-------|-------------|------------------|
+| Amazon Q Developer | Security review | Address findings or document design decisions |
+| dependency-check | NPM vulnerabilities | Update dependencies |
+| security-checks | SAST/secrets scan | Fix security issues |
+| infrastructure-scan | CDK/CloudFormation validation | Fix IaC issues |
+
 ## Common Commands
 
 ```bash
