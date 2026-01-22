@@ -50,10 +50,10 @@ local function can_connect(ip, port)
   return false
 end
 
--- Find container by conversation_id and return its IP and port to route to
+-- Find container by conversation_id and return its IP, port, and user_id
 -- @param cid: conversation_id to search for
 -- @param tp: target port from URL
--- @return ip, port: container IP and port to connect to (or nil if not found)
+-- @return ip, port, user_id: container IP, port, and owner user_id (or nil if not found)
 function _M.find_container(cid, tp)
   local h = http.new()
 
@@ -140,13 +140,15 @@ function _M.find_container(cid, tp)
         end
       end
 
-      ngx.log(ngx.INFO, "Found container for ", cid, ": IP=", ip, ", port=", target_port, " (requested=", tp, ")")
-      return ip, target_port
+      -- Get user_id label for ownership verification
+      local user_id = labels["user_id"] or nil
+      ngx.log(ngx.INFO, "Found container for ", cid, ": IP=", ip, ", port=", target_port, ", user_id=", user_id or "nil", " (requested=", tp, ")")
+      return ip, target_port, user_id
     end
   end
 
   ngx.log(ngx.DEBUG, "No container found with conversation_id: ", cid)
-  return nil, nil
+  return nil, nil, nil
 end
 
 return _M

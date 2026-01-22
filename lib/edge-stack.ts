@@ -183,6 +183,7 @@ const CONFIG = {
   callbackPath: '/_callback',
   logoutPath: '/_logout',
   region: '${this.region}',
+  cookieDomain: '.${config.domainName}',  // Use base domain for cookie sharing across all subdomains including *.runtime.{fullDomain}
 };
 
 // JWKS cache (in-memory, persists across warm invocations)
@@ -444,9 +445,44 @@ exports.handler = async (event) => {
   // Check if this is a runtime subdomain request
   const runtime = parseRuntimeSubdomain(host);
   if (runtime.isRuntime) {
+    // Runtime requests require authentication - verify JWT and inject user header
+    // Note: We return 401 instead of redirecting to login because runtime subdomains
+    // are not registered as valid Cognito callback URLs
+    const idToken = getCookie(cookies, 'id_token');
+    if (!idToken) {
+      console.log('Runtime request without id_token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Authentication required. Please login at the main application first.',
+      };
+    }
+
+    const payload = await verifyTokenSignature(idToken);
+    if (!payload) {
+      console.log('Runtime request with invalid token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Invalid or expired token. Please login at the main application.',
+      };
+    }
+
+    // Token is valid - inject user_id header for OpenResty to verify ownership
+    delete request.headers['x-cognito-user-id'];
+    request.headers['x-cognito-user-id'] = [{
+      key: 'X-Cognito-User-Id',
+      value: payload.sub
+    }];
+
     // Rewrite URI to /runtime/{cid}/{port}/... format for ALB routing
     request.uri = '/runtime/' + runtime.convId + '/' + runtime.port + uri;
-    // Runtime requests skip Cognito auth - they use session token auth
     return request;
   }
 
@@ -513,7 +549,7 @@ exports.handler = async (event) => {
         headers: {
           location: [{ key: 'Location', value: destination }],
           'set-cookie': [
-            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
+            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
           ],
         },
       };
@@ -535,7 +571,7 @@ exports.handler = async (event) => {
       statusDescription: 'Found',
       headers: {
         location: [{ key: 'Location', value: logoutUrl }],
-        'set-cookie': [{ key: 'Set-Cookie', value: 'id_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure' }],
+        'set-cookie': [{ key: 'Set-Cookie', value: \`id_token=; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure\` }],
       },
     };
   }
@@ -807,9 +843,9 @@ exports.handler = async (event) => {
           },
         ],
       },
-      // Runtime proxy behavior - NO Lambda@Edge auth (path-based fallback)
-      // This behavior is kept for backwards compatibility with /runtime/* path routing
-      // New runtime subdomain requests are handled by the default behavior with auth bypass
+      // Runtime proxy behavior for path-based routing (/runtime/{conv_id}/{port}/...)
+      // This is used for WebSocket connections to agent-server (sockets/events)
+      // which require authentication via the main domain cookie
       additionalBehaviors: {
         '/runtime/*': {
           origin: httpOrigin,
@@ -819,7 +855,15 @@ exports.handler = async (event) => {
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
           responseHeadersPolicy: responseHeadersPolicy,
-          // NO edgeLambdas - runtime uses session token auth in WebSocket URL
+          // Add Lambda@Edge to verify JWT and inject X-Cognito-User-Id header
+          // This is required for OpenResty to authorize runtime requests
+          edgeLambdas: [
+            {
+              eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+              functionVersion: authFunctionVersion,
+              includeBody: false,
+            },
+          ],
         },
       },
     });

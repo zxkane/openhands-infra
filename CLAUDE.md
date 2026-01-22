@@ -131,7 +131,7 @@ https://{port}-{convId}.runtime.{subdomain}.{domain}/
 
 **Request Flow**:
 ```
-Browser → CloudFront → Lambda@Edge (parse subdomain) → ALB → OpenResty → Lua Docker Discovery → Container App
+Browser → CloudFront → Lambda@Edge (JWT verify + inject user_id) → ALB → OpenResty (verify ownership) → Container App
 ```
 
 **Key Components**:
@@ -140,19 +140,38 @@ Browser → CloudFront → Lambda@Edge (parse subdomain) → ALB → OpenResty �
 |-----------|------|---------|
 | ACM Certificate | `lib/edge-stack.ts` | Wildcard cert includes `*.runtime.{subdomain}.{domain}` SAN |
 | Route 53 | `lib/edge-stack.ts` | Wildcard A record `*.runtime.{subdomain}` → CloudFront |
-| Lambda@Edge viewer-request | `lib/edge-stack.ts` | Parses `{port}-{convId}.runtime.*` and rewrites URI to `/runtime/{convId}/{port}/...` |
+| Lambda@Edge viewer-request | `lib/edge-stack.ts` | Verifies JWT, injects `X-Cognito-User-Id`, rewrites URI |
 | Lambda@Edge origin-response | `lib/edge-stack.ts` | Adds security headers (X-Frame-Options, CSP, cookie isolation) |
-| Lua Docker Discovery | `lib/compute-stack.ts` | Finds container by conversation_id label, routes to container IP + port |
+| OpenResty Proxy | `docker/openresty/nginx.conf` | Verifies container ownership, proxies to container |
+| Lua Docker Discovery | `docker/openresty/docker_discovery.lua` | Finds container by `conversation_id` label, returns IP + port + user_id |
 | Frontend Patch | `docker/patch-fix.js` | Rewrites `localhost:port` URLs to runtime subdomain format |
 
-**URL Rewriting (patch-fix.js)**:
-- API calls (`/api/*`, `/sockets/*`) → Path-based routing (preserves authentication)
-- User app requests → Subdomain routing (apps run at domain root)
+**Security**: Runtime requests require authentication and authorization:
+1. **Authentication**: Lambda@Edge verifies JWT (`id_token` cookie) and redirects to login if invalid
+2. **Authorization**: OpenResty verifies container's `user_id` label matches requesting user
+3. **Backwards Compatibility**: Containers without `user_id` label allow access (requires OpenHands core update)
 
-**Why Subdomain Routing?**
+**Dual Routing Approach**:
+
+| Route Type | Pattern | Use Case | Lambda@Edge |
+|------------|---------|----------|-------------|
+| Path-based | `/runtime/{convId}/{port}/...` | Agent WebSocket, API calls | Yes (auth required) |
+| Subdomain | `{port}-{convId}.runtime.{domain}/` | User apps (Flask, Express) | Yes (auth required) |
+
+**URL Rewriting (patch-fix.js)**:
+- Agent WebSocket (`/sockets/*`) → Path-based: `wss://{domain}/runtime/{convId}/{port}/sockets/events/...`
+- API calls (`/api/*`) → Path-based: preserves main domain authentication
+- User app requests → Subdomain: apps run at domain root
+
+**Why Subdomain Routing for User Apps?**
 - Apps run at domain root (`/`) instead of `/runtime/{cid}/{port}/`
 - Internal routes like `/add`, `/api/users` resolve correctly
 - Each runtime has isolated cookies (security)
+
+**Why Path-based Routing for Agent Communication?**
+- WebSocket connections use same-origin cookie authentication
+- API calls need session cookies from main domain
+- Agent-server events flow through: `wss://{domain}/runtime/{convId}/{port}/sockets/events/...`
 
 ### Runtime Port Access
 

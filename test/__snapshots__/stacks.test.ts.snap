@@ -346,7 +346,7 @@ services:
   openresty:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:a4e9524830ad88a8726ac58407cc15127e1c238e114fb7556155542cdded27d4",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:fe089a9a9999eb3db2f1e05e11342558e4139784f66a7f2045c849a68876b97c",
                   },
                   "
     container_name: openresty-proxy
@@ -366,7 +366,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:8a2b52fe2fe2bba58e5c76db242a5667b5bd95d0280f4c50b02cf4841eed895c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:724dd80d4cfc69b9c4f40cb0eda0984f5d72c5d09982a8a55734060d1db064e7",
                   },
                   "
     container_name: openhands-app
@@ -502,12 +502,12 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:8a2b52fe2fe2bba58e5c76db242a5667b5bd95d0280f4c50b02cf4841eed895c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:724dd80d4cfc69b9c4f40cb0eda0984f5d72c5d09982a8a55734060d1db064e7",
                   },
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:a4e9524830ad88a8726ac58407cc15127e1c238e114fb7556155542cdded27d4",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:fe089a9a9999eb3db2f1e05e11342558e4139784f66a7f2045c849a68876b97c",
                   },
                   ""
 pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"
@@ -861,6 +861,7 @@ const CONFIG = {
   callbackPath: '/_callback',
   logoutPath: '/_logout',
   region: 'us-east-1',
+  cookieDomain: '.example.com',  // Use base domain for cookie sharing across all subdomains including *.runtime.{fullDomain}
 };
 
 // JWKS cache (in-memory, persists across warm invocations)
@@ -1122,9 +1123,44 @@ exports.handler = async (event) => {
   // Check if this is a runtime subdomain request
   const runtime = parseRuntimeSubdomain(host);
   if (runtime.isRuntime) {
+    // Runtime requests require authentication - verify JWT and inject user header
+    // Note: We return 401 instead of redirecting to login because runtime subdomains
+    // are not registered as valid Cognito callback URLs
+    const idToken = getCookie(cookies, 'id_token');
+    if (!idToken) {
+      console.log('Runtime request without id_token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Authentication required. Please login at the main application first.',
+      };
+    }
+
+    const payload = await verifyTokenSignature(idToken);
+    if (!payload) {
+      console.log('Runtime request with invalid token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Invalid or expired token. Please login at the main application.',
+      };
+    }
+
+    // Token is valid - inject user_id header for OpenResty to verify ownership
+    delete request.headers['x-cognito-user-id'];
+    request.headers['x-cognito-user-id'] = [{
+      key: 'X-Cognito-User-Id',
+      value: payload.sub
+    }];
+
     // Rewrite URI to /runtime/{cid}/{port}/... format for ALB routing
     request.uri = '/runtime/' + runtime.convId + '/' + runtime.port + uri;
-    // Runtime requests skip Cognito auth - they use session token auth
     return request;
   }
 
@@ -1191,7 +1227,7 @@ exports.handler = async (event) => {
         headers: {
           location: [{ key: 'Location', value: destination }],
           'set-cookie': [
-            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
+            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
           ],
         },
       };
@@ -1213,7 +1249,7 @@ exports.handler = async (event) => {
       statusDescription: 'Found',
       headers: {
         location: [{ key: 'Location', value: logoutUrl }],
-        'set-cookie': [{ key: 'Set-Cookie', value: 'id_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure' }],
+        'set-cookie': [{ key: 'Set-Cookie', value: \`id_token=; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure\` }],
       },
     };
   }
@@ -1274,7 +1310,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE86154e9cf7902fc3395742de9807520671": {
+    "AuthFunctionCurrentVersionDB17CE86657dd0af9ed82f479ae819281587ee71": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -1513,6 +1549,15 @@ exports.handler = async (event) => {
                 "HEAD",
               ],
               "Compress": true,
+              "LambdaFunctionAssociations": [
+                {
+                  "EventType": "viewer-request",
+                  "IncludeBody": false,
+                  "LambdaFunctionARN": {
+                    "Ref": "AuthFunctionCurrentVersionDB17CE86657dd0af9ed82f479ae819281587ee71",
+                  },
+                },
+              ],
               "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
               "PathPattern": "/runtime/*",
               "ResponseHeadersPolicyId": {
@@ -1544,7 +1589,7 @@ exports.handler = async (event) => {
                 "EventType": "viewer-request",
                 "IncludeBody": false,
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE86154e9cf7902fc3395742de9807520671",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE86657dd0af9ed82f479ae819281587ee71",
                 },
               },
               {

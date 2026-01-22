@@ -596,7 +596,7 @@ Verify that web applications running in sandbox containers are accessible via ru
 1. Get the runtime subdomain URL from TC-006
    ```
    Format: https://<port>-<conversationId>.runtime.<subdomain>.<domain>/
-   Example: https://5000-7c15e423fbd44f8f8bf483a481daa4d9.runtime.openhands.test.kane.mx/
+   Example: https://5000-7c15e423fbd44f8f8bf483a481daa4d9.runtime.<subdomain>.<domain>/
    ```
 
 2. Navigate directly to the runtime subdomain URL
@@ -715,8 +715,8 @@ Verify that VS Code editor URLs (main domain with port) are correctly rewritten 
 
 5. Look for VS Code URL patterns in agent output or browser behavior
    ```
-   Original: http://openhands.test.kane.mx:49955/?tkn=xxx&folder=/workspace
-   Rewritten: https://49955-<convId>.runtime.openhands.test.kane.mx/?tkn=xxx&folder=/workspace
+   Original: http://<subdomain>.<domain>:49955/?tkn=xxx&folder=/workspace
+   Rewritten: https://49955-<convId>.runtime.<subdomain>.<domain>/?tkn=xxx&folder=/workspace
    ```
 
 6. Verify the rewritten URL works
@@ -744,15 +744,15 @@ The `mainDomainPortPattern` regex with fix:
 ```javascript
 // Pattern: https?:\/\/(?!\d+-[a-f0-9]+\.runtime\.)([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?
 //
-// Matches: http://openhands.test.kane.mx:49955/?tkn=xxx
-// Does NOT match: https://5000-abc123.runtime.openhands.test.kane.mx/
+// Matches: http://<subdomain>.<domain>:49955/?tkn=xxx
+// Does NOT match: https://5000-abc123.runtime.<subdomain>.<domain>/
 ```
 
 ### Expected Console Logs
 
 **For VS Code URLs:**
 ```
-window.open patched (main domain:port): http://openhands.test.kane.mx:49955/?tkn=xxx -> https://49955-<convId>.runtime.openhands.test.kane.mx/?tkn=xxx
+window.open patched (main domain:port): http://<subdomain>.<domain>:49955/?tkn=xxx -> https://49955-<convId>.runtime.<subdomain>.<domain>/?tkn=xxx
 ```
 
 **For Runtime Subdomain URLs (should NOT appear):**
@@ -765,10 +765,265 @@ window.open patched (main domain:port): http://openhands.test.kane.mx:49955/?tkn
 
 | URL Type | Example | Should Be Rewritten | Expected Result |
 |----------|---------|---------------------|-----------------|
-| VS Code (main domain + port) | `http://openhands.test.kane.mx:49955/` | ✅ Yes | `https://49955-<convId>.runtime.openhands.test.kane.mx/` |
-| Runtime subdomain | `https://5000-abc123.runtime.openhands.test.kane.mx/` | ❌ No | Unchanged |
-| localhost | `http://localhost:5000/` | ✅ Yes | `https://5000-<convId>.runtime.openhands.test.kane.mx/` |
+| VS Code (main domain + port) | `http://<subdomain>.<domain>:49955/` | ✅ Yes | `https://49955-<convId>.runtime.<subdomain>.<domain>/` |
+| Runtime subdomain | `https://5000-abc123.runtime.<subdomain>.<domain>/` | ❌ No | Unchanged |
+| localhost | `http://localhost:5000/` | ✅ Yes | `https://5000-<convId>.runtime.<subdomain>.<domain>/` |
 | External domain with port | `http://example.com:8080/` | ❌ No | Unchanged (not main domain) |
+
+---
+
+## TC-011: Verify Cross-User Access Denied (Runtime Authorization)
+
+### Description
+Verify that User B cannot access User A's runtime services. This tests the authorization layer that enforces container ownership.
+
+### Prerequisites
+- Two Cognito test users configured:
+  - User A: Primary test user (creates the conversation)
+  - User B: Secondary test user (attempts unauthorized access)
+- TC-006 completed by User A (Flask app running in User A's conversation)
+
+### Test Users
+
+| Role | Email | Password | Purpose |
+|------|-------|----------|---------|
+| User A (Owner) | `<user-a-email>` | `<user-a-password>` | Creates conversation and runtime |
+| User B (Attacker) | `<user-b-email>` | `<user-b-password>` | Attempts unauthorized access |
+
+### Steps
+
+1. **Phase 1: User A creates a conversation with running app**
+
+   1.1. Login as User A
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Login with User A credentials
+   ```
+
+   1.2. Create conversation and start Flask app (TC-005 + TC-006)
+   ```javascript
+   // Follow TC-005 and TC-006 steps
+   // Record the conversation ID and runtime URL
+   ```
+
+   1.3. Verify runtime is accessible for User A
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://5000-<convId>.runtime.<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_screenshot({ filePath: "/tmp/e2e-tc011-user-a-access.png" })
+   ```
+
+   1.4. Record runtime URL for Phase 2
+   ```
+   RUNTIME_URL=https://5000-<convId>.runtime.<subdomain>.<domain>/
+   CONV_ID=<conversation-id>
+   ```
+
+2. **Phase 2: User B attempts to access User A's runtime**
+
+   2.1. Logout User A
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/_logout",
+     type: "url"
+   })
+   ```
+
+   2.2. Login as User B
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Wait for Cognito login page
+   mcp__chrome-devtools__fill({ uid: "<email-uid>", value: "<user-b-email>" })
+   mcp__chrome-devtools__fill({ uid: "<password-uid>", value: "<user-b-password>" })
+   mcp__chrome-devtools__click({ uid: "<submit-uid>" })
+   ```
+
+   2.3. Attempt to access User A's runtime URL
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "<RUNTIME_URL>",  // User A's runtime URL
+     type: "url"
+   })
+   mcp__chrome-devtools__take_screenshot({ filePath: "/tmp/e2e-tc011-user-b-denied.png" })
+   ```
+
+   2.4. Verify access is denied (403 Forbidden)
+   ```javascript
+   mcp__chrome-devtools__take_snapshot({})
+   // Should show "Access denied: you do not own this conversation"
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | User A can access own runtime | Page loads with Flask app content (200 OK) |
+| 2 | User B cannot access User A's runtime | Returns 403 Forbidden |
+| 3 | Error message is clear | Shows "Access denied: you do not own this conversation" |
+| 4 | User B's user_id header is injected | Lambda@Edge extracts JWT and injects header |
+| 5 | OpenResty verifies ownership | Lua script checks container's user_id label |
+
+### Authorization Flow
+
+```
+User B → CloudFront → Lambda@Edge (verify JWT, inject X-Cognito-User-Id: <user-b-id>)
+                         ↓
+                    ALB → OpenResty
+                         ↓
+                    Lua: find_container(conv_id) → user_id = <user-a-id>
+                         ↓
+                    Check: request_user_id (<user-b-id>) != container_user_id (<user-a-id>)
+                         ↓
+                    Return 403 "Access denied: you do not own this conversation"
+```
+
+### Security Note
+
+**Prerequisite for Full Authorization**: OpenHands core must add `user_id` label when creating sandbox containers. Without this label, containers allow access from any authenticated user (backwards compatibility).
+
+To verify the container has the user_id label:
+```bash
+# SSH to EC2
+docker inspect <container-name> | grep -A5 "Labels"
+# Should show: "user_id": "<user-a-cognito-sub>"
+```
+
+---
+
+## TC-012: Verify Unauthenticated Runtime Access Denied
+
+### Description
+Verify that unauthenticated requests to runtime URLs return 401 Unauthorized.
+
+### Prerequisites
+- TC-006 completed (Flask app running)
+- Runtime URL from TC-006
+
+### Steps
+
+1. Use curl to test unauthenticated access (no cookies)
+   ```bash
+   # From local machine or EC2
+   curl -v "https://5000-<convId>.runtime.<subdomain>.<domain>/"
+   ```
+
+2. Verify 401 response
+   ```bash
+   # Expected output:
+   # < HTTP/2 401
+   # < content-type: text/plain
+   # Authentication required. Please login at the main application first.
+   ```
+
+3. Test with Chrome DevTools (in incognito/no cookies)
+   ```javascript
+   // Open new incognito window or clear cookies first
+   mcp__chrome-devtools__navigate_page({
+     url: "https://5000-<convId>.runtime.<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   mcp__chrome-devtools__take_screenshot({ filePath: "/tmp/e2e-tc012-unauth.png" })
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | No id_token cookie → 401 | curl without cookies returns 401 |
+| 2 | Error message is helpful | "Authentication required. Please login at the main application first." |
+| 3 | No redirect to Cognito | Lambda@Edge returns 401 directly (not 302) |
+| 4 | Response is fast | No backend processing for unauthenticated requests |
+
+### Why 401 Instead of Redirect?
+
+Runtime subdomains (`*.runtime.<subdomain>.<domain>`) are NOT registered as Cognito callback URLs. If we redirected to Cognito login, the OAuth callback would fail with `redirect_mismatch` error. Instead, we return 401 with a helpful message directing users to login at the main application.
+
+### Verification Commands
+
+```bash
+# Test unauthenticated access
+curl -s -o /dev/null -w "%{http_code}" \
+  "https://5000-<convId>.runtime.<subdomain>.<domain>/"
+# Expected: 401
+
+# Test with invalid token
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "Cookie: id_token=invalid-token" \
+  "https://5000-<convId>.runtime.<subdomain>.<domain>/"
+# Expected: 401 (invalid token)
+
+# Test with expired token
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "Cookie: id_token=<expired-token>" \
+  "https://5000-<convId>.runtime.<subdomain>.<domain>/"
+# Expected: 401 (expired token)
+```
+
+---
+
+## TC-013: Verify Main Application Access Still Works
+
+### Description
+Verify that main application authentication still works correctly after authorization changes. This ensures the authorization layer doesn't break normal user flows.
+
+### Prerequisites
+- Valid Cognito test user
+- Infrastructure deployed with authorization features
+
+### Steps
+
+1. Navigate to main application
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   ```
+
+2. Verify redirect to Cognito login (if not authenticated)
+   ```javascript
+   mcp__chrome-devtools__wait_for({ text: "Sign in", timeout: 15000 })
+   mcp__chrome-devtools__take_screenshot({ filePath: "/tmp/e2e-tc013-login.png" })
+   ```
+
+3. Login with valid credentials
+   ```javascript
+   // Standard login flow (TC-003)
+   ```
+
+4. Verify application loads
+   ```javascript
+   mcp__chrome-devtools__wait_for({ text: "Start new conversation", timeout: 30000 })
+   mcp__chrome-devtools__take_screenshot({ filePath: "/tmp/e2e-tc013-home.png" })
+   ```
+
+5. Verify user headers are injected correctly
+   ```javascript
+   // Create a new conversation to trigger backend calls
+   // Check that X-Cognito-User-Id header is present in requests
+   mcp__chrome-devtools__list_network_requests({
+     resourceTypes: ["xhr", "fetch"]
+   })
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Main app redirects to Cognito | Unauthenticated access → Cognito login |
+| 2 | Login succeeds | After login, redirects back to app |
+| 3 | Home page loads | "Start new conversation" visible |
+| 4 | API calls succeed | `/api/conversations` returns 200 |
+| 5 | User identity preserved | Conversations are user-specific |
 
 ---
 
@@ -788,6 +1043,9 @@ Use this checklist to track test execution:
 | TC-008 | Verify In-App Routing | [ ] | |
 | TC-009 | Verify Web App Subdomain Access | [ ] | |
 | TC-010 | Verify VS Code URL Rewriting | [ ] | |
+| TC-011 | Cross-User Access Denied | [ ] | Requires 2 test users |
+| TC-012 | Unauthenticated Access Denied | [ ] | Runtime returns 401 |
+| TC-013 | Main App Access Works | [ ] | Regression test |
 
 ## Troubleshooting Guide
 
