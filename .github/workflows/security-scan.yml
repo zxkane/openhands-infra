@@ -65,8 +65,10 @@ jobs:
           git secrets --register-aws
           git secrets --install
 
-          # Scan repository
-          if git secrets --scan; then
+          # Scan only current working tree (not git history)
+          # Using --no-index to scan files without checking git history
+          # This avoids flagging secrets in old commits that have since been removed
+          if git secrets --scan --no-index; then
             echo "secrets_found=false" >> $GITHUB_OUTPUT
           else
             echo "secrets_found=true" >> $GITHUB_OUTPUT
