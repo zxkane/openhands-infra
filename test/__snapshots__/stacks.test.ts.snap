@@ -330,91 +330,8 @@ usermod -aG docker ec2-user
 chmod 666 /var/run/docker.sock
 curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-Linux-aarch64" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
 retry dnf install -y amazon-cloudwatch-agent
-wget -q https://openresty.org/package/amazon/openresty.repo -O /etc/yum.repos.d/openresty.repo
-dnf check-update || true
-retry dnf install -y openresty openresty-opm openresty-resty
-HOME=/root /usr/local/openresty/bin/opm get ledgetech/lua-resty-http
-mkdir -p /var/log/openresty
 echo '{"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"cpu":{"measurement":["cpu_usage_idle","cpu_usage_user"],"metrics_collection_interval":60,"totalcpu":true},"mem":{"measurement":["mem_used_percent"],"metrics_collection_interval":60},"disk":{"measurement":["disk_used_percent"],"metrics_collection_interval":60,"resources":["/","/data"]}},"append_dimensions":{"AutoScalingGroupName":"\${aws:AutoScalingGroupName}","InstanceId":"\${aws:InstanceId}"}}}' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-cat > /usr/local/openresty/nginx/conf/nginx.conf << 'EOF'
-worker_processes auto;
-error_log /var/log/openresty/error.log warn;
-pid /usr/local/openresty/nginx/logs/nginx.pid;
-events { worker_connections 1024; use epoll; multi_accept on; }
-http {
-  lua_package_path "/usr/local/openresty/lualib/?.lua;;";
-  default_type application/octet-stream;
-  access_log /var/log/openresty/access.log;
-  server_tokens off;
-  more_clear_headers Server;
-  sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65;
-  server {
-    listen 8080; server_name _;
-    location /health { return 200 'OK'; add_header Content-Type text/plain; }
-    location ~ ^/runtime/(?<conv_id>[a-f0-9]+)/(?<target_port>\\d+)(?<remaining_path>/.*)?$ {
-      set $container_ip "";
-      set $internal_port "";
-      set $proxy_path $remaining_path;
-      if ($proxy_path = "") { set $proxy_path "/"; }
-      access_by_lua_block {
-        local discovery = require "docker_discovery"
-        local ip,port = discovery.find_container(ngx.var.conv_id, ngx.var.target_port)
-        if ip and port then
-          ngx.var.container_ip = ip
-          ngx.var.internal_port = port
-          ngx.log(ngx.INFO, "Routing /runtime/", ngx.var.conv_id, "/", ngx.var.target_port, " to ", ip, ":", port)
-        else
-          ngx.log(ngx.WARN, "No container found for conversation: ", ngx.var.conv_id)
-          ngx.status = 502
-          ngx.say("No container found for conversation " .. ngx.var.conv_id)
-          return ngx.exit(502)
-        end
-      }
-      proxy_pass http://$container_ip:$internal_port$proxy_path$is_args$args;
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection "upgrade";
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_connect_timeout 60s; proxy_send_timeout 300s; proxy_read_timeout 300s;
-      proxy_buffering off;
-    }
-    location / {
-      proxy_pass http://127.0.0.1:3000;
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection "upgrade";
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_connect_timeout 60s; proxy_send_timeout 300s; proxy_read_timeout 300s;
-      proxy_buffering off;
-    }
-  }
-}
-EOF
-cat > /usr/local/openresty/lualib/docker_discovery.lua << 'LUA'
-local http=require"resty.http" local cjson=require"cjson" local _M={}
-function _M.find_container(cid,hp)
-local h=http.new() local ok,e=h:connect("unix:/var/run/docker.sock") if not ok then return nil,nil end
-local r,e=h:request({path="/containers/json",headers={["Host"]="localhost"}}) if not r then return nil,nil end
-local b=r:read_body() local ok2,cs=pcall(cjson.decode,b) if not ok2 then return nil,nil end
-for _,c in ipairs(cs) do local lb=c.Labels or {} if lb["conversation_id"]==cid then
-local ip=nil local ns=c.NetworkSettings and c.NetworkSettings.Networks
-if ns then for _,n in pairs(ns) do if n.IPAddress and n.IPAddress~="" then ip=n.IPAddress break end end end
-if ip then
-local pts=c.Ports or {} for _,p in ipairs(pts) do if p.PublicPort and tostring(p.PublicPort)==hp then return ip,tostring(p.PrivatePort) end end
-return ip,hp end
-end end
-return nil,nil
-end
-return _M
-LUA
-systemctl enable --now openresty
 for i in {1..60}; do [ -e /dev/nvme1n1 ] && break; sleep 5; done; [ -e /dev/nvme1n1 ] || exit 1
 blkid /dev/nvme1n1 || mkfs -t xfs /dev/nvme1n1
 mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab
@@ -426,10 +343,33 @@ RUNTIME_VERSION=$(aws ssm get-parameter --name "",
                   "" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "1.2-nikolaik")
 cat > /data/openhands/docker-compose.yml << EOF
 services:
+  openresty:
+    image: ",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:4115af5adc3a08250074539a75e77b471d139bb9ab2548684f8560c904011a31",
+                  },
+                  "
+    container_name: openresty-proxy
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      # SECURITY: Docker socket access required for container discovery (read-only)
+      # OpenResty queries /containers/json to find sandbox container IPs for routing
+      # Mitigations: mounted :ro, only GET requests, no container modifications
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - openhands
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5d8fed1d33572b5aea809e8fa81ec6fbc346fa66e5af401f3e1bb3882f7a77e9",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:09c332788278a7e29340b03cdbb35c50bae20eb8ea7249c0cc2c1f99f61da2de",
                   },
                   "
     container_name: openhands-app
@@ -492,7 +432,7 @@ services:
     environment:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_POLL_INTERVAL=86400
-    command: openhands-app
+    command: openhands-app openresty-proxy
 EOF
 
 # Create config.toml (loaded from config/config.toml at CDK synth time)
@@ -565,7 +505,12 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5d8fed1d33572b5aea809e8fa81ec6fbc346fa66e5af401f3e1bb3882f7a77e9",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:09c332788278a7e29340b03cdbb35c50bae20eb8ea7249c0cc2c1f99f61da2de",
+                  },
+                  ""
+pull_with_retry "",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:4115af5adc3a08250074539a75e77b471d139bb9ab2548684f8560c904011a31",
                   },
                   ""
 pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"
@@ -576,6 +521,8 @@ pull_with_retry "",
                   ""
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
 systemctl daemon-reload && systemctl enable openhands && systemctl start openhands
+for i in {1..30}; do docker inspect openresty-proxy >/dev/null 2>&1 && break; sleep 2; done
+docker network connect bridge openresty-proxy 2>/dev/null || echo "Already connected to bridge network"
 echo "OpenHands setup complete!"",
                 ],
               ],
@@ -917,6 +864,11 @@ const CONFIG = {
   callbackPath: '/_callback',
   logoutPath: '/_logout',
   region: 'us-east-1',
+  // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
+  // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
+  // The broader scope is REQUIRED for runtime functionality - restricting to .{subdomain}.{domain}
+  // would break access to runtime subdomains. WAF and Lambda@Edge provide additional protection.
+  cookieDomain: '.example.com',
 };
 
 // JWKS cache (in-memory, persists across warm invocations)
@@ -1161,7 +1113,7 @@ async function exchangeCodeForTokens(code, redirectUri) {
 
 // Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
 function parseRuntimeSubdomain(host) {
-  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
+  // Match: {port}-{convId}.runtime.{subdomain}.{domain}
   const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
   if (match) {
     return { port: match[1], convId: match[2], isRuntime: true };
@@ -1178,9 +1130,44 @@ exports.handler = async (event) => {
   // Check if this is a runtime subdomain request
   const runtime = parseRuntimeSubdomain(host);
   if (runtime.isRuntime) {
+    // Runtime requests require authentication - verify JWT and inject user header
+    // Note: We return 401 instead of redirecting to login because runtime subdomains
+    // are not registered as valid Cognito callback URLs
+    const idToken = getCookie(cookies, 'id_token');
+    if (!idToken) {
+      console.log('Runtime request without id_token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Authentication required. Please login at the main application first.',
+      };
+    }
+
+    const payload = await verifyTokenSignature(idToken);
+    if (!payload) {
+      console.log('Runtime request with invalid token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Invalid or expired token. Please login at the main application.',
+      };
+    }
+
+    // Token is valid - inject user_id header for OpenResty to verify ownership
+    delete request.headers['x-cognito-user-id'];
+    request.headers['x-cognito-user-id'] = [{
+      key: 'X-Cognito-User-Id',
+      value: payload.sub
+    }];
+
     // Rewrite URI to /runtime/{cid}/{port}/... format for ALB routing
     request.uri = '/runtime/' + runtime.convId + '/' + runtime.port + uri;
-    // Runtime requests skip Cognito auth - they use session token auth
     return request;
   }
 
@@ -1247,7 +1234,7 @@ exports.handler = async (event) => {
         headers: {
           location: [{ key: 'Location', value: destination }],
           'set-cookie': [
-            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
+            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
           ],
         },
       };
@@ -1269,7 +1256,7 @@ exports.handler = async (event) => {
       statusDescription: 'Found',
       headers: {
         location: [{ key: 'Location', value: logoutUrl }],
-        'set-cookie': [{ key: 'Set-Cookie', value: 'id_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure' }],
+        'set-cookie': [{ key: 'Set-Cookie', value: \`id_token=; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure\` }],
       },
     };
   }
@@ -1330,7 +1317,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE86154e9cf7902fc3395742de9807520671": {
+    "AuthFunctionCurrentVersionDB17CE863140111abfd899373221769e37190ab8": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -1569,6 +1556,15 @@ exports.handler = async (event) => {
                 "HEAD",
               ],
               "Compress": true,
+              "LambdaFunctionAssociations": [
+                {
+                  "EventType": "viewer-request",
+                  "IncludeBody": false,
+                  "LambdaFunctionARN": {
+                    "Ref": "AuthFunctionCurrentVersionDB17CE863140111abfd899373221769e37190ab8",
+                  },
+                },
+              ],
               "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
               "PathPattern": "/runtime/*",
               "ResponseHeadersPolicyId": {
@@ -1600,7 +1596,7 @@ exports.handler = async (event) => {
                 "EventType": "viewer-request",
                 "IncludeBody": false,
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE86154e9cf7902fc3395742de9807520671",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE863140111abfd899373221769e37190ab8",
                 },
               },
               {

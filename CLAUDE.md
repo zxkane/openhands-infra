@@ -2,6 +2,110 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Workflow
+
+**IMPORTANT**: Claude Code MUST follow this workflow for all feature development and bug fixes.
+
+### Workflow Steps
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. CREATE BRANCH                                               │
+│     git checkout -b feat/<feature-name> or fix/<bug-name>       │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  2. IMPLEMENT CHANGES                                           │
+│     - Write code                                                │
+│     - Update unit tests (npm run test)                          │
+│     - Update E2E test cases if needed (test/E2E_TEST_CASES.md)  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  3. LOCAL VERIFICATION                                          │
+│     - npm run build                                             │
+│     - npm run test                                              │
+│     - npx cdk deploy --all (deploy to AWS)                      │
+│     - Run E2E tests via Chrome DevTools MCP                     │
+│     - Verify ALL tests pass before proceeding                   │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  4. COMMIT AND CREATE PR                                        │
+│     - git add -A && git commit -m "type(scope): description"    │
+│     - git push -u origin <branch-name>                          │
+│     - Create PR via GitHub MCP or gh CLI                        │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  5. WAIT FOR PR CHECKS                                          │
+│     - Monitor GitHub Actions checks                             │
+│     - If checks FAIL → Return to Step 2, fix issues             │
+│     - If checks PASS → Proceed to Step 6                        │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  6. ADDRESS REVIEWER BOT FINDINGS                               │
+│     - Review Amazon Q Developer comments                        │
+│     - Review other automated security/code review findings      │
+│     - Fix issues or add documentation explaining design choice  │
+│     - Push fixes and wait for checks again                      │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  7. READY FOR MERGE                                             │
+│     - All checks passed                                         │
+│     - All reviewer comments addressed                           │
+│     - PR is mergeable                                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Branch Naming Convention
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| Feature | `feat/<name>` | `feat/cross-user-authorization` |
+| Bug fix | `fix/<name>` | `fix/websocket-connection` |
+| Refactor | `refactor/<name>` | `refactor/openresty-container` |
+| Documentation | `docs/<name>` | `docs/runtime-routing` |
+
+### Commit Message Format
+
+```
+type(scope): description
+
+Types: feat, fix, docs, refactor, test, chore
+Scope: runtime, edge, compute, security, etc.
+```
+
+### PR Checks to Monitor
+
+| Check | Description | Action if Failed |
+|-------|-------------|------------------|
+| Amazon Q Developer | Security review | Address findings or document design decisions |
+| dependency-check | NPM vulnerabilities | Update dependencies |
+| security-checks | SAST/secrets scan | Fix security issues |
+| infrastructure-scan | CDK/CloudFormation validation | Fix IaC issues |
+
+### No Environment-Specific Information in Source Control
+
+**CRITICAL**: This is an open source project. Source-controlled files must NOT contain:
+
+| Prohibited | Use Instead |
+|------------|-------------|
+| Real domain names (e.g., `mycompany.com`) | Placeholders: `{domain}`, `{subdomain}.{domain}`, or `example.com` |
+| AWS account IDs (except `123456789012`) | Placeholder: `<aws-account-id>` or `123456789012` |
+| Real resource ARNs | Generic ARNs with placeholders |
+| IP addresses | Placeholders: `<ip-address>` |
+| Email addresses | Placeholders: `<email>`, `user@example.com` |
+
+**Allowed placeholders**: `{domain}`, `{subdomain}`, `{port}`, `{convId}`, `<aws-account-id>`, `123456789012` (AWS documentation standard), `example.com`
+
+**Where environment-specific info belongs**:
+- `CLAUDE.local.md` - User's local project instructions (gitignored)
+- `.env` files - Environment variables (gitignored)
+- `cdk.context.json` - CDK lookup cache (gitignored)
+
 ## Common Commands
 
 ```bash
@@ -112,10 +216,11 @@ Each stack exposes an `output` property (typed in `lib/interfaces.ts`) consumed 
 | `lib/security-stack.ts` | IAM Roles, Security Groups |
 | `lib/monitoring-stack.ts` | CloudWatch Logs, Alarms, Dashboard, Backup, S3 Data Bucket |
 | `lib/database-stack.ts` | Aurora Serverless v2 PostgreSQL with IAM Authentication |
-| `lib/compute-stack.ts` | EC2 ASG, Launch Template, Internal ALB |
+| `lib/compute-stack.ts` | EC2 ASG, Launch Template, Internal ALB, OpenResty container |
 | `lib/edge-stack.ts` | Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 |
 | `config/config.toml` | OpenHands application configuration (LLM, sandbox, security) |
 | `docker/patch-fix.js` | Frontend JavaScript patches (URL rewriting, settings auto-config, runtime subdomain routing) |
+| `docker/openresty/` | OpenResty proxy container (Dockerfile, nginx.conf, docker_discovery.lua) |
 | `test/E2E_TEST_CASES.md` | Comprehensive E2E test cases with acceptance criteria |
 
 ### Runtime Subdomain Routing
@@ -126,11 +231,11 @@ User applications running inside sandbox containers are accessible via dedicated
 https://{port}-{convId}.runtime.{subdomain}.{domain}/
 ```
 
-**Example**: `https://5000-b691f4c32a1c407f92dd20c77818f7a8.runtime.openhands.test.kane.mx/`
+**Example**: `https://5000-{convId}.runtime.{subdomain}.{domain}/`
 
 **Request Flow**:
 ```
-Browser → CloudFront → Lambda@Edge (parse subdomain) → ALB → OpenResty → Lua Docker Discovery → Container App
+Browser → CloudFront → Lambda@Edge (JWT verify + inject user_id) → ALB → OpenResty (verify ownership) → Container App
 ```
 
 **Key Components**:
@@ -139,19 +244,56 @@ Browser → CloudFront → Lambda@Edge (parse subdomain) → ALB → OpenResty �
 |-----------|------|---------|
 | ACM Certificate | `lib/edge-stack.ts` | Wildcard cert includes `*.runtime.{subdomain}.{domain}` SAN |
 | Route 53 | `lib/edge-stack.ts` | Wildcard A record `*.runtime.{subdomain}` → CloudFront |
-| Lambda@Edge viewer-request | `lib/edge-stack.ts` | Parses `{port}-{convId}.runtime.*` and rewrites URI to `/runtime/{convId}/{port}/...` |
+| Lambda@Edge viewer-request | `lib/edge-stack.ts` | Verifies JWT, injects `X-Cognito-User-Id`, rewrites URI |
 | Lambda@Edge origin-response | `lib/edge-stack.ts` | Adds security headers (X-Frame-Options, CSP, cookie isolation) |
-| Lua Docker Discovery | `lib/compute-stack.ts` | Finds container by conversation_id label, routes to container IP + port |
+| OpenResty Proxy | `docker/openresty/nginx.conf` | Verifies container ownership, proxies to container |
+| Lua Docker Discovery | `docker/openresty/docker_discovery.lua` | Finds container by `conversation_id` label, returns IP + port + user_id |
 | Frontend Patch | `docker/patch-fix.js` | Rewrites `localhost:port` URLs to runtime subdomain format |
 
-**URL Rewriting (patch-fix.js)**:
-- API calls (`/api/*`, `/sockets/*`) → Path-based routing (preserves authentication)
-- User app requests → Subdomain routing (apps run at domain root)
+**Security**: Runtime requests require authentication and authorization:
+1. **Authentication**: Lambda@Edge verifies JWT (`id_token` cookie) and redirects to login if invalid
+2. **Authorization**: OpenResty verifies container's `user_id` label matches requesting user
+3. **Backwards Compatibility**: Containers without `user_id` label allow access (requires OpenHands core update)
 
-**Why Subdomain Routing?**
+**Dual Routing Approach**:
+
+| Route Type | Pattern | Use Case | Lambda@Edge |
+|------------|---------|----------|-------------|
+| Path-based | `/runtime/{convId}/{port}/...` | Agent WebSocket, API calls | Yes (auth required) |
+| Subdomain | `{port}-{convId}.runtime.{domain}/` | User apps (Flask, Express) | Yes (auth required) |
+
+**URL Rewriting (patch-fix.js)**:
+- Agent WebSocket (`/sockets/*`) → Path-based: `wss://{domain}/runtime/{convId}/{port}/sockets/events/...`
+- API calls (`/api/*`) → Path-based: preserves main domain authentication
+- User app requests → Subdomain: apps run at domain root
+
+**Why Subdomain Routing for User Apps?**
 - Apps run at domain root (`/`) instead of `/runtime/{cid}/{port}/`
 - Internal routes like `/add`, `/api/users` resolve correctly
 - Each runtime has isolated cookies (security)
+
+**Why Path-based Routing for Agent Communication?**
+- WebSocket connections use same-origin cookie authentication
+- API calls need session cookies from main domain
+- Agent-server events flow through: `wss://{domain}/runtime/{convId}/{port}/sockets/events/...`
+
+### Runtime Port Access
+
+Runtime subdomains support access to **any port** inside sandbox containers:
+- `https://5000-{convId}.runtime.{subdomain}.{domain}/` → Flask app on port 5000
+- `https://3000-{convId}.runtime.{subdomain}.{domain}/` → Express app on port 3000
+- `https://8080-{convId}.runtime.{subdomain}.{domain}/` → Any web server
+
+**How it works**: OpenResty queries Docker API to get the container's bridge network IP, then proxies directly to `container_ip:any_port`. No Docker port mapping required.
+
+**Technical Details**:
+- Lua script finds container by `conversation_id` label
+- Gets container IP from `NetworkSettings.Networks` (iterates all networks)
+- Port routing logic:
+  1. First tries direct connection to `container_ip:requested_port` (100ms TCP probe)
+  2. If unreachable, looks up Docker port mapping (PublicPort → PrivatePort)
+  3. Falls back to requested port if no mapping found
+- OpenResty runs as container on same Docker network as sandboxes
 
 ## EC2 User Data
 

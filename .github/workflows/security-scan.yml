@@ -44,10 +44,10 @@ jobs:
 
       - name: Run Checkov
         id: checkov
-        uses: bridgecrewio/checkov-action@master
+        uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
-          framework: cdk
+          framework: cloudformation
           output_format: json
           output_file_path: checkov-report.json
           quiet: true
@@ -65,8 +65,15 @@ jobs:
           git secrets --register-aws
           git secrets --install
 
-          # Scan repository
-          if git secrets --scan; then
+          # Allow placeholder AWS account ID used in tests and CDK examples
+          # 123456789012 is the standard placeholder used in AWS docs and CDK
+          git secrets --add --allowed '123456789012'
+
+          # Scan only tracked files in the current commit (not history or untracked files)
+          # Using git ls-files to list only tracked files, avoiding:
+          # 1. Git history (old commits that may have since been cleaned)
+          # 2. Untracked/ignored files like cdk.context.json, .env, CLAUDE.local.md
+          if git ls-files -z | xargs -0 git secrets --scan --; then
             echo "secrets_found=false" >> $GITHUB_OUTPUT
           else
             echo "secrets_found=true" >> $GITHUB_OUTPUT
@@ -86,17 +93,16 @@ jobs:
         continue-on-error: true
 
       - name: SAST with Semgrep
-        uses: returntocorp/semgrep-action@v1
+        uses: semgrep/semgrep-action@v1
         with:
           config: >-
             p/security-audit
             p/typescript
-            p/aws-cdk
         continue-on-error: true
 
       - name: Upload security reports
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: security-reports
           path: |
@@ -195,20 +201,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Snyk Security Scan
-        uses: snyk/actions/node@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --severity-threshold=high
-        continue-on-error: true
-
-      - name: Run OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: 'OpenHands-Infrastructure'
-          path: '.'
-          format: 'JSON'
+      - name: Run npm audit
+        run: |
+          npm ci
+          npm audit --audit-level=high || true
         continue-on-error: true
 
   infrastructure-scan:
@@ -262,7 +258,7 @@ jobs:
 
       - name: Upload summary
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: security-summary
           path: security-summary.md

@@ -38,7 +38,7 @@ export class EdgeStack extends cdk.Stack {
 
     const { config, alb } = props;
     const fullDomain = `${config.subDomain}.${config.domainName}`;
-    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.test.kane.mx
+    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.{subdomain}.{domain}
 
     // ========================================
     // Route 53 & Certificate
@@ -54,7 +54,7 @@ export class EdgeStack extends cdk.Stack {
     // Includes both main domain and runtime wildcard as SAN
     const certificate = new acm.Certificate(this, 'Certificate', {
       domainName: fullDomain,
-      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.openhands.test.kane.mx
+      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.{subdomain}.{domain}
       validation: acm.CertificateValidation.fromDns(hostedZone),
     });
 
@@ -183,6 +183,11 @@ const CONFIG = {
   callbackPath: '/_callback',
   logoutPath: '/_logout',
   region: '${this.region}',
+  // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
+  // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
+  // The broader scope is REQUIRED for runtime functionality - restricting to .{subdomain}.{domain}
+  // would break access to runtime subdomains. WAF and Lambda@Edge provide additional protection.
+  cookieDomain: '.${config.domainName}',
 };
 
 // JWKS cache (in-memory, persists across warm invocations)
@@ -427,7 +432,7 @@ async function exchangeCodeForTokens(code, redirectUri) {
 
 // Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
 function parseRuntimeSubdomain(host) {
-  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
+  // Match: {port}-{convId}.runtime.{subdomain}.{domain}
   const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
   if (match) {
     return { port: match[1], convId: match[2], isRuntime: true };
@@ -444,9 +449,44 @@ exports.handler = async (event) => {
   // Check if this is a runtime subdomain request
   const runtime = parseRuntimeSubdomain(host);
   if (runtime.isRuntime) {
+    // Runtime requests require authentication - verify JWT and inject user header
+    // Note: We return 401 instead of redirecting to login because runtime subdomains
+    // are not registered as valid Cognito callback URLs
+    const idToken = getCookie(cookies, 'id_token');
+    if (!idToken) {
+      console.log('Runtime request without id_token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Authentication required. Please login at the main application first.',
+      };
+    }
+
+    const payload = await verifyTokenSignature(idToken);
+    if (!payload) {
+      console.log('Runtime request with invalid token, returning 401');
+      return {
+        status: '401',
+        statusDescription: 'Unauthorized',
+        headers: {
+          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
+        },
+        body: 'Invalid or expired token. Please login at the main application.',
+      };
+    }
+
+    // Token is valid - inject user_id header for OpenResty to verify ownership
+    delete request.headers['x-cognito-user-id'];
+    request.headers['x-cognito-user-id'] = [{
+      key: 'X-Cognito-User-Id',
+      value: payload.sub
+    }];
+
     // Rewrite URI to /runtime/{cid}/{port}/... format for ALB routing
     request.uri = '/runtime/' + runtime.convId + '/' + runtime.port + uri;
-    // Runtime requests skip Cognito auth - they use session token auth
     return request;
   }
 
@@ -513,7 +553,7 @@ exports.handler = async (event) => {
         headers: {
           location: [{ key: 'Location', value: destination }],
           'set-cookie': [
-            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
+            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${expiry}; HttpOnly; Secure; SameSite=Lax\` },
           ],
         },
       };
@@ -535,7 +575,7 @@ exports.handler = async (event) => {
       statusDescription: 'Found',
       headers: {
         location: [{ key: 'Location', value: logoutUrl }],
-        'set-cookie': [{ key: 'Set-Cookie', value: 'id_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure' }],
+        'set-cookie': [{ key: 'Set-Cookie', value: \`id_token=; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure\` }],
       },
     };
   }
@@ -779,8 +819,8 @@ exports.handler = async (event) => {
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: 'OpenHands CloudFront Distribution',
       domainNames: [
-        fullDomain,                  // openhands.test.kane.mx (main app)
-        `*.${runtimeDomain}`,        // *.runtime.openhands.test.kane.mx (runtime subdomains)
+        fullDomain,                  // {subdomain}.{domain} (main app)
+        `*.${runtimeDomain}`,        // *.runtime.{subdomain}.{domain} (runtime subdomains)
       ],
       certificate: certificate,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
@@ -807,9 +847,9 @@ exports.handler = async (event) => {
           },
         ],
       },
-      // Runtime proxy behavior - NO Lambda@Edge auth (path-based fallback)
-      // This behavior is kept for backwards compatibility with /runtime/* path routing
-      // New runtime subdomain requests are handled by the default behavior with auth bypass
+      // Runtime proxy behavior for path-based routing (/runtime/{conv_id}/{port}/...)
+      // This is used for WebSocket connections to agent-server (sockets/events)
+      // which require authentication via the main domain cookie
       additionalBehaviors: {
         '/runtime/*': {
           origin: httpOrigin,
@@ -819,7 +859,15 @@ exports.handler = async (event) => {
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
           responseHeadersPolicy: responseHeadersPolicy,
-          // NO edgeLambdas - runtime uses session token auth in WebSocket URL
+          // Add Lambda@Edge to verify JWT and inject X-Cognito-User-Id header
+          // This is required for OpenResty to authorize runtime requests
+          edgeLambdas: [
+            {
+              eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+              functionVersion: authFunctionVersion,
+              includeBody: false,
+            },
+          ],
         },
       },
     });
@@ -828,7 +876,7 @@ exports.handler = async (event) => {
     // Route 53 DNS Records
     // ========================================
 
-    // Main domain record: openhands.test.kane.mx
+    // Main domain record: {subdomain}.{domain}
     new route53.ARecord(this, 'AliasRecord', {
       zone: hostedZone,
       recordName: config.subDomain,
@@ -837,7 +885,7 @@ exports.handler = async (event) => {
       ),
     });
 
-    // Runtime wildcard record: *.runtime.openhands.test.kane.mx
+    // Runtime wildcard record: *.runtime.{subdomain}.{domain}
     new route53.ARecord(this, 'RuntimeWildcardRecord', {
       zone: hostedZone,
       recordName: `*.runtime.${config.subDomain}`,

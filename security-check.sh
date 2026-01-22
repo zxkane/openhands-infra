@@ -96,16 +96,20 @@ else
 fi
 echo ""
 
-# Check 7: Secrets in git
-echo "Checking for secrets in git history..."
+# Check 7: Secrets in tracked files
+echo "Checking for secrets in tracked files..."
 if command -v git-secrets &> /dev/null; then
-    if ! git secrets --scan 2>/dev/null; then
-        echo -e "${RED}[CRITICAL] Potential secrets found in git repository${NC}"
-        echo "  Fix: Remove secrets and clean git history"
+    # Allow placeholder AWS account ID used in tests and CDK examples
+    git secrets --add --allowed '123456789012' 2>/dev/null || true
+    # Only scan tracked files, not git history or untracked/gitignored files
+    # This avoids false positives from local config files like cdk.context.json
+    if ! git ls-files -z | xargs -0 git secrets --scan -- 2>/dev/null; then
+        echo -e "${RED}[CRITICAL] Potential secrets found in tracked files${NC}"
+        echo "  Fix: Remove secrets from tracked files"
         ((CRITICAL_ISSUES++))
         ((ISSUES_FOUND++))
     else
-        echo -e "${GREEN}[PASS] No secrets detected in git${NC}"
+        echo -e "${GREEN}[PASS] No secrets detected in tracked files${NC}"
     fi
 else
     echo -e "${YELLOW}[WARNING] git-secrets not installed, skipping check${NC}"

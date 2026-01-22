@@ -642,6 +642,155 @@ PYEOF
   fi
 fi
 
+# Patch 16: Add user_id label to sandbox containers for authorization
+# This enables OpenResty to verify container ownership. When a user requests access to
+# a runtime URL, OpenResty checks that the X-Cognito-User-Id header (from Lambda@Edge JWT)
+# matches the container's user_id label. Without this, any logged-in user can access
+# any other user's runtime services.
+# This patch:
+# 1. Modifies start_sandbox() to accept user_id parameter
+# 2. Adds 'user_id' to container labels
+# 3. Updates the caller to pass user_id from task.created_by_user_id
+SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+CONV_SERVICE_FILE="/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+if [ -f "$SANDBOX_SERVICE_FILE" ] && [ -f "$CONV_SERVICE_FILE" ]; then
+  if grep -q "'user_id':" "$SANDBOX_SERVICE_FILE"; then
+    echo "user_id label patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+import re
+
+try:
+    # Part 1: Update docker_sandbox_service.py
+    sandbox_file = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+
+    with open(sandbox_file, 'r') as f:
+        content = f.read()
+
+    # Step 1a: Add user_id parameter to start_sandbox method signature
+    # Handle both old single-line and new multi-line formats:
+    #
+    # Old format (pre-1.2.1):
+    #     async def start_sandbox(self, sandbox_id: str | None = None) -> Sandbox:
+    #
+    # New format (1.2.1+):
+    #     async def start_sandbox(
+    #         self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
+    #     ) -> SandboxInfo:
+    #
+    # We need to add user_id: str | None = None after sandbox_id parameter
+
+    # Try old single-line format first
+    old_sig = "async def start_sandbox(self, sandbox_id: str | None = None) -> Sandbox:"
+    new_sig = "async def start_sandbox(self, sandbox_id: str | None = None, user_id: str | None = None) -> Sandbox:"
+
+    if old_sig in content:
+        content = content.replace(old_sig, new_sig)
+        print("Step 1a: start_sandbox signature updated (single-line format)")
+    else:
+        # Try new multi-line format (1.2.1+)
+        old_sig_multiline = """async def start_sandbox(
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
+    ) -> SandboxInfo:"""
+        new_sig_multiline = """async def start_sandbox(
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None
+    ) -> SandboxInfo:"""
+        if old_sig_multiline in content:
+            content = content.replace(old_sig_multiline, new_sig_multiline)
+            print("Step 1a: start_sandbox signature updated (multi-line format)")
+        elif "user_id: str | None = None" in content and "async def start_sandbox" in content:
+            print("Step 1a: start_sandbox signature already has user_id parameter")
+        else:
+            print("Step 1a: start_sandbox signature not found (code structure may have changed)")
+
+    # Step 1b: Add user_id to labels dict
+    # After Patch 10, the labels look like:
+    #         labels = {
+    #             'sandbox_spec_id': sandbox_spec.id,
+    #             'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+    #         }
+    # We need to add user_id:
+    #         labels = {
+    #             'sandbox_spec_id': sandbox_spec.id,
+    #             'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+    #             'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
+    #         }
+    old_labels = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+        }"""
+
+    new_labels = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+            'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
+        }"""
+
+    if old_labels in content:
+        content = content.replace(old_labels, new_labels)
+        print("Step 1b: user_id label added to labels dict")
+    else:
+        # Maybe Patch 10 wasn't applied yet, try the original pattern
+        old_labels_orig = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+        }"""
+        new_labels_orig = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+            'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
+        }"""
+        if old_labels_orig in content:
+            content = content.replace(old_labels_orig, new_labels_orig)
+            print("Step 1b: user_id and conversation_id labels added (Patch 10 combined)")
+        else:
+            print("Step 1b: labels pattern not found (code structure may have changed)")
+
+    with open(sandbox_file, 'w') as f:
+        f.write(content)
+    print("docker_sandbox_service.py patched successfully")
+
+    # Part 2: Update live_status_app_conversation_service.py to pass user_id
+    conv_file = "/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+
+    with open(conv_file, 'r') as f:
+        content = f.read()
+
+    # Find the start_sandbox call and add user_id parameter
+    # Original:
+    #             sandbox = await self.sandbox_service.start_sandbox(
+    #                 sandbox_id=sandbox_id_str
+    #             )
+    # New:
+    #             sandbox = await self.sandbox_service.start_sandbox(
+    #                 sandbox_id=sandbox_id_str,
+    #                 user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
+    #             )
+    old_call = """sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str
+            )"""
+
+    new_call = """sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str,
+                user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
+            )"""
+
+    if old_call in content:
+        content = content.replace(old_call, new_call)
+        with open(conv_file, 'w') as f:
+            f.write(content)
+        print("live_status_app_conversation_service.py patched successfully")
+    else:
+        print("start_sandbox call pattern not found (code structure may have changed)")
+
+    print("user_id label patch applied successfully")
+except Exception as e:
+    print(f"ERROR: Failed to apply user_id label patch: {e}", file=sys.stderr)
+    # Don't exit - let app try to start
+PYEOF
+  fi
+fi
+
 echo "Starting OpenHands..."
 
 # Execute the original entrypoint

@@ -187,11 +187,12 @@ location ~ ^/runtime/(?<target_port>\d+)(?<remaining_path>/.*)?$ {
 
 ### Lambda@Edge JWT Validation
 
-Three authentication flows:
+Four authentication flows:
 
 1. **`/_callback`**: OAuth code → tokens → set cookie → redirect
 2. **`/_logout`**: Clear cookie → Cognito logout
-3. **Request validation**: Verify JWT → inject headers → allow/redirect
+3. **Runtime subdomain**: Verify JWT → inject `X-Cognito-User-Id` → rewrite URI → allow/redirect
+4. **Main domain**: Verify JWT → inject headers → allow/redirect
 
 ### User Header Injection
 
@@ -267,6 +268,17 @@ aws autoscaling terminate-instance-in-auto-scaling-group \
 
 - **No hardcoded secrets**: All credentials via IAM roles or Secrets Manager
 - **Header spoofing prevention**: Lambda@Edge clears & re-injects user headers
+- **Runtime authorization**: OpenResty verifies container `user_id` label matches requesting user
 - **Private subnets**: EC2 and Aurora in private subnets only
 - **VPC Endpoints**: No internet gateway needed for AWS services
 - **WAF**: Protects CloudFront distribution
+
+### Runtime Authorization (docker/openresty/)
+
+Runtime requests are authenticated and authorized:
+
+1. **Lambda@Edge** (`lib/edge-stack.ts`): Verifies JWT, injects `X-Cognito-User-Id` header
+2. **OpenResty** (`docker/openresty/nginx.conf`): Checks container's `user_id` label matches header
+3. **Docker Discovery** (`docker/openresty/docker_discovery.lua`): Returns container IP, port, and user_id
+
+**Implementation**: Patch 16 in `docker/patch-fix.js` modifies the OpenHands `DockerRuntime` class to add `user_id` label when creating sandbox containers. Containers without this label allow access (backwards compatibility for existing containers).

@@ -109,91 +109,6 @@ export interface ComputeStackProps extends cdk.StackProps {
 }
 
 /**
- * OpenResty configuration for runtime WebSocket proxy with dynamic container routing.
- * Routes /runtime/{conversation_id}/{port}/... to container_ip:{port}/...
- * Uses Lua to discover container IPs via Docker API based on conversation_id label.
- */
-const OPENRESTY_CONFIG = `worker_processes auto;
-error_log /var/log/openresty/error.log warn;
-pid /usr/local/openresty/nginx/logs/nginx.pid;
-events { worker_connections 1024; use epoll; multi_accept on; }
-http {
-  lua_package_path "/usr/local/openresty/lualib/?.lua;;";
-  default_type application/octet-stream;
-  access_log /var/log/openresty/access.log;
-  server_tokens off;
-  more_clear_headers Server;
-  sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65;
-  server {
-    listen 8080; server_name _;
-    location /health { return 200 'OK'; add_header Content-Type text/plain; }
-    location ~ ^/runtime/(?<conv_id>[a-f0-9]+)/(?<target_port>\\d+)(?<remaining_path>/.*)?$ {
-      set $container_ip "";
-      set $internal_port "";
-      set $proxy_path $remaining_path;
-      if ($proxy_path = "") { set $proxy_path "/"; }
-      access_by_lua_block {
-        local discovery = require "docker_discovery"
-        local ip,port = discovery.find_container(ngx.var.conv_id, ngx.var.target_port)
-        if ip and port then
-          ngx.var.container_ip = ip
-          ngx.var.internal_port = port
-          ngx.log(ngx.INFO, "Routing /runtime/", ngx.var.conv_id, "/", ngx.var.target_port, " to ", ip, ":", port)
-        else
-          ngx.log(ngx.WARN, "No container found for conversation: ", ngx.var.conv_id)
-          ngx.status = 502
-          ngx.say("No container found for conversation " .. ngx.var.conv_id)
-          return ngx.exit(502)
-        end
-      }
-      proxy_pass http://$container_ip:$internal_port$proxy_path$is_args$args;
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection "upgrade";
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_connect_timeout 60s; proxy_send_timeout 300s; proxy_read_timeout 300s;
-      proxy_buffering off;
-    }
-    location / {
-      proxy_pass http://127.0.0.1:3000;
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection "upgrade";
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_connect_timeout 60s; proxy_send_timeout 300s; proxy_read_timeout 300s;
-      proxy_buffering off;
-    }
-  }
-}`;
-
-// Lua script for Docker container discovery - minified to fit 16KB user data limit
-// Maps PublicPort (host port) to container IP + PrivatePort (container internal port).
-// For system ports with PublicPort mappings, returns the matching PrivatePort.
-// For user app ports (not in port mappings), returns the requested port directly since
-// user apps run inside the container and listen on that port.
-const LUA_DOCKER_DISCOVERY = `local http=require"resty.http" local cjson=require"cjson" local _M={}
-function _M.find_container(cid,hp)
-local h=http.new() local ok,e=h:connect("unix:/var/run/docker.sock") if not ok then return nil,nil end
-local r,e=h:request({path="/containers/json",headers={["Host"]="localhost"}}) if not r then return nil,nil end
-local b=r:read_body() local ok2,cs=pcall(cjson.decode,b) if not ok2 then return nil,nil end
-for _,c in ipairs(cs) do local lb=c.Labels or {} if lb["conversation_id"]==cid then
-local ip=nil local ns=c.NetworkSettings and c.NetworkSettings.Networks
-if ns then for _,n in pairs(ns) do if n.IPAddress and n.IPAddress~="" then ip=n.IPAddress break end end end
-if ip then
-local pts=c.Ports or {} for _,p in ipairs(pts) do if p.PublicPort and tostring(p.PublicPort)==hp then return ip,tostring(p.PrivatePort) end end
-return ip,hp end
-end end
-return nil,nil
-end
-return _M`;
-
-/**
  * ComputeStack - Creates ASG, Launch Template, ALB, and EBS configuration
  *
  * This stack deploys:
@@ -255,9 +170,18 @@ export class ComputeStack extends cdk.Stack {
       platform: Platform.LINUX_ARM64,
     });
 
+    // Build OpenResty Docker image for runtime proxy
+    // Runs as a container on the same bridge network as sandbox containers
+    // enabling direct routing to any port without Docker port mappings
+    const openrestyImage = new DockerImageAsset(this, 'OpenRestyImage', {
+      directory: path.join(__dirname, '..', 'docker', 'openresty'),
+      platform: Platform.LINUX_ARM64,
+    });
+
     // Grant EC2 role permission to pull from CDK-managed ECR repositories
     customOpenhandsImage.repository.grantPull(ec2Role);
     customAgentServerImage.repository.grantPull(ec2Role);
+    openrestyImage.repository.grantPull(ec2Role);
 
     // Note: IAM authentication permission for Aurora PostgreSQL is granted in DatabaseStack
     // using the EC2 role ARN to avoid cyclic cross-stack dependencies
@@ -266,6 +190,7 @@ export class ComputeStack extends cdk.Stack {
     // DockerImageAsset.imageUri format: <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>
     const openhandsImageUri = customOpenhandsImage.imageUri;
     const agentServerImageUri = customAgentServerImage.imageUri;
+    const openrestyImageUri = openrestyImage.imageUri;
 
     // Use DockerImageAsset properties to get repository URI and tag
     // Note: imageUri is a CDK token (CloudFormation intrinsic), so string operations don't work.
@@ -293,17 +218,9 @@ export class ComputeStack extends cdk.Stack {
       'chmod 666 /var/run/docker.sock',
       'curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-Linux-aarch64" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose',
       'retry dnf install -y amazon-cloudwatch-agent',
-      // Install OpenResty for dynamic container routing via Lua
-      'wget -q https://openresty.org/package/amazon/openresty.repo -O /etc/yum.repos.d/openresty.repo',
-      'dnf check-update || true',  // check-update returns 100 when updates available, not an error
-      'retry dnf install -y openresty openresty-opm openresty-resty',
-      'HOME=/root /usr/local/openresty/bin/opm get ledgetech/lua-resty-http',  // opm requires HOME
-      'mkdir -p /var/log/openresty',
+      // CloudWatch Agent configuration
       'echo \'{"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"cpu":{"measurement":["cpu_usage_idle","cpu_usage_user"],"metrics_collection_interval":60,"totalcpu":true},"mem":{"measurement":["mem_used_percent"],"metrics_collection_interval":60},"disk":{"measurement":["disk_used_percent"],"metrics_collection_interval":60,"resources":["/","/data"]}},"append_dimensions":{"AutoScalingGroupName":"${aws:AutoScalingGroupName}","InstanceId":"${aws:InstanceId}"}}}\' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json',
       '/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json',
-      `cat > /usr/local/openresty/nginx/conf/nginx.conf << 'EOF'\n${OPENRESTY_CONFIG}\nEOF`,
-      `cat > /usr/local/openresty/lualib/docker_discovery.lua << 'LUA'\n${LUA_DOCKER_DISCOVERY}\nLUA`,
-      'systemctl enable --now openresty',
       'for i in {1..60}; do [ -e /dev/nvme1n1 ] && break; sleep 5; done; [ -e /dev/nvme1n1 ] || exit 1',
       'blkid /dev/nvme1n1 || mkfs -t xfs /dev/nvme1n1',
       'mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab',
@@ -311,6 +228,27 @@ export class ComputeStack extends cdk.Stack {
       `RUNTIME_VERSION=$(aws ssm get-parameter --name "${runtimeVersionParam.parameterName}" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "${DEFAULT_RUNTIME_VERSION}")`,
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
+      // OpenResty reverse proxy - runs as container on Docker bridge network
+      // Enables direct routing to sandbox container IPs on any port
+      '  openresty:',
+      `    image: ${openrestyImageUri}`,
+      '    container_name: openresty-proxy',
+      '    restart: always',
+      '    ports:',
+      '      - "8080:8080"',  // ALB connects to this port for runtime traffic
+      '    volumes:',
+      '      # SECURITY: Docker socket access required for container discovery (read-only)',
+      '      # OpenResty queries /containers/json to find sandbox container IPs for routing',
+      '      # Mitigations: mounted :ro, only GET requests, no container modifications',
+      '      - /var/run/docker.sock:/var/run/docker.sock:ro',
+      '    depends_on:',
+      '      - openhands',
+      '    logging:',
+      '      driver: json-file',
+      '      options:',
+      '        max-size: "100m"',
+      '        max-file: "3"',
+      '',
       '  openhands:',
       `    image: ${openhandsImageUri}`,
       '    container_name: openhands-app',
@@ -355,7 +293,7 @@ export class ComputeStack extends cdk.Stack {
       '      - /data/openhands/config/config.toml:/app/config.toml:ro',
       ...(databaseOutput ? ['      - /data/openhands/config/database.env:/app/database.env:ro'] : []),
       '    ports:',
-      '      - "3000:3000"',
+      '      - "3000:3000"',  // OpenHands app port (direct access from ALB for main app)
       ...(databaseOutput ? [
         '    env_file:',
         '      - /data/openhands/config/database.env',
@@ -371,7 +309,7 @@ export class ComputeStack extends cdk.Stack {
       '    environment:',
       '      - WATCHTOWER_CLEANUP=true',
       '      - WATCHTOWER_POLL_INTERVAL=86400',
-      '    command: openhands-app',
+      '    command: openhands-app openresty-proxy',  // Watch both containers
       'EOF',
       '',
       '# Create config.toml (loaded from config/config.toml at CDK synth time)',
@@ -390,10 +328,15 @@ export class ComputeStack extends cdk.Stack {
       `aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${cdk.Aws.ACCOUNT_ID}.dkr.ecr.$REGION.amazonaws.com`,
       'pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }',
       `pull_with_retry "${openhandsImageUri}"`,
+      `pull_with_retry "${openrestyImageUri}"`,  // OpenResty runtime proxy
       'pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"',
       `pull_with_retry "${agentServerImageUri}"`,
       'set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap \'error_handler $LINENO\' ERR',
       'systemctl daemon-reload && systemctl enable openhands && systemctl start openhands',
+      // Connect OpenResty to the Docker bridge network for sandbox container access
+      // Sandbox containers use default bridge, compose network doesn't support external bridge directly
+      'for i in {1..30}; do docker inspect openresty-proxy >/dev/null 2>&1 && break; sleep 2; done',
+      'docker network connect bridge openresty-proxy 2>/dev/null || echo "Already connected to bridge network"',
       'echo "OpenHands setup complete!"',
     );
 
