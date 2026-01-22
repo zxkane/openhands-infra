@@ -25,11 +25,11 @@ This fix patches `WebSocket`, `fetch`, and `XMLHttpRequest` to rewrite:
 # Clone the repo and navigate to this directory
 
 # Login to ECR
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 845861764576.dkr.ecr.us-west-2.amazonaws.com
+aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin <aws-account-id>.dkr.ecr.us-west-2.amazonaws.com
 
 # Build and push
-docker build -t 845861764576.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest .
-docker push 845861764576.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest
+docker build -t <aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest .
+docker push <aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest
 ```
 
 ### Option 2: Cross-Compile with QEMU
@@ -39,11 +39,11 @@ docker push 845861764576.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest
 docker run --privileged --rm tonistiigi/binfmt --install all
 
 # Login to ECR
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 845861764576.dkr.ecr.us-west-2.amazonaws.com
+aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin <aws-account-id>.dkr.ecr.us-west-2.amazonaws.com
 
 # Build and push for ARM64
 docker buildx build --platform linux/arm64 \
-  -t 845861764576.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest \
+  -t <aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest \
   --push .
 ```
 
@@ -54,7 +54,7 @@ Update the SSM parameter to use the custom image:
 ```bash
 aws ssm put-parameter \
   --name "/openhands/docker/openhands-image" \
-  --value "845861764576.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest" \
+  --value "<aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/openhands-custom:latest" \
   --type String \
   --overwrite \
   --region us-west-2
