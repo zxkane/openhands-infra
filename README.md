@@ -142,12 +142,17 @@ https://<subdomain>.<domain-name>
 
 ### Bedrock Usage (Variable)
 
-| Model | Input Tokens | Output Tokens | Cost per 1M Tokens |
-|-------|--------------|---------------|-------------------|
-| Claude 3.5 Sonnet | - | - | $3 input / $15 output |
-| Claude 3 Haiku | - | - | $0.25 input / $1.25 output |
+Claude 4.5 models available on Amazon Bedrock:
 
-**Example**: 10M input + 2M output tokens/month with Claude 3.5 Sonnet ≈ $60/month
+| Model | Model ID | Input (per 1M) | Output (per 1M) |
+|-------|----------|----------------|-----------------|
+| Claude Opus 4.5 | `anthropic.claude-opus-4-5-20251101-v1:0` | $5 | $25 |
+| Claude Sonnet 4.5 | `anthropic.claude-sonnet-4-5-20250929-v1:0` | $3 | $15 |
+| Claude Haiku 4.5 | `anthropic.claude-haiku-4-5-20251001-v1:0` | $1 | $5 |
+
+**Example**: 10M input + 2M output tokens/month with Claude Sonnet 4.5 ≈ $60/month
+
+**Note**: Claude Sonnet 4.5 pricing increases for prompts >200K tokens ($6 input / $22.50 output per 1M).
 
 ## VPC Requirements
 

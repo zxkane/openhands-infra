@@ -20,9 +20,17 @@ default_agent = "CodeActAgent"
 # config.toml, and we need to inject the actual bucket name dynamically from CDK.
 
 [llm]
-# AWS Bedrock Claude Opus 4.5 model with Global inference profile
+# AWS Bedrock Claude 4.5 models with Global inference profile
 # Global endpoint routes requests to any commercial AWS Region for optimal performance
+#
+# Available Claude 4.5 models (choose one):
+# - Claude Opus 4.5:  $5/1M input, $25/1M output  - Most powerful, best for complex tasks
+# - Claude Sonnet 4.5: $3/1M input, $15/1M output - Balanced performance and cost
+# - Claude Haiku 4.5:  $1/1M input, $5/1M output  - Fastest, most cost-effective
+#
 model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+# model = "bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+# model = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # AWS region for Bedrock API calls
 # This will be automatically set by the EC2 user data script
