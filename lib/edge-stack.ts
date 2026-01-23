@@ -337,16 +337,16 @@ exports.handler = async (event) => {
     // Route 53 Records
     // ========================================
 
-    // A record for main domain
-    new route53.ARecord(this, 'ARecord', {
+    // A record for main domain (keep 'AliasRecord' ID for backwards compatibility)
+    new route53.ARecord(this, 'AliasRecord', {
       zone: hostedZone,
       recordName: config.subDomain,
       target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
     });
 
-    // Wildcard A record for runtime subdomains
+    // Wildcard A record for runtime subdomains (keep 'RuntimeWildcardRecord' ID for backwards compatibility)
     // *.runtime.{subdomain}.{domain} → CloudFront
-    new route53.ARecord(this, 'RuntimeWildcardARecord', {
+    new route53.ARecord(this, 'RuntimeWildcardRecord', {
       zone: hostedZone,
       recordName: `*.runtime.${config.subDomain}`,
       target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
