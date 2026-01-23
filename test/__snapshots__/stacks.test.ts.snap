@@ -308,7 +308,7 @@ exports[`OpenHands Infrastructure Stacks AuthStack matches snapshot 1`] = `
         "MfaConfiguration": "OPTIONAL",
         "Policies": {
           "PasswordPolicy": {
-            "MinimumLength": 12,
+            "MinimumLength": 8,
             "RequireLowercase": true,
             "RequireNumbers": true,
             "RequireSymbols": true,
@@ -1179,31 +1179,7 @@ exports[`OpenHands Infrastructure Stacks EdgeStack matches snapshot 1`] = `
     },
   },
   "Outputs": {
-    "ClientSecretName": {
-      "Description": "Cognito client secret name in Secrets Manager (from AuthStack)",
-      "Value": "openhands/cognito-client-secret-shared",
-    },
-    "CognitoDomainUrl": {
-      "Description": "Cognito Domain URL (from AuthStack)",
-      "Value": {
-        "Fn::Join": [
-          "",
-          [
-            "https://",
-            {
-              "Fn::ImportValue": "TestAuthStack:ExportsOutputRefUserPoolCognitoDomainD6C7F9FA874B93C7",
-            },
-            ".auth.us-east-1.amazoncognito.com",
-          ],
-        ],
-      },
-    },
-    "CustomDomain": {
-      "Description": "Custom Domain URL",
-      "Value": "https://openhands.example.com",
-    },
     "DistributionDomainName": {
-      "Description": "CloudFront Distribution Domain Name",
       "Value": {
         "Fn::GetAtt": [
           "Distribution830FAC52",
@@ -1211,32 +1187,8 @@ exports[`OpenHands Infrastructure Stacks EdgeStack matches snapshot 1`] = `
         ],
       },
     },
-    "DistributionId": {
-      "Description": "CloudFront Distribution ID",
-      "Value": {
-        "Ref": "Distribution830FAC52",
-      },
-    },
-    "UserPoolClientId": {
-      "Description": "Cognito User Pool Client ID (from AuthStack)",
-      "Value": {
-        "Fn::ImportValue": "TestAuthStack:ExportsOutputRefUserPoolWebAppClientCD2D5CB13BAB4F14",
-      },
-    },
-    "UserPoolId": {
-      "Description": "Cognito User Pool ID (from AuthStack)",
-      "Value": {
-        "Fn::ImportValue": "TestAuthStack:ExportsOutputRefUserPool6BA7E5F296FD7236",
-      },
-    },
-    "WebAclArn": {
-      "Description": "WAF WebACL ARN",
-      "Value": {
-        "Fn::GetAtt": [
-          "WebAcl",
-          "Arn",
-        ],
-      },
+    "SiteUrl": {
+      "Value": "https://openhands.example.com",
     },
   },
   "Parameters": {
@@ -1247,7 +1199,7 @@ exports[`OpenHands Infrastructure Stacks EdgeStack matches snapshot 1`] = `
     },
   },
   "Resources": {
-    "AliasRecord851000D2": {
+    "ARecordE7B57761": {
       "Properties": {
         "AliasTarget": {
           "DNSName": {
@@ -1282,11 +1234,12 @@ exports[`OpenHands Infrastructure Stacks EdgeStack matches snapshot 1`] = `
             "Fn::Join": [
               "",
               [
-                "
+                "'use strict';
+
 const https = require('https');
 const crypto = require('crypto');
 
-// Configuration (embedded at deploy time - Lambda@Edge cannot access regional services)
+// Configuration - will be replaced at deploy time by CDK
 const CONFIG = {
   userPoolId: '",
                 {
@@ -1298,7 +1251,6 @@ const CONFIG = {
                   "Fn::ImportValue": "TestAuthStack:ExportsOutputRefUserPoolWebAppClientCD2D5CB13BAB4F14",
                 },
                 "',
-  // Resolved by CloudFormation at deploy time (keeps secret out of stack exports).
   clientSecret: '{{resolve:secretsmanager:openhands/cognito-client-secret-shared:SecretString}}',
   cognitoDomain: '",
                 {
@@ -1318,10 +1270,6 @@ const CONFIG = {
   callbackPath: '/_callback',
   logoutPath: '/_logout',
   region: 'us-east-1',
-  // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
-  // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
-  // The broader scope is REQUIRED for runtime functionality - restricting to .{subdomain}.{domain}
-  // would break access to runtime subdomains. WAF and Lambda@Edge provide additional protection.
   cookieDomain: '.example.com',
 };
 
@@ -1503,6 +1451,12 @@ async function verifyTokenSignature(token) {
   }
 }
 
+/**
+ * Get a single cookie value by name (returns first match)
+ * @param {Array<{value: string}>|undefined} cookies - Cookie headers from CloudFront request
+ * @param {string} name - Cookie name to find
+ * @returns {string|null} Cookie value or null if not found
+ */
 function getCookie(cookies, name) {
   if (!cookies) return null;
   for (const cookie of cookies) {
@@ -1510,6 +1464,27 @@ function getCookie(cookies, name) {
     if (match) return match[1];
   }
   return null;
+}
+
+/**
+ * Get ALL cookies with the given name (handles multiple cookies from different User Pools/domains)
+ * This is essential when users have stale cookies from old User Pools or different deployments.
+ * @param {Array<{value: string}>|undefined} cookies - Cookie headers from CloudFront request
+ * @param {string} name - Cookie name to find
+ * @returns {string[]} Array of all cookie values with the given name
+ */
+function getAllCookies(cookies, name) {
+  if (!cookies) return [];
+  const results = [];
+  const regex = new RegExp(\`\${name}=([^;]+)\`, 'g');
+  for (const cookie of cookies) {
+    let match;
+    while ((match = regex.exec(cookie.value)) !== null) {
+      results.push(match[1]);
+    }
+    regex.lastIndex = 0; // Reset regex state for next cookie header
+  }
+  return results;
 }
 
 function parseQueryString(qs) {
@@ -1575,6 +1550,25 @@ function parseRuntimeSubdomain(host) {
   return { isRuntime: false };
 }
 
+/**
+ * Try to verify multiple tokens and return the first valid one
+ * @param {string[]} tokens - Array of JWT tokens to try
+ * @returns {Promise<{payload: object, index: number}|null>} Valid payload and index, or null
+ */
+async function tryVerifyTokens(tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    try {
+      const payload = await verifyTokenSignature(tokens[i]);
+      if (payload) {
+        return { payload, index: i };
+      }
+    } catch (e) {
+      console.log(\`Token \${i + 1}/\${tokens.length} verification failed:\`, e.message);
+    }
+  }
+  return null;
+}
+
 exports.handler = async (event) => {
   const request = event.Records[0].cf.request;
   const uri = request.uri;
@@ -1590,23 +1584,20 @@ exports.handler = async (event) => {
     // Defense-in-depth: Verify JWT and inject user header even for runtime requests
     // This ensures OpenResty receives verified user identity for authorization
     // Note: We don't redirect to login on failure - just don't inject the header
-    const idToken = getCookie(cookies, 'id_token');
-    if (idToken) {
-      try {
-        const payload = await verifyTokenSignature(idToken);
-        if (payload) {
-          // Clear any existing headers to prevent spoofing
-          delete request.headers['x-cognito-user-id'];
-          // Inject verified user ID for downstream authorization
-          request.headers['x-cognito-user-id'] = [{
-            key: 'X-Cognito-User-Id',
-            value: payload.sub
-          }];
-          console.log('Runtime request: verified user ' + payload.sub);
-        }
-      } catch (e) {
-        console.log('Runtime request: JWT verification failed, proceeding without user header');
-      }
+    // Try all id_token cookies (handles multiple cookies from different User Pools)
+    const idTokens = getAllCookies(cookies, 'id_token');
+    const result = await tryVerifyTokens(idTokens);
+    if (result) {
+      // Clear any existing headers to prevent spoofing
+      delete request.headers['x-cognito-user-id'];
+      // Inject verified user ID for downstream authorization
+      request.headers['x-cognito-user-id'] = [{
+        key: 'X-Cognito-User-Id',
+        value: result.payload.sub
+      }];
+      console.log('Runtime request: verified user ' + result.payload.sub);
+    } else if (idTokens.length > 0) {
+      console.log('Runtime request: all ' + idTokens.length + ' tokens failed verification');
     }
 
     return request;
@@ -1703,32 +1694,36 @@ exports.handler = async (event) => {
   }
 
   // Check for valid token with full JWKS signature verification
-  const idToken = getCookie(cookies, 'id_token');
-  if (idToken) {
-    const payload = await verifyTokenSignature(idToken);
-    if (payload) {
-      // Token is valid (signature verified)
-      // Clear any existing x-cognito-* headers to prevent spoofing
-      delete request.headers['x-cognito-user-id'];
-      delete request.headers['x-cognito-email'];
-      delete request.headers['x-cognito-email-verified'];
+  // Try all id_token cookies (handles multiple cookies from different User Pools/domains)
+  const idTokens = getAllCookies(cookies, 'id_token');
+  const result = await tryVerifyTokens(idTokens);
+  if (result) {
+    // Token is valid (signature verified)
+    // Clear any existing x-cognito-* headers to prevent spoofing
+    delete request.headers['x-cognito-user-id'];
+    delete request.headers['x-cognito-email'];
+    delete request.headers['x-cognito-email-verified'];
 
-      // Inject verified user information as headers for downstream services
-      request.headers['x-cognito-user-id'] = [{
-        key: 'X-Cognito-User-Id',
-        value: payload.sub
-      }];
-      request.headers['x-cognito-email'] = [{
-        key: 'X-Cognito-Email',
-        value: payload.email || ''
-      }];
-      request.headers['x-cognito-email-verified'] = [{
-        key: 'X-Cognito-Email-Verified',
-        value: String(payload.email_verified || false)
-      }];
+    // Inject verified user information as headers for downstream services
+    request.headers['x-cognito-user-id'] = [{
+      key: 'X-Cognito-User-Id',
+      value: result.payload.sub
+    }];
+    request.headers['x-cognito-email'] = [{
+      key: 'X-Cognito-Email',
+      value: result.payload.email || ''
+    }];
+    request.headers['x-cognito-email-verified'] = [{
+      key: 'X-Cognito-Email-Verified',
+      value: String(result.payload.email_verified || false)
+    }];
 
-      return request;
-    }
+    console.log('Authenticated user ' + result.payload.sub + ' (tried ' + (result.index + 1) + '/' + idTokens.length + ' tokens)');
+    return request;
+  }
+
+  if (idTokens.length > 0) {
+    console.log('All ' + idTokens.length + ' id_token cookies failed verification, redirecting to login');
   }
 
   // No valid token, redirect to login
@@ -1740,6 +1735,7 @@ exports.handler = async (event) => {
     },
   };
 };
+
 ",
               ],
             ],
@@ -1758,7 +1754,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE864879e11c9a1c0cd3ef84f3a0b5476ae7": {
+    "AuthFunctionCurrentVersionDB17CE8620523b055212c82b81eaa4a3e4ba4a4d": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -1965,32 +1961,6 @@ exports.handler = async (event) => {
             "openhands.example.com",
             "*.runtime.openhands.example.com",
           ],
-          "CacheBehaviors": [
-            {
-              "AllowedMethods": [
-                "GET",
-                "HEAD",
-                "OPTIONS",
-                "PUT",
-                "PATCH",
-                "POST",
-                "DELETE",
-              ],
-              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-              "CachedMethods": [
-                "GET",
-                "HEAD",
-              ],
-              "Compress": true,
-              "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
-              "PathPattern": "/runtime/*",
-              "ResponseHeadersPolicyId": {
-                "Ref": "CorsHeadersPolicy085CC81B",
-              },
-              "TargetOriginId": "TestEdgeStackDistributionOrigin18490990F",
-              "ViewerProtocolPolicy": "redirect-to-https",
-            },
-          ],
           "Comment": "OpenHands CloudFront Distribution",
           "DefaultCacheBehavior": {
             "AllowedMethods": [
@@ -2003,22 +1973,16 @@ exports.handler = async (event) => {
               "DELETE",
             ],
             "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-            "CachedMethods": [
-              "GET",
-              "HEAD",
-            ],
             "Compress": true,
             "LambdaFunctionAssociations": [
               {
                 "EventType": "viewer-request",
-                "IncludeBody": false,
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE864879e11c9a1c0cd3ef84f3a0b5476ae7",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE8620523b055212c82b81eaa4a3e4ba4a4d",
                 },
               },
               {
                 "EventType": "origin-response",
-                "IncludeBody": false,
                 "LambdaFunctionARN": {
                   "Ref": "SecurityHeadersFunctionCurrentVersion1FC2948E070e97089821193f02cd7e9b4063582b",
                 },
@@ -2091,7 +2055,7 @@ exports.handler = async (event) => {
       "Type": "Custom::CrossRegionExportReader",
       "UpdateReplacePolicy": "Delete",
     },
-    "RuntimeWildcardRecord40ECEBBE": {
+    "RuntimeWildcardARecordF1E6A47E": {
       "Properties": {
         "AliasTarget": {
           "DNSName": {

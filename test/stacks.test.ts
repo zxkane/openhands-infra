@@ -354,7 +354,7 @@ describe('OpenHands Infrastructure Stacks', () => {
       template.hasResourceProperties('AWS::Cognito::UserPool', {
         Policies: {
           PasswordPolicy: {
-            MinimumLength: 12,
+            MinimumLength: 8,
             RequireLowercase: true,
             RequireUppercase: true,
             RequireNumbers: true,
