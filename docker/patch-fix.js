@@ -333,13 +333,14 @@
                 }
               })
               .catch(function(e) {
-                console.log("Error checking settings:", e);
-                removeModal();
+                // Don't remove modal on error - let user see it and configure manually
+                console.error("Error checking settings:", e);
               });
           }
         })
         .catch(function(e) {
-          console.log("Error fetching models (LLM may not be configured):", e);
+          // Not an error if LLM isn't configured - modal stays open for user to configure
+          console.log("LLM may not be configured via config.toml:", e.message || e);
         });
       clearInterval(checkInterval);
       return;

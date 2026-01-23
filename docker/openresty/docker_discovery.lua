@@ -59,10 +59,19 @@ local function can_connect(ip, port)
   return false
 end
 
--- Find container by conversation_id and return its IP, port, and user_id
+-- Error types returned by find_container for proper HTTP status mapping
+_M.ERR_SOCKET = "socket_error"      -- Docker socket connection failed (503)
+_M.ERR_LIST = "list_error"          -- Failed to list containers (503)
+_M.ERR_PARSE = "parse_error"        -- Failed to parse Docker response (503)
+_M.ERR_NO_IP = "no_ip_error"        -- Container found but no IP address (502)
+_M.ERR_NOT_FOUND = "not_found"      -- No container with matching conversation_id (404)
+
+-- Find container by conversation_id and return its IP, port, user_id, and error type
 -- @param cid: conversation_id to search for
 -- @param tp: target port from URL
--- @return ip, port, user_id: container IP, port, and owner user_id (or nil if not found)
+-- @return ip, port, user_id, error_type: container IP, port, owner user_id, and error type
+--         On success: ip, port, user_id, nil
+--         On failure: nil, nil, nil, error_type (one of ERR_* constants)
 function _M.find_container(cid, tp)
   local h = http.new()
 
@@ -70,7 +79,7 @@ function _M.find_container(cid, tp)
   local ok, err = h:connect("unix:/var/run/docker.sock")
   if not ok then
     ngx.log(ngx.ERR, "Failed to connect to Docker socket: ", err)
-    return nil, nil
+    return nil, nil, nil, _M.ERR_SOCKET
   end
 
   -- List all containers
@@ -80,14 +89,14 @@ function _M.find_container(cid, tp)
   })
   if not res then
     ngx.log(ngx.ERR, "Failed to list containers: ", err)
-    return nil, nil
+    return nil, nil, nil, _M.ERR_LIST
   end
 
   local body = res:read_body()
   local ok2, containers = pcall(cjson.decode, body)
   if not ok2 then
     ngx.log(ngx.ERR, "Failed to decode container list: ", containers)
-    return nil, nil
+    return nil, nil, nil, _M.ERR_PARSE
   end
 
   -- Find container with matching conversation_id label
@@ -110,7 +119,7 @@ function _M.find_container(cid, tp)
 
       if not ip or ip == "" then
         ngx.log(ngx.WARN, "Container found but no IP address for conversation: ", cid)
-        return nil, nil
+        return nil, nil, nil, _M.ERR_NO_IP
       end
 
       -- Determine the target port to connect to on the container IP.
@@ -152,12 +161,12 @@ function _M.find_container(cid, tp)
       -- Get user_id label for ownership verification
       local user_id = labels["user_id"] or nil
       ngx.log(ngx.INFO, "Found container for ", cid, ": IP=", ip, ", port=", target_port, ", user_id=", user_id or "nil", " (requested=", tp, ")")
-      return ip, target_port, user_id
+      return ip, target_port, user_id, nil  -- Success: no error
     end
   end
 
   ngx.log(ngx.DEBUG, "No container found with conversation_id: ", cid)
-  return nil, nil, nil
+  return nil, nil, nil, _M.ERR_NOT_FOUND
 end
 
 return _M

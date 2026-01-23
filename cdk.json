@@ -17,6 +17,11 @@
     ]
   },
   "context": {
+    "authCallbackDomains": [
+      "openhands.aws.kane.mx",
+      "openhands.test.kane.mx"
+    ],
+    "authDomainPrefixSuffix": "shared",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,

@@ -162,7 +162,13 @@ export class ComputeStack extends cdk.Stack {
         OPENHANDS_VERSION: DEFAULT_OPENHANDS_VERSION,
       },
       // Exclude agent-server subdirectories from the build context
-      exclude: ['agent-server', 'agent-server-custom'],
+      exclude: [
+        'agent-server',
+        'agent-server-custom',
+        '**/__pycache__',
+        '**/*.pyc',
+        '**/.pytest_cache',
+      ],
     });
 
     const customAgentServerImage = new DockerImageAsset(this, 'CustomAgentServerImage', {

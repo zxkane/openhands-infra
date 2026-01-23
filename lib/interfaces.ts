@@ -19,6 +19,21 @@ export interface OpenHandsConfig {
   subDomain: string;
   /** AWS Region for deployment */
   region: string;
+  /** Display name used by the Cognito hosted authentication pages (managed login) */
+  siteName?: string;
+}
+
+/**
+ * Output from AuthStack (Cognito)
+ */
+export interface AuthStackOutput {
+  userPoolId: string;
+  userPoolDomainPrefix: string;
+  userPoolClientId: string;
+  /** Secrets Manager secret name that holds the Cognito app client secret */
+  clientSecretName: string;
+  /** Region where the user pool (and domain) exist */
+  region: string;
 }
 
 /**

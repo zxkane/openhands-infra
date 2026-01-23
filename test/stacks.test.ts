@@ -4,6 +4,7 @@ import { NetworkStack } from '../lib/network-stack';
 import { SecurityStack } from '../lib/security-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
 import { ComputeStack } from '../lib/compute-stack';
+import { AuthStack } from '../lib/auth-stack';
 import { EdgeStack } from '../lib/edge-stack';
 import { DatabaseStack } from '../lib/database-stack';
 import { OpenHandsConfig, DatabaseStackOutput } from '../lib/interfaces';
@@ -303,11 +304,86 @@ describe('OpenHands Infrastructure Stacks', () => {
     });
   });
 
+  describe('AuthStack', () => {
+    test('synthesizes correctly', () => {
+      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
+
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: edgeEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com', 'openhands.test.example.com'],
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        AutoVerifiedAttributes: ['email'],
+        UsernameAttributes: ['email'],
+      });
+
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        ClientName: 'Openhands on AWS',
+        CallbackURLs: Match.arrayWith([
+          'https://openhands.example.com/_callback',
+          'https://openhands.test.example.com/_callback',
+        ]),
+      });
+
+      template.hasResourceProperties('AWS::Cognito::UserPoolDomain', {
+        ManagedLoginVersion: 2,
+      });
+
+      template.resourceCountIs('AWS::Cognito::ManagedLoginBranding', 1);
+
+      template.hasResourceProperties('AWS::SecretsManager::Secret', {
+        Name: 'openhands/cognito-client-secret-shared',
+      });
+    });
+
+    test('creates user pool with secure password policy', () => {
+      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
+
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: edgeEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com'],
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        Policies: {
+          PasswordPolicy: {
+            MinimumLength: 12,
+            RequireLowercase: true,
+            RequireUppercase: true,
+            RequireNumbers: true,
+            RequireSymbols: true,
+          },
+        },
+      });
+    });
+
+    test('matches snapshot', () => {
+      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
+
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: edgeEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com'],
+      });
+
+      const template = Template.fromStack(stack);
+      expect(template.toJSON()).toMatchSnapshot();
+    });
+  });
+
   describe('EdgeStack', () => {
     let networkStack: NetworkStack;
     let securityStack: SecurityStack;
     let monitoringStack: MonitoringStack;
     let computeStack: ComputeStack;
+    let authStack: AuthStack;
 
     beforeEach(() => {
       networkStack = new NetworkStack(app, 'TestNetworkStack', {
@@ -335,6 +411,13 @@ describe('OpenHands Infrastructure Stacks', () => {
         monitoringOutput: monitoringStack.output,
         databaseOutput: mockDatabaseOutput,
       });
+
+      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
+      authStack = new AuthStack(app, 'TestAuthStack', {
+        env: edgeEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com'],
+      });
     });
 
     test('synthesizes correctly', () => {
@@ -344,28 +427,13 @@ describe('OpenHands Infrastructure Stacks', () => {
       const stack = new EdgeStack(app, 'TestEdgeStack', {
         env: edgeEnv,
         config: testConfig,
+        authOutput: authStack.output,
         computeOutput: computeStack.output,
         alb: computeStack.alb,
         crossRegionReferences: true,
       });
 
       const template = Template.fromStack(stack);
-
-      // Verify Cognito User Pool is created
-      template.hasResourceProperties('AWS::Cognito::UserPool', {
-        AutoVerifiedAttributes: ['email'],
-        UsernameAttributes: ['email'],
-      });
-
-      // Verify Cognito User Pool Client is created with expected auth flows
-      // Note: CDK generates auth flows based on authFlows config, order may vary
-      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
-        ExplicitAuthFlows: Match.arrayEquals([
-          'ALLOW_USER_PASSWORD_AUTH',
-          'ALLOW_USER_SRP_AUTH',
-          'ALLOW_REFRESH_TOKEN_AUTH',
-        ]),
-      });
 
       // Verify ACM Certificate is created
       template.hasResourceProperties('AWS::CertificateManager::Certificate', {
@@ -393,39 +461,13 @@ describe('OpenHands Infrastructure Stacks', () => {
       });
     });
 
-    test('creates user pool with secure password policy', () => {
-      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
-
-      const stack = new EdgeStack(app, 'TestEdgeStack', {
-        env: edgeEnv,
-        config: testConfig,
-        computeOutput: computeStack.output,
-        alb: computeStack.alb,
-        crossRegionReferences: true,
-      });
-
-      const template = Template.fromStack(stack);
-
-      // Verify password policy
-      template.hasResourceProperties('AWS::Cognito::UserPool', {
-        Policies: {
-          PasswordPolicy: {
-            MinimumLength: 12,
-            RequireLowercase: true,
-            RequireUppercase: true,
-            RequireNumbers: true,
-            RequireSymbols: true,
-          },
-        },
-      });
-    });
-
     test('creates WAF with managed rules', () => {
       const edgeEnv = { account: '123456789012', region: 'us-east-1' };
 
       const stack = new EdgeStack(app, 'TestEdgeStack', {
         env: edgeEnv,
         config: testConfig,
+        authOutput: authStack.output,
         computeOutput: computeStack.output,
         alb: computeStack.alb,
         crossRegionReferences: true,
@@ -454,6 +496,7 @@ describe('OpenHands Infrastructure Stacks', () => {
       const stack = new EdgeStack(app, 'TestEdgeStack', {
         env: edgeEnv,
         config: testConfig,
+        authOutput: authStack.output,
         computeOutput: computeStack.output,
         alb: computeStack.alb,
         crossRegionReferences: true,

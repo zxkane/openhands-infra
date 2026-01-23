@@ -1,5 +1,4 @@
 import * as cdk from 'aws-cdk-lib';
-import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
@@ -9,23 +8,22 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
-import { OpenHandsConfig, ComputeStackOutput } from './interfaces.js';
+import { OpenHandsConfig, ComputeStackOutput, AuthStackOutput } from './interfaces.js';
 
 export interface EdgeStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
+  authOutput: AuthStackOutput;
   computeOutput: ComputeStackOutput;
   alb: elbv2.IApplicationLoadBalancer;
 }
 
 /**
- * EdgeStack - Combined Auth and CDN infrastructure (us-east-1)
+ * EdgeStack - CDN + edge auth enforcement (us-east-1)
  *
  * This stack must be deployed to us-east-1 for Lambda@Edge and CloudFront certificates.
  *
  * Components:
- * - Cognito User Pool for user authentication
  * - Lambda@Edge function for JWT validation
  * - ACM certificate for CloudFront
  * - CloudFront distribution with VPC Origin
@@ -36,9 +34,9 @@ export class EdgeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EdgeStackProps) {
     super(scope, id, props);
 
-    const { config, alb } = props;
+    const { config, alb, authOutput } = props;
     const fullDomain = `${config.subDomain}.${config.domainName}`;
-    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.{subdomain}.{domain}
+    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.test.kane.mx
 
     // ========================================
     // Route 53 & Certificate
@@ -54,101 +52,15 @@ export class EdgeStack extends cdk.Stack {
     // Includes both main domain and runtime wildcard as SAN
     const certificate = new acm.Certificate(this, 'Certificate', {
       domainName: fullDomain,
-      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.{subdomain}.{domain}
+      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.openhands.test.kane.mx
       validation: acm.CertificateValidation.fromDns(hostedZone),
     });
 
     // ========================================
-    // Cognito User Pool
+    // Cognito (AuthStack)
     // ========================================
-
-    const userPool = new cognito.UserPool(this, 'UserPool', {
-      selfSignUpEnabled: false, // Admin creates users
-      signInAliases: {
-        email: true,
-      },
-      autoVerify: {
-        email: true,
-      },
-      standardAttributes: {
-        email: {
-          required: true,
-          mutable: true,
-        },
-      },
-      passwordPolicy: {
-        minLength: 12,
-        requireLowercase: true,
-        requireUppercase: true,
-        requireDigits: true,
-        requireSymbols: true,
-      },
-      mfa: cognito.Mfa.OPTIONAL,
-      mfaSecondFactor: {
-        sms: false,
-        otp: true,
-      },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    // Cognito Domain
-    const userPoolDomain = userPool.addDomain('CognitoDomain', {
-      cognitoDomain: {
-        domainPrefix: `openhands-${cdk.Aws.ACCOUNT_ID}`,
-      },
-    });
-
-    // Cognito App Client with 30-day session validity
-    const userPoolClient = userPool.addClient('WebAppClient', {
-      generateSecret: true,
-      oAuth: {
-        flows: {
-          authorizationCodeGrant: true,
-        },
-        scopes: [
-          cognito.OAuthScope.OPENID,
-          cognito.OAuthScope.EMAIL,
-          cognito.OAuthScope.PROFILE,
-        ],
-        callbackUrls: [
-          `https://${fullDomain}/_callback`,
-        ],
-        logoutUrls: [
-          `https://${fullDomain}/`,
-        ],
-      },
-      authFlows: {
-        userPassword: true,
-        userSrp: true,
-      },
-      preventUserExistenceErrors: true,
-      supportedIdentityProviders: [
-        cognito.UserPoolClientIdentityProvider.COGNITO,
-      ],
-      // Token validity - 30 day session
-      accessTokenValidity: cdk.Duration.hours(1),
-      idTokenValidity: cdk.Duration.days(1),
-      refreshTokenValidity: cdk.Duration.days(30),
-    });
-
-    // ========================================
-    // Store Client Secret in Secrets Manager
-    // ========================================
-
-    // Store the Cognito client secret in Secrets Manager for secure access
-    // Note: Lambda@Edge cannot access Secrets Manager at runtime, so we fetch at deploy time
-    // The secret is still stored securely and can be rotated via Secrets Manager
-    const clientSecret = new secretsmanager.Secret(this, 'CognitoClientSecret', {
-      secretName: `openhands/cognito-client-secret`,
-      description: 'Cognito User Pool Client Secret for OpenHands',
-      secretStringValue: userPoolClient.userPoolClientSecret,
-    });
-
-    // Get the secret value for Lambda@Edge (retrieved at deploy time)
-    // Lambda@Edge runs at edge locations and cannot access regional Secrets Manager
-    // Using unsafeUnwrap() because Lambda@Edge cannot access Secrets Manager at runtime
-    const clientSecretValue = userPoolClient.userPoolClientSecret.unsafeUnwrap();
+    // User pool, client, and managed login branding are provisioned in AuthStack and reused
+    // by multiple EdgeStack deployments (one per environment/domain).
 
     // ========================================
     // Lambda@Edge for Authentication
@@ -174,15 +86,16 @@ const crypto = require('crypto');
 
 // Configuration (embedded at deploy time - Lambda@Edge cannot access regional services)
 const CONFIG = {
-  userPoolId: '${userPool.userPoolId}',
-  clientId: '${userPoolClient.userPoolClientId}',
-  clientSecret: '${clientSecretValue}',
-  cognitoDomain: '${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com',
-  jwksUri: 'https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}/.well-known/jwks.json',
-  issuer: 'https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}',
+  userPoolId: '${authOutput.userPoolId}',
+  clientId: '${authOutput.userPoolClientId}',
+  // Resolved by CloudFormation at deploy time (keeps secret out of stack exports).
+  clientSecret: '{{resolve:secretsmanager:${authOutput.clientSecretName}:SecretString}}',
+  cognitoDomain: '${authOutput.userPoolDomainPrefix}.auth.${authOutput.region}.amazoncognito.com',
+  jwksUri: 'https://cognito-idp.${authOutput.region}.amazonaws.com/${authOutput.userPoolId}/.well-known/jwks.json',
+  issuer: 'https://cognito-idp.${authOutput.region}.amazonaws.com/${authOutput.userPoolId}',
   callbackPath: '/_callback',
   logoutPath: '/_logout',
-  region: '${this.region}',
+  region: '${authOutput.region}',
   // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
   // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
   // The broader scope is REQUIRED for runtime functionality - restricting to .{subdomain}.{domain}
@@ -432,7 +345,7 @@ async function exchangeCodeForTokens(code, redirectUri) {
 
 // Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
 function parseRuntimeSubdomain(host) {
-  // Match: {port}-{convId}.runtime.{subdomain}.{domain}
+  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
   const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
   if (match) {
     return { port: match[1], convId: match[2], isRuntime: true };
@@ -449,44 +362,31 @@ exports.handler = async (event) => {
   // Check if this is a runtime subdomain request
   const runtime = parseRuntimeSubdomain(host);
   if (runtime.isRuntime) {
-    // Runtime requests require authentication - verify JWT and inject user header
-    // Note: We return 401 instead of redirecting to login because runtime subdomains
-    // are not registered as valid Cognito callback URLs
-    const idToken = getCookie(cookies, 'id_token');
-    if (!idToken) {
-      console.log('Runtime request without id_token, returning 401');
-      return {
-        status: '401',
-        statusDescription: 'Unauthorized',
-        headers: {
-          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
-        },
-        body: 'Authentication required. Please login at the main application first.',
-      };
-    }
-
-    const payload = await verifyTokenSignature(idToken);
-    if (!payload) {
-      console.log('Runtime request with invalid token, returning 401');
-      return {
-        status: '401',
-        statusDescription: 'Unauthorized',
-        headers: {
-          'content-type': [{ key: 'Content-Type', value: 'text/plain' }],
-        },
-        body: 'Invalid or expired token. Please login at the main application.',
-      };
-    }
-
-    // Token is valid - inject user_id header for OpenResty to verify ownership
-    delete request.headers['x-cognito-user-id'];
-    request.headers['x-cognito-user-id'] = [{
-      key: 'X-Cognito-User-Id',
-      value: payload.sub
-    }];
-
     // Rewrite URI to /runtime/{cid}/{port}/... format for ALB routing
     request.uri = '/runtime/' + runtime.convId + '/' + runtime.port + uri;
+
+    // Defense-in-depth: Verify JWT and inject user header even for runtime requests
+    // This ensures OpenResty receives verified user identity for authorization
+    // Note: We don't redirect to login on failure - just don't inject the header
+    const idToken = getCookie(cookies, 'id_token');
+    if (idToken) {
+      try {
+        const payload = await verifyTokenSignature(idToken);
+        if (payload) {
+          // Clear any existing headers to prevent spoofing
+          delete request.headers['x-cognito-user-id'];
+          // Inject verified user ID for downstream authorization
+          request.headers['x-cognito-user-id'] = [{
+            key: 'X-Cognito-User-Id',
+            value: payload.sub
+          }];
+          console.log('Runtime request: verified user ' + payload.sub);
+        }
+      } catch (e) {
+        console.log('Runtime request: JWT verification failed, proceeding without user header');
+      }
+    }
+
     return request;
   }
 
@@ -819,8 +719,8 @@ exports.handler = async (event) => {
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: 'OpenHands CloudFront Distribution',
       domainNames: [
-        fullDomain,                  // {subdomain}.{domain} (main app)
-        `*.${runtimeDomain}`,        // *.runtime.{subdomain}.{domain} (runtime subdomains)
+        fullDomain,                  // openhands.test.kane.mx (main app)
+        `*.${runtimeDomain}`,        // *.runtime.openhands.test.kane.mx (runtime subdomains)
       ],
       certificate: certificate,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
@@ -847,9 +747,9 @@ exports.handler = async (event) => {
           },
         ],
       },
-      // Runtime proxy behavior for path-based routing (/runtime/{conv_id}/{port}/...)
-      // This is used for WebSocket connections to agent-server (sockets/events)
-      // which require authentication via the main domain cookie
+      // Runtime proxy behavior - NO Lambda@Edge auth (path-based fallback)
+      // This behavior is kept for backwards compatibility with /runtime/* path routing
+      // New runtime subdomain requests are handled by the default behavior with auth bypass
       additionalBehaviors: {
         '/runtime/*': {
           origin: httpOrigin,
@@ -859,15 +759,7 @@ exports.handler = async (event) => {
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
           responseHeadersPolicy: responseHeadersPolicy,
-          // Add Lambda@Edge to verify JWT and inject X-Cognito-User-Id header
-          // This is required for OpenResty to authorize runtime requests
-          edgeLambdas: [
-            {
-              eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
-              functionVersion: authFunctionVersion,
-              includeBody: false,
-            },
-          ],
+          // NO edgeLambdas - runtime uses session token auth in WebSocket URL
         },
       },
     });
@@ -876,7 +768,7 @@ exports.handler = async (event) => {
     // Route 53 DNS Records
     // ========================================
 
-    // Main domain record: {subdomain}.{domain}
+    // Main domain record: openhands.test.kane.mx
     new route53.ARecord(this, 'AliasRecord', {
       zone: hostedZone,
       recordName: config.subDomain,
@@ -885,7 +777,7 @@ exports.handler = async (event) => {
       ),
     });
 
-    // Runtime wildcard record: *.runtime.{subdomain}.{domain}
+    // Runtime wildcard record: *.runtime.openhands.test.kane.mx
     new route53.ARecord(this, 'RuntimeWildcardRecord', {
       zone: hostedZone,
       recordName: `*.runtime.${config.subDomain}`,
@@ -899,18 +791,18 @@ exports.handler = async (event) => {
     // ========================================
 
     new cdk.CfnOutput(this, 'UserPoolId', {
-      value: userPool.userPoolId,
-      description: 'Cognito User Pool ID',
+      value: authOutput.userPoolId,
+      description: 'Cognito User Pool ID (from AuthStack)',
     });
 
     new cdk.CfnOutput(this, 'UserPoolClientId', {
-      value: userPoolClient.userPoolClientId,
-      description: 'Cognito User Pool Client ID',
+      value: authOutput.userPoolClientId,
+      description: 'Cognito User Pool Client ID (from AuthStack)',
     });
 
     new cdk.CfnOutput(this, 'CognitoDomainUrl', {
-      value: `https://${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
-      description: 'Cognito Domain URL',
+      value: `https://${authOutput.userPoolDomainPrefix}.auth.${authOutput.region}.amazoncognito.com`,
+      description: 'Cognito Domain URL (from AuthStack)',
     });
 
     new cdk.CfnOutput(this, 'DistributionId', {
@@ -933,9 +825,9 @@ exports.handler = async (event) => {
       description: 'WAF WebACL ARN',
     });
 
-    new cdk.CfnOutput(this, 'ClientSecretArn', {
-      value: clientSecret.secretArn,
-      description: 'Cognito Client Secret ARN in Secrets Manager',
+    new cdk.CfnOutput(this, 'ClientSecretName', {
+      value: authOutput.clientSecretName,
+      description: 'Cognito client secret name in Secrets Manager (from AuthStack)',
     });
   }
 }

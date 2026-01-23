@@ -7,7 +7,7 @@ AWS CDK TypeScript project for deploying [OpenHands](https://github.com/All-Hand
 ```
 User → CloudFront (WAF+Lambda@Edge Auth) → VPC Origin → Internal ALB → EC2 m7g.xlarge Graviton (ASG)
            │                                                                    ↓
-           └── Cognito (OAuth2)                                     OpenHands Docker + Watchtower
+           └── Cognito (OAuth2, Managed Login v2)                   OpenHands Docker + Watchtower
                                                                                 ↓
                                                               VPC Endpoints → Bedrock / CloudWatch Logs
                                                                                 ↓
@@ -62,6 +62,10 @@ Required context parameters:
 | `domainName` | Domain name | `example.com` |
 | `subDomain` | Subdomain for OpenHands | `openhands` |
 | `region` | AWS region (optional, defaults to us-east-1) | `us-west-2` |
+| `siteName` | Cognito managed login site name (optional) | `Openhands on AWS` |
+| `authCallbackDomains` | Extra OAuth callback domains for shared Cognito client (optional; JSON array or comma-separated) | `["openhands.aws.kane.mx","openhands.test.kane.mx"]` |
+| `authDomainPrefixSuffix` | Suffix for Cognito domain prefix (optional; avoids collisions) | `shared` |
+| `edgeStackSuffix` | Suffix for Edge stack name in us-east-1 (optional; enables multiple Edge stacks) | `openhands-aws-kane-mx` |
 
 ### 3. Bootstrap CDK (First Time Only)
 
@@ -86,6 +90,7 @@ npx cdk deploy --all \
 ```
 
 **Deployment Order** (handled automatically by CDK):
+0. Auth (us-east-1) - shared Cognito (managed login branding + multi-domain callbacks)
 1. Network (main region)
 2. Monitoring (main region) - independent, creates S3 data bucket
 3. Security (main region) - depends on Network, Monitoring
@@ -104,15 +109,17 @@ https://<subdomain>.<domain-name>
 
 | Stack | Region | Description |
 |-------|--------|-------------|
+| `OpenHands-Auth` | us-east-1 | Cognito User Pool + Managed Login v2 branding |
 | `OpenHands-Network` | Main | VPC import, VPC Endpoints |
 | `OpenHands-Monitoring` | Main | CloudWatch Logs, Alarms, Dashboard, Backup, S3 Data Bucket |
 | `OpenHands-Security` | Main | IAM Roles, Security Groups |
 | `OpenHands-Database` | Main | Aurora Serverless v2 PostgreSQL with RDS Proxy |
 | `OpenHands-Compute` | Main | EC2 ASG, Launch Template, Internal ALB |
-| `OpenHands-Edge` | us-east-1 | Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 |
+| `OpenHands-Edge-*` | us-east-1 | Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 (per domain/environment) |
 
 **Notes**:
-- The Edge stack combines authentication (Cognito, Lambda@Edge) and CDN (CloudFront, WAF) into a single stack to avoid cross-stack reference issues during CloudFormation updates.
+- Cognito is provisioned in `OpenHands-Auth` so multiple Edge stacks can reuse a single user pool/client.
+- To add another domain/environment, include it in `authCallbackDomains`, deploy `OpenHands-Auth`, then deploy a new `OpenHands-Edge-<edgeStackSuffix>`.
 - The Database stack is **required** for self-healing architecture - it persists conversation history across EC2 instance replacements.
 
 ## Cost Estimate
