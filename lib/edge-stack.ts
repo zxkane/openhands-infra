@@ -47,7 +47,7 @@ export class EdgeStack extends cdk.Stack {
       '/openhands/compute/origin-verify-secret'
     );
     const fullDomain = `${config.subDomain}.${config.domainName}`;
-    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.test.kane.mx
+    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.example.com
 
     // ========================================
     // Route 53 & Certificate
@@ -63,7 +63,7 @@ export class EdgeStack extends cdk.Stack {
     // Includes both main domain and runtime wildcard as SAN
     const certificate = new acm.Certificate(this, 'Certificate', {
       domainName: fullDomain,
-      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.openhands.test.kane.mx
+      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.openhands.example.com
       validation: acm.CertificateValidation.fromDns(hostedZone),
     });
 
@@ -324,8 +324,8 @@ exports.handler = async (event) => {
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: 'OpenHands CloudFront Distribution',
       domainNames: [
-        fullDomain,                  // openhands.test.kane.mx (main app)
-        `*.${runtimeDomain}`,        // *.runtime.openhands.test.kane.mx (runtime subdomains)
+        fullDomain,                  // openhands.example.com (main app)
+        `*.${runtimeDomain}`,        // *.runtime.openhands.example.com (runtime subdomains)
       ],
       certificate: certificate,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,

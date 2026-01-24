@@ -1845,7 +1845,7 @@ async function exchangeCodeForTokens(code, redirectUri) {
 
 // Runtime subdomain parsing - {port}-{cid}.runtime.{subdomain}.{domain}
 function parseRuntimeSubdomain(host) {
-  // Match: {port}-{convId}.runtime.openhands.test.kane.mx
+  // Match: {port}-{convId}.runtime.openhands.example.com
   const match = host.match(/^(\\d+)-([a-f0-9]{32})\\.runtime\\./);
   if (match) {
     return { port: match[1], convId: match[2], isRuntime: true };
@@ -2057,7 +2057,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE8620523b055212c82b81eaa4a3e4ba4a4d": {
+    "AuthFunctionCurrentVersionDB17CE86d156ee4ec6a3c0c526b534c66ac82140": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -2207,7 +2207,7 @@ exports.handler = async (event) => {
               {
                 "EventType": "viewer-request",
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE8620523b055212c82b81eaa4a3e4ba4a4d",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE86d156ee4ec6a3c0c526b534c66ac82140",
                 },
               },
               {

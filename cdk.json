@@ -18,8 +18,8 @@
   },
   "context": {
     "authCallbackDomains": [
-      "openhands.aws.kane.mx",
-      "openhands.test.kane.mx"
+      "openhands.example.com",
+      "openhands.test.example.com"
     ],
     "authDomainPrefixSuffix": "shared",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,

@@ -63,7 +63,7 @@ Required context parameters:
 | `subDomain` | Subdomain for OpenHands | `openhands` |
 | `region` | AWS region (optional, defaults to us-east-1) | `us-west-2` |
 | `siteName` | Cognito managed login site name (optional) | `Openhands on AWS` |
-| `authCallbackDomains` | Extra OAuth callback domains for shared Cognito client (optional; JSON array or comma-separated) | `["openhands.aws.kane.mx","openhands.test.kane.mx"]` |
+| `authCallbackDomains` | Extra OAuth callback domains for shared Cognito client (optional; JSON array or comma-separated) | `["openhands.example.com","openhands.test.example.com"]` |
 | `authDomainPrefixSuffix` | Suffix for Cognito domain prefix (optional; avoids collisions) | `shared` |
 | `edgeStackSuffix` | Suffix for Edge stack name in us-east-1 (optional; enables multiple Edge stacks) | `openhands-aws-kane-mx` |
 
