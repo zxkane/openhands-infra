@@ -9,6 +9,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as cr from 'aws-cdk-lib/custom-resources';
+import * as efs from 'aws-cdk-lib/aws-efs';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
@@ -127,7 +128,7 @@ export class ComputeStack extends cdk.Stack {
 
     const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput } = props;
     const { vpc } = networkOutput;
-    const { albSecurityGroup, ec2SecurityGroup, ec2Role, ec2InstanceProfile } = securityOutput;
+    const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile } = securityOutput;
     const { alertTopic, dataBucket } = monitoringOutput;
 
     // Full domain for runtime URL pattern
@@ -136,6 +137,55 @@ export class ComputeStack extends cdk.Stack {
     // Get private subnets for EC2 and internal ALB
     const privateSubnets = vpc.selectSubnets({
       subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+    });
+
+    // Persistent workspace storage
+    // Mounting /data/openhands from EFS allows conversations to be resumed after EC2 replacement.
+    const workspaceFileSystem = new efs.FileSystem(this, 'WorkspaceFileSystem', {
+      vpc,
+      vpcSubnets: privateSubnets,
+      securityGroup: efsSecurityGroup,
+      encrypted: true,
+      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
+      throughputMode: efs.ThroughputMode.BURSTING,
+      lifecyclePolicy: efs.LifecyclePolicy.AFTER_14_DAYS,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    cdk.Tags.of(workspaceFileSystem).add('backup', 'true');
+
+    // Ensure the EFS file system policy allows mounting.
+    // Some environments may default to a policy that omits ClientMount, causing mounts to fail with "access denied".
+    workspaceFileSystem.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'AllowClientMountViaMountTarget',
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.AnyPrincipal()],
+      actions: [
+        'elasticfilesystem:ClientMount',
+        'elasticfilesystem:ClientWrite',
+        'elasticfilesystem:ClientRootAccess',
+      ],
+      // IMPORTANT: Use Resource="*" to avoid a self-dependency cycle in CloudFormation when
+      // embedding FileSystemPolicy directly on AWS::EFS::FileSystem.
+      resources: ['*'],
+      conditions: {
+        Bool: {
+          'elasticfilesystem:AccessedViaMountTarget': 'true',
+        },
+      },
+    }));
+
+    const workspaceAccessPoint = new efs.AccessPoint(this, 'WorkspaceAccessPoint', {
+      fileSystem: workspaceFileSystem,
+      path: '/openhands',
+      posixUser: {
+        uid: '0',
+        gid: '0',
+      },
+      createAcl: {
+        ownerUid: '0',
+        ownerGid: '0',
+        permissions: '0777',
+      },
     });
 
     // SSM Parameters for Docker image versions (allows runtime updates without redeploying)
@@ -154,9 +204,10 @@ export class ComputeStack extends cdk.Stack {
     });
 
     // Origin verification secret for CloudFront-to-ALB authentication
-    // This secret is shared with EdgeStack via SSM Parameter Store in us-east-1
+    // This secret is shared with EdgeStack via cross-stack reference
     // CloudFront sends this in X-Origin-Verify header, ALB validates it
-    const originVerifySecret = cdk.Fn.select(2, cdk.Fn.split('/', `${cdk.Aws.STACK_ID}`));
+    // Use uniqueId which generates a stable hash based on construct path (works across stacks)
+    const originVerifySecret = cdk.Names.uniqueId(this).substring(0, 32);
 
     // Store in local region for ALB listener rules
     const originVerifyParam = new ssm.StringParameter(this, 'OriginVerifyParam', {
@@ -231,6 +282,7 @@ export class ComputeStack extends cdk.Stack {
       'trap \'error_handler $LINENO\' ERR',
       'retry() { for i in 1 2 3; do "$@" && return 0; sleep 10; done; return 1; }',
       'retry dnf install -y docker',
+      'retry dnf install -y amazon-efs-utils',
       'mkdir -p /etc/docker',
       'echo \'{"default-address-pools":[{"base":"172.17.0.0/12","size":24}],"log-driver":"json-file","log-opts":{"max-size":"100m","max-file":"3"}}\' > /etc/docker/daemon.json',
       'systemctl enable --now docker',
@@ -244,6 +296,11 @@ export class ComputeStack extends cdk.Stack {
       'for i in {1..60}; do [ -e /dev/nvme1n1 ] && break; sleep 5; done; [ -e /dev/nvme1n1 ] || exit 1',
       'blkid /dev/nvme1n1 || mkfs -t xfs /dev/nvme1n1',
       'mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab',
+      '# Mount EFS at /data/openhands (persists workspaces across EC2 replacement)',
+      'mkdir -p /data/openhands',
+      `echo "${workspaceFileSystem.fileSystemId}:/ /data/openhands efs _netdev,tls,accesspoint=${workspaceAccessPoint.accessPointId} 0 0" >> /etc/fstab`,
+      'retry mount -a',
+      'mountpoint -q /data/openhands || exit 1',
       'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
       `RUNTIME_VERSION=$(aws ssm get-parameter --name "${runtimeVersionParam.parameterName}" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "${DEFAULT_RUNTIME_VERSION}")`,
       'cat > /data/openhands/docker-compose.yml << EOF',
@@ -276,12 +333,21 @@ export class ComputeStack extends cdk.Stack {
       '    environment:',
       '      - SANDBOX_USER_ID=0',
       '      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION',
+      // Ensure agent-server containers bind-mount the host workspace into /workspace.
+      // The host path (/data/openhands/workspace) is backed by EFS so it persists across EC2 replacement.
+      '      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw',
       '      - WORKSPACE_MOUNT_PATH=/data/openhands/workspace',
+      // OpenHands config uses WORKSPACE_BASE for workspace root (and derives legacy mounts from it).
+      // This must be a host path understood by the Docker daemon to ensure nested runtimes get a real bind mount.
+      '      - WORKSPACE_BASE=/data/openhands/workspace',
       '      - LOG_ALL_EVENTS=true',
       '      - HIDE_LLM_SETTINGS=true',
       '      - USER_AUTH_CLASS=openhands.server.user_auth.cognito_user_auth.CognitoUserAuth',
       '      - LLM_MODEL=bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0',
       '      - LLM_AWS_REGION_NAME=us-west-2',
+      // Ensure AWS SDKs inside the container have a default region for signing/endpoint resolution
+      '      - AWS_REGION=$REGION',
+      '      - AWS_DEFAULT_REGION=$REGION',
       `      - AWS_S3_BUCKET=${dataBucket.bucketName}`,
       '      - FILE_STORE=s3',
       `      - FILE_STORE_PATH=${dataBucket.bucketName}`,
@@ -309,7 +375,10 @@ export class ComputeStack extends cdk.Stack {
       '      - /var/run/docker.sock:/var/run/docker.sock',
       '      - /root/.docker:/root/.docker:ro',  // ECR credentials for Docker API
       '      - /data/openhands/.openhands:/root/.openhands',
-      '      - /data/openhands/workspace:/opt/workspace_base',
+      // IMPORTANT: workspace_base in config.toml is a host-path used by the Docker daemon.
+      // Mount the EFS-backed host path into the container at the same absolute path so
+      // the nested agent-server runtime gets a real bind mount (persists across EC2 replacement).
+      '      - /data/openhands/workspace:/data/openhands/workspace',
       '      - /data/openhands/config/config.toml:/app/config.toml:ro',
       ...(databaseOutput ? ['      - /data/openhands/config/database.env:/app/database.env:ro'] : []),
       '    ports:',
@@ -666,6 +735,11 @@ export class ComputeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AsgName', {
       value: asg.autoScalingGroupName,
       description: 'Auto Scaling Group Name',
+    });
+
+    new cdk.CfnOutput(this, 'WorkspaceEfsFileSystemId', {
+      value: workspaceFileSystem.fileSystemId,
+      description: 'EFS file system ID for persistent OpenHands workspaces',
     });
   }
 }

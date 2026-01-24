@@ -4,10 +4,9 @@ import { NetworkStack } from '../lib/network-stack';
 import { SecurityStack } from '../lib/security-stack';
 import { MonitoringStack } from '../lib/monitoring-stack';
 import { ComputeStack } from '../lib/compute-stack';
-import { AuthStack } from '../lib/auth-stack';
 import { EdgeStack } from '../lib/edge-stack';
 import { DatabaseStack } from '../lib/database-stack';
-import { OpenHandsConfig, DatabaseStackOutput } from '../lib/interfaces';
+import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput } from '../lib/interfaces';
 
 // Test configuration
 const testConfig: OpenHandsConfig = {
@@ -32,6 +31,15 @@ const mockDatabaseOutput: DatabaseStackOutput = {
   databaseUser: 'openhands_proxy',  // Proxy user for RDS Proxy connections
   securityGroupId: 'sg-mock123',
   proxyEndpoint: 'mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com',
+};
+
+// Mock auth output for EdgeStack tests (shared Cognito from AuthStack)
+const mockAuthOutput: AuthStackOutput = {
+  userPoolId: 'us-east-1_mockPoolId',
+  userPoolDomainPrefix: 'openhands-mock',
+  userPoolClientId: 'mock-client-id-123',
+  clientSecretName: 'cognito-client-secret-shared',
+  region: 'us-east-1',
 };
 
 describe('OpenHands Infrastructure Stacks', () => {
@@ -112,8 +120,8 @@ describe('OpenHands Infrastructure Stacks', () => {
       // Verify Instance Profile is created
       template.resourceCountIs('AWS::IAM::InstanceProfile', 1);
 
-      // Verify Security Groups are created (ALB and EC2)
-      template.resourceCountIs('AWS::EC2::SecurityGroup', 2);
+      // Verify Security Groups are created (ALB, EC2, EFS)
+      template.resourceCountIs('AWS::EC2::SecurityGroup', 3);
     });
 
     test('matches snapshot', () => {
@@ -222,8 +230,9 @@ describe('OpenHands Infrastructure Stacks', () => {
         MaxSize: '1',
       });
 
-      // Verify ALB is internet-facing (required for WebSocket support)
-      // Security is handled via custom origin header verification
+      // Verify ALB is created (internet-facing for CloudFront compatibility)
+      // Note: CloudFront VPC Origin does NOT support WebSocket connections,
+      // so we use internet-facing ALB with CloudFront HttpOrigin instead
       template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
         Scheme: 'internet-facing',
         Type: 'application',
@@ -303,86 +312,11 @@ describe('OpenHands Infrastructure Stacks', () => {
     });
   });
 
-  describe('AuthStack', () => {
-    test('synthesizes correctly', () => {
-      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
-
-      const stack = new AuthStack(app, 'TestAuthStack', {
-        env: edgeEnv,
-        config: testConfig,
-        callbackDomains: ['openhands.example.com', 'openhands.test.example.com'],
-      });
-
-      const template = Template.fromStack(stack);
-
-      template.hasResourceProperties('AWS::Cognito::UserPool', {
-        AutoVerifiedAttributes: ['email'],
-        UsernameAttributes: ['email'],
-      });
-
-      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
-        ClientName: 'Openhands on AWS',
-        CallbackURLs: Match.arrayWith([
-          'https://openhands.example.com/_callback',
-          'https://openhands.test.example.com/_callback',
-        ]),
-      });
-
-      template.hasResourceProperties('AWS::Cognito::UserPoolDomain', {
-        ManagedLoginVersion: 2,
-      });
-
-      template.resourceCountIs('AWS::Cognito::ManagedLoginBranding', 1);
-
-      template.hasResourceProperties('AWS::SecretsManager::Secret', {
-        Name: 'openhands/cognito-client-secret-shared',
-      });
-    });
-
-    test('creates user pool with secure password policy', () => {
-      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
-
-      const stack = new AuthStack(app, 'TestAuthStack', {
-        env: edgeEnv,
-        config: testConfig,
-        callbackDomains: ['openhands.example.com'],
-      });
-
-      const template = Template.fromStack(stack);
-
-      template.hasResourceProperties('AWS::Cognito::UserPool', {
-        Policies: {
-          PasswordPolicy: {
-            MinimumLength: 8,
-            RequireLowercase: true,
-            RequireUppercase: true,
-            RequireNumbers: true,
-            RequireSymbols: true,
-          },
-        },
-      });
-    });
-
-    test('matches snapshot', () => {
-      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
-
-      const stack = new AuthStack(app, 'TestAuthStack', {
-        env: edgeEnv,
-        config: testConfig,
-        callbackDomains: ['openhands.example.com'],
-      });
-
-      const template = Template.fromStack(stack);
-      expect(template.toJSON()).toMatchSnapshot();
-    });
-  });
-
   describe('EdgeStack', () => {
     let networkStack: NetworkStack;
     let securityStack: SecurityStack;
     let monitoringStack: MonitoringStack;
     let computeStack: ComputeStack;
-    let authStack: AuthStack;
 
     beforeEach(() => {
       networkStack = new NetworkStack(app, 'TestNetworkStack', {
@@ -410,13 +344,6 @@ describe('OpenHands Infrastructure Stacks', () => {
         monitoringOutput: monitoringStack.output,
         databaseOutput: mockDatabaseOutput,
       });
-
-      const edgeEnv = { account: '123456789012', region: 'us-east-1' };
-      authStack = new AuthStack(app, 'TestAuthStack', {
-        env: edgeEnv,
-        config: testConfig,
-        callbackDomains: ['openhands.example.com'],
-      });
     });
 
     test('synthesizes correctly', () => {
@@ -426,11 +353,17 @@ describe('OpenHands Infrastructure Stacks', () => {
       const stack = new EdgeStack(app, 'TestEdgeStack', {
         env: edgeEnv,
         config: testConfig,
-        authOutput: authStack.output,
+        computeOutput: computeStack.output,
+        alb: computeStack.alb,
+        authOutput: mockAuthOutput,
         crossRegionReferences: true,
       });
 
       const template = Template.fromStack(stack);
+
+      // Verify Cognito resources are NOT created here (imported from OpenHands-Auth stack)
+      template.resourceCountIs('AWS::Cognito::UserPool', 0);
+      template.resourceCountIs('AWS::Cognito::UserPoolClient', 0);
 
       // Verify ACM Certificate is created
       template.hasResourceProperties('AWS::CertificateManager::Certificate', {
@@ -442,9 +375,26 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       // Verify Lambda@Edge function is created
       template.hasResourceProperties('AWS::Lambda::Function', {
-        Runtime: 'nodejs20.x',
+        Runtime: 'nodejs22.x',
         Handler: 'index.handler',
       });
+
+      // Verify the AuthFunction lambda code references the shared client secret
+      const templateJson = template.toJSON() as any;
+      const lambdaFunctions = Object.values(templateJson.Resources || {}).filter(
+        (r: any) => r?.Type === 'AWS::Lambda::Function' && r?.Properties?.Handler === 'index.handler'
+      );
+      const hasSharedSecretReference = lambdaFunctions.some((fn: any) => {
+        const zipFile = fn?.Properties?.Code?.ZipFile;
+        if (typeof zipFile === 'string') return zipFile.includes('cognito-client-secret-shared');
+        if (zipFile?.['Fn::Join'] && Array.isArray(zipFile['Fn::Join'][1])) {
+          return zipFile['Fn::Join'][1].some((part: any) =>
+            typeof part === 'string' && part.includes('cognito-client-secret-shared')
+          );
+        }
+        return false;
+      });
+      expect(hasSharedSecretReference).toBe(true);
 
       // Verify WAF WebACL is created
       template.hasResourceProperties('AWS::WAFv2::WebACL', {
@@ -464,7 +414,9 @@ describe('OpenHands Infrastructure Stacks', () => {
       const stack = new EdgeStack(app, 'TestEdgeStack', {
         env: edgeEnv,
         config: testConfig,
-        authOutput: authStack.output,
+        computeOutput: computeStack.output,
+        alb: computeStack.alb,
+        authOutput: mockAuthOutput,
         crossRegionReferences: true,
       });
 
@@ -491,7 +443,9 @@ describe('OpenHands Infrastructure Stacks', () => {
       const stack = new EdgeStack(app, 'TestEdgeStack', {
         env: edgeEnv,
         config: testConfig,
-        authOutput: authStack.output,
+        computeOutput: computeStack.output,
+        alb: computeStack.alb,
+        authOutput: mockAuthOutput,
         crossRegionReferences: true,
       });
 

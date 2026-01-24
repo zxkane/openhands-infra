@@ -197,6 +197,8 @@ computeStack.addDependency(databaseStack);
 const edgeStack = new EdgeStack(app, edgeStackId, {
   env: usEast1Env,
   config,
+  alb: computeStack.alb,
+  computeOutput: computeStack.output,
   authOutput: authStack.output,
   description: 'OpenHands Edge Infrastructure - Lambda@Edge, CloudFront, WAF, Route 53',
   crossRegionReferences: true,

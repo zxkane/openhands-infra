@@ -182,7 +182,7 @@ export class DatabaseStack extends cdk.Stack {
     );
 
     const dbBootstrapHandler = new lambdaNodejs.NodejsFunction(this, 'DbBootstrapHandler', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '..', 'lambda', 'db-bootstrap', 'index.ts'),
       handler: 'handler',
       vpc,
@@ -190,6 +190,15 @@ export class DatabaseStack extends cdk.Stack {
       securityGroups: [dbBootstrapSecurityGroup],
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
+      bundling: {
+        // Include the pg module in the bundle (it's not an AWS SDK module)
+        nodeModules: ['pg'],
+      },
+      environment: {
+        // Node.js 20+ requires explicit CA certificate path for RDS SSL connections
+        // Lambda includes RDS CA certificates at this path
+        NODE_EXTRA_CA_CERTS: '/var/runtime/ca-cert.pem',
+      },
     });
 
     // Needs to read DB admin + proxy user secrets to connect and sync credentials.

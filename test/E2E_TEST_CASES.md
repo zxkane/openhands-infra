@@ -102,7 +102,7 @@ Create a test user in Cognito User Pool if it doesn't already exist.
 1. Get Cognito User Pool ID from stack outputs
    ```bash
    USER_POOL_ID=$(aws cloudformation describe-stacks \
-     --stack-name OpenHands-Edge \
+     --stack-name OpenHands-Auth \
      --region us-east-1 \
      --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' \
      --output text)
@@ -1027,6 +1027,76 @@ Verify that main application authentication still works correctly after authoriz
 
 ---
 
+## TC-014: Verify Conversation Resume After EC2 Replacement
+
+### Description
+Verify that an existing conversation can be re-opened and continued after the ASG replaces the EC2 instance (e.g., due to deployment, health checks, or manual termination).
+
+### Prerequisites
+- Infrastructure deployed with persistent workspaces (EFS mounted at `/data/openhands`)
+- Logged in as a valid Cognito user (see TC-003)
+- At least one existing conversation with files created in the workspace
+
+### Steps
+
+1. Create a new conversation and write a marker file
+   - In the OpenHands UI, start a new conversation (TC-005)
+   - Prompt the agent to create a file, e.g.:
+     - `Create /workspace/project/persist_check.txt with content: hello-from-before-replace`
+     - `List files in /workspace/project and confirm persist_check.txt exists`
+
+2. Record the conversation id (`convId`)
+   - Use the URL, runtime URL, or conversation list item id to capture `<convId>` for the next steps
+
+3. Find the current ASG instance and terminate it (forces replacement)
+   ```bash
+   ASG_NAME=$(aws cloudformation describe-stacks \
+     --stack-name OpenHands-Compute \
+     --region $DEPLOY_REGION \
+     --query 'Stacks[0].Outputs[?OutputKey==`AsgName`].OutputValue' \
+     --output text)
+
+   INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+     --auto-scaling-group-names "$ASG_NAME" \
+     --region $DEPLOY_REGION \
+     --query 'AutoScalingGroups[0].Instances[0].InstanceId' \
+     --output text)
+
+   aws autoscaling terminate-instance-in-auto-scaling-group \
+     --instance-id "$INSTANCE_ID" \
+     --no-should-decrement-desired-capacity \
+     --region $DEPLOY_REGION
+   ```
+
+4. Wait for the replacement instance to become healthy
+   ```bash
+   aws autoscaling wait group-in-service \
+     --auto-scaling-group-names "$ASG_NAME" \
+     --region $DEPLOY_REGION
+   ```
+
+5. Reload the OpenHands UI and re-open the old conversation
+   - Refresh `https://<subdomain>.<domain>/`
+   - Open the conversation with id `<convId>`
+
+6. Verify the workspace file still exists and continue the conversation
+   - Prompt the agent to:
+     - `Read persist_check.txt and print its content`
+   - Optional host-level verification (EFS-backed per-sandbox directory):
+     - `/data/openhands/workspace/<convId>/project/persist_check.txt`
+     - Make a small new change (e.g., append a line) and confirm it persists
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Conversation list still loads after replacement | Previous conversations visible in UI |
+| 2 | Old conversation opens without errors | Chat history loads; no workspace initialization failures |
+| 3 | Workspace contents persist | `persist_check.txt` exists with the original content |
+| 4 | Conversation can continue | New agent actions execute successfully after replacement |
+
+---
+
 ## Test Summary Checklist
 
 Use this checklist to track test execution:
@@ -1046,6 +1116,7 @@ Use this checklist to track test execution:
 | TC-011 | Cross-User Access Denied | [ ] | Requires 2 test users |
 | TC-012 | Unauthenticated Access Denied | [ ] | Runtime returns 401 |
 | TC-013 | Main App Access Works | [ ] | Regression test |
+| TC-014 | Resume After EC2 Replacement | [ ] | Conversation + workspace persistence |
 
 ## Troubleshooting Guide
 
