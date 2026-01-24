@@ -14,9 +14,55 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. LOCAL VERIFICATION→ npm run build && npm run test && npx cdk deploy --all
 4. COMMIT AND PR     → git commit && git push && create PR
 5. WAIT FOR CHECKS   → Monitor GitHub Actions, fix if failed
-6. ADDRESS FINDINGS  → Review Amazon Q Developer comments
-7. READY FOR MERGE   → All checks passed
+6. ADDRESS FINDINGS  → Review bot comments, fix issues, resolve threads
+7. READY FOR MERGE   → All checks passed, all threads resolved
 ```
+
+### Addressing Review Bot Findings
+
+After creating a PR, automated review bots (Amazon Q Developer, Codex) will analyze code and leave comments. Follow this process:
+
+1. **Review each finding** - Read the bot's comment and understand the issue
+2. **Evaluate validity** - Determine if it's a real issue or false positive
+3. **For valid findings**:
+   - Fix the code as suggested or with an equivalent solution
+   - Run `npm run build && npm run test` to verify
+   - Commit with descriptive message: `fix(security): <description>`
+4. **For false positives**:
+   - Add a PR comment explaining why the finding is incorrect
+   - Reference the specific code that addresses the concern
+5. **Resolve all threads** - Use GitHub GraphQL API to mark threads as resolved:
+
+```bash
+# Get thread IDs
+gh api graphql -f query='
+query {
+  repository(owner: "<owner>", name: "<repo>") {
+    pullRequest(number: <pr-number>) {
+      reviewThreads(first: 20) {
+        nodes { id, isResolved, path }
+      }
+    }
+  }
+}'
+
+# Resolve a thread
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "<thread-id>"}) {
+    thread { id, isResolved }
+  }
+}'
+```
+
+**Common bot findings and fixes:**
+
+| Finding | Fix |
+|---------|-----|
+| Path traversal (CWE-22) | Validate paths: reject `..` and absolute paths |
+| SSL validation disabled (CWE-295) | Set `rejectUnauthorized: true` |
+| Uncaught exception (CWE-248) | Add try-catch with logging |
+| SQL injection | Use parameterized queries (`$1`, `$2`) |
 
 ### Branch Naming
 
