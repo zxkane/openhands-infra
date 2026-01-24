@@ -70,6 +70,8 @@ export interface MonitoringStackOutput {
  */
 export interface ComputeStackOutput {
   targetGroup: elbv2.IApplicationTargetGroup;
+  /** Secret value for CloudFront origin verification header (X-Origin-Verify) */
+  originVerifySecret: string;
 }
 
 /**

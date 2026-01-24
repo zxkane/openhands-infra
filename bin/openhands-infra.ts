@@ -191,12 +191,12 @@ computeStack.addDependency(databaseStack);
 
 // 6. Edge Stack (us-east-1) - Cognito, Lambda@Edge, CloudFront, WAF, Route 53
 //    This merged stack combines Auth and CDN to avoid cross-stack reference issues
+//    ALB DNS name and origin secret are read from SSM parameters in us-east-1 (written by ComputeStack)
+//    This enables multiple Edge stacks to share the same Compute stack without cross-region export conflicts.
 const edgeStack = new EdgeStack(app, edgeStackId, {
   env: usEast1Env,
   config,
   authOutput: authStack.output,
-  computeOutput: computeStack.output,
-  alb: computeStack.alb,
   description: 'OpenHands Edge Infrastructure - Lambda@Edge, CloudFront, WAF, Route 53',
   crossRegionReferences: true,
 });

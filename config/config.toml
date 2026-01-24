@@ -36,8 +36,10 @@ model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
 # This will be automatically set by the EC2 user data script
 aws_region_name = "${AWS_REGION}"
 
-# No API key needed - using EC2 Instance Profile (IAM Role)
-# The EC2 instance role has permissions to invoke Bedrock models
+# NOTE: AWS credentials are NOT set here. LiteLLM uses boto3's default credential chain
+# which automatically reads from environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+# AWS_SESSION_TOKEN) set via OH_AGENT_SERVER_ENV. Explicitly setting credentials here can
+# cause issues with how OpenHands passes LLM config to agent-server containers.
 
 [sandbox]
 # Sandbox timeout in seconds

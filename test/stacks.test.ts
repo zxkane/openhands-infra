@@ -222,9 +222,8 @@ describe('OpenHands Infrastructure Stacks', () => {
         MaxSize: '1',
       });
 
-      // Verify ALB is created (internet-facing for CloudFront compatibility)
-      // Note: CloudFront VPC Origin does NOT support WebSocket connections,
-      // so we use internet-facing ALB with CloudFront HttpOrigin instead
+      // Verify ALB is internet-facing (required for WebSocket support)
+      // Security is handled via custom origin header verification
       template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
         Scheme: 'internet-facing',
         Type: 'application',
@@ -428,8 +427,6 @@ describe('OpenHands Infrastructure Stacks', () => {
         env: edgeEnv,
         config: testConfig,
         authOutput: authStack.output,
-        computeOutput: computeStack.output,
-        alb: computeStack.alb,
         crossRegionReferences: true,
       });
 
@@ -468,8 +465,6 @@ describe('OpenHands Infrastructure Stacks', () => {
         env: edgeEnv,
         config: testConfig,
         authOutput: authStack.output,
-        computeOutput: computeStack.output,
-        alb: computeStack.alb,
         crossRegionReferences: true,
       });
 
@@ -497,8 +492,6 @@ describe('OpenHands Infrastructure Stacks', () => {
         env: edgeEnv,
         config: testConfig,
         authOutput: authStack.output,
-        computeOutput: computeStack.output,
-        alb: computeStack.alb,
         crossRegionReferences: true,
       });
 

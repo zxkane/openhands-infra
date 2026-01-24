@@ -551,6 +551,58 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
     },
   },
   "Resources": {
+    "AWS679f53fac002430cb0da5b7982bd22872D164C4C": {
+      "DependsOn": [
+        "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-west-2",
+          "S3Key": "bc8ef58951f4c88e641dd23090e9d2e2e61c7530a07960e767522941e959b625.zip",
+        },
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs22.x",
+        "Timeout": 120,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
     "CpuAlarm87CA37A9": {
       "Properties": {
         "AlarmActions": [
@@ -662,10 +714,12 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       "Properties": {
         "DefaultActions": [
           {
-            "TargetGroupArn": {
-              "Ref": "OpenHandsTargetGroupB296B707",
+            "FixedResponseConfig": {
+              "ContentType": "text/plain",
+              "MessageBody": "Access Denied - Invalid Origin",
+              "StatusCode": "403",
             },
-            "Type": "forward",
+            "Type": "fixed-response",
           },
         ],
         "LoadBalancerArn": {
@@ -676,7 +730,47 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       },
       "Type": "AWS::ElasticLoadBalancingV2::Listener",
     },
-    "OpenHandsAlbHttpListenerRuntimeRuleRuleEFBB1962": {
+    "OpenHandsAlbHttpListenerVerifiedMainRuleRule40A43613": {
+      "Properties": {
+        "Actions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "OpenHandsTargetGroupB296B707",
+            },
+            "Type": "forward",
+          },
+        ],
+        "Conditions": [
+          {
+            "Field": "http-header",
+            "HttpHeaderConfig": {
+              "HttpHeaderName": "X-Origin-Verify",
+              "Values": [
+                {
+                  "Fn::Select": [
+                    2,
+                    {
+                      "Fn::Split": [
+                        "/",
+                        {
+                          "Ref": "AWS::StackId",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        "ListenerArn": {
+          "Ref": "OpenHandsAlbHttpListener244F6A31",
+        },
+        "Priority": 20,
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+    },
+    "OpenHandsAlbHttpListenerVerifiedRuntimeRuleRule1C3988A0": {
       "Properties": {
         "Actions": [
           {
@@ -692,6 +786,27 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
             "PathPatternConfig": {
               "Values": [
                 "/runtime/*",
+              ],
+            },
+          },
+          {
+            "Field": "http-header",
+            "HttpHeaderConfig": {
+              "HttpHeaderName": "X-Origin-Verify",
+              "Values": [
+                {
+                  "Fn::Select": [
+                    2,
+                    {
+                      "Fn::Split": [
+                        "/",
+                        {
+                          "Ref": "AWS::StackId",
+                        },
+                      ],
+                    },
+                  ],
+                },
               ],
             },
           },
@@ -883,7 +998,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9c5296b16d52cdbc02bd2d4dad6a704cf5fa6f573971b6547f9d2fbafb5c069f",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:184a6347aaa1c2bbee93a7f0eafb1701f2bcbae0d299b3a5ac80e8dbcf45000b",
                   },
                   "
     container_name: openhands-app
@@ -1019,7 +1134,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9c5296b16d52cdbc02bd2d4dad6a704cf5fa6f573971b6547f9d2fbafb5c069f",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:184a6347aaa1c2bbee93a7f0eafb1701f2bcbae0d299b3a5ac80e8dbcf45000b",
                   },
                   ""
 pull_with_retry "",
@@ -1101,6 +1216,28 @@ echo "OpenHands setup complete!"",
       },
       "Type": "AWS::SSM::Parameter",
     },
+    "OriginVerifyParam9FCB2131": {
+      "Properties": {
+        "Description": "Secret header value for CloudFront origin verification",
+        "Name": "/openhands/cloudfront/origin-verify-secret",
+        "Tier": "Standard",
+        "Type": "String",
+        "Value": {
+          "Fn::Select": [
+            2,
+            {
+              "Fn::Split": [
+                "/",
+                {
+                  "Ref": "AWS::StackId",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
+    },
     "RuntimeTargetGroup77A6315C": {
       "Properties": {
         "HealthCheckIntervalSeconds": 30,
@@ -1134,6 +1271,164 @@ echo "OpenHands setup complete!"",
         "Value": "1.2-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
+    },
+    "SsmUsEast1SecretWriter39004BA6": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "SsmUsEast1SecretWriterCustomResourcePolicyC856BD77",
+      ],
+      "Properties": {
+        "Create": {
+          "Fn::Join": [
+            "",
+            [
+              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/origin-verify-secret","Value":"",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId",
+                      },
+                    ],
+                  },
+                ],
+              },
+              "","Type":"String","Overwrite":true,"Description":"Origin verification secret for CloudFront-to-ALB authentication"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-origin-secret"}}",
+            ],
+          ],
+        },
+        "Delete": "{"service":"SSM","action":"deleteParameter","parameters":{"Name":"/openhands/compute/origin-verify-secret"},"region":"us-east-1"}",
+        "InstallLatestAwsSdk": true,
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd22872D164C4C",
+            "Arn",
+          ],
+        },
+        "Update": {
+          "Fn::Join": [
+            "",
+            [
+              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/origin-verify-secret","Value":"",
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Ref": "AWS::StackId",
+                      },
+                    ],
+                  },
+                ],
+              },
+              "","Type":"String","Overwrite":true,"Description":"Origin verification secret for CloudFront-to-ALB authentication"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-origin-secret"}}",
+            ],
+          ],
+        },
+      },
+      "Type": "Custom::AWS",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "SsmUsEast1SecretWriterCustomResourcePolicyC856BD77": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "ssm:PutParameter",
+                "ssm:DeleteParameter",
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/openhands/compute/*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "SsmUsEast1SecretWriterCustomResourcePolicyC856BD77",
+        "Roles": [
+          {
+            "Ref": "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "SsmUsEast1Writer67E457D2": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "SsmUsEast1WriterCustomResourcePolicy67DF62A1",
+      ],
+      "Properties": {
+        "Create": {
+          "Fn::Join": [
+            "",
+            [
+              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/alb-dns-name","Value":"",
+              {
+                "Fn::GetAtt": [
+                  "OpenHandsAlb343FAEDA",
+                  "DNSName",
+                ],
+              },
+              "","Type":"String","Overwrite":true,"Description":"ALB DNS name for CloudFront origin"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-alb-dns"}}",
+            ],
+          ],
+        },
+        "Delete": "{"service":"SSM","action":"deleteParameter","parameters":{"Name":"/openhands/compute/alb-dns-name"},"region":"us-east-1"}",
+        "InstallLatestAwsSdk": true,
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd22872D164C4C",
+            "Arn",
+          ],
+        },
+        "Update": {
+          "Fn::Join": [
+            "",
+            [
+              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/alb-dns-name","Value":"",
+              {
+                "Fn::GetAtt": [
+                  "OpenHandsAlb343FAEDA",
+                  "DNSName",
+                ],
+              },
+              "","Type":"String","Overwrite":true,"Description":"ALB DNS name for CloudFront origin"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-alb-dns"}}",
+            ],
+          ],
+        },
+      },
+      "Type": "Custom::AWS",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "SsmUsEast1WriterCustomResourcePolicy67DF62A1": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "ssm:PutParameter",
+                "ssm:DeleteParameter",
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/openhands/compute/*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "SsmUsEast1WriterCustomResourcePolicy67DF62A1",
+        "Roles": [
+          {
+            "Ref": "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
   },
   "Rules": {
@@ -1197,9 +1492,17 @@ exports[`OpenHands Infrastructure Stacks EdgeStack matches snapshot 1`] = `
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
       "Type": "AWS::SSM::Parameter::Value<String>",
     },
+    "SsmParameterValueopenhandscomputealbdnsnameC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/openhands/compute/alb-dns-name",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "SsmParameterValueopenhandscomputeoriginverifysecretC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/openhands/compute/origin-verify-secret",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
   },
   "Resources": {
-    "ARecordE7B57761": {
+    "AliasRecord851000D2": {
       "Properties": {
         "AliasTarget": {
           "DNSName": {
@@ -1875,84 +2178,10 @@ exports.handler = async (event) => {
             "AccessControlMaxAgeSec": 86400,
             "OriginOverride": true,
           },
-          "Name": "OpenHands-CORS-Headers-123456789012",
+          "Name": "OpenHands-CORS-example-com-123456789012",
         },
       },
       "Type": "AWS::CloudFront::ResponseHeadersPolicy",
-    },
-    "CustomCrossRegionExportReaderCustomResourceProviderHandler46647B68": {
-      "DependsOn": [
-        "CustomCrossRegionExportReaderCustomResourceProviderRole10531BBD",
-      ],
-      "Properties": {
-        "Code": {
-          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
-          "S3Key": "d41c8e6342cd078b5ea5aec11522bdb605eae00f4bb98a3fb0b44c827e9b5ca9.zip",
-        },
-        "Handler": "__entrypoint__.handler",
-        "MemorySize": 128,
-        "Role": {
-          "Fn::GetAtt": [
-            "CustomCrossRegionExportReaderCustomResourceProviderRole10531BBD",
-            "Arn",
-          ],
-        },
-        "Runtime": "nodejs22.x",
-        "Timeout": 900,
-      },
-      "Type": "AWS::Lambda::Function",
-    },
-    "CustomCrossRegionExportReaderCustomResourceProviderRole10531BBD": {
-      "Properties": {
-        "AssumeRolePolicyDocument": {
-          "Statement": [
-            {
-              "Action": "sts:AssumeRole",
-              "Effect": "Allow",
-              "Principal": {
-                "Service": "lambda.amazonaws.com",
-              },
-            },
-          ],
-          "Version": "2012-10-17",
-        },
-        "ManagedPolicyArns": [
-          {
-            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-          },
-        ],
-        "Policies": [
-          {
-            "PolicyDocument": {
-              "Statement": [
-                {
-                  "Action": [
-                    "ssm:AddTagsToResource",
-                    "ssm:RemoveTagsFromResource",
-                    "ssm:GetParameters",
-                  ],
-                  "Effect": "Allow",
-                  "Resource": {
-                    "Fn::Join": [
-                      "",
-                      [
-                        "arn:",
-                        {
-                          "Ref": "AWS::Partition",
-                        },
-                        ":ssm:us-east-1:123456789012:parameter/cdk/exports/TestEdgeStack/*",
-                      ],
-                    ],
-                  },
-                },
-              ],
-              "Version": "2012-10-17",
-            },
-            "PolicyName": "Inline",
-          },
-        ],
-      },
-      "Type": "AWS::IAM::Role",
     },
     "Distribution830FAC52": {
       "Properties": {
@@ -2009,12 +2238,17 @@ exports.handler = async (event) => {
                 ],
               },
               "DomainName": {
-                "Fn::GetAtt": [
-                  "ExportsReader8B249524",
-                  "/cdk/exports/TestEdgeStack/TestComputeStackuswest2FnGetAttOpenHandsAlb343FAEDADNSNameC8E8FDEC",
-                ],
+                "Ref": "SsmParameterValueopenhandscomputealbdnsnameC96584B6F00A464EAD1953AFF4B05118Parameter",
               },
               "Id": "TestEdgeStackDistributionOrigin18490990F",
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "X-Origin-Verify",
+                  "HeaderValue": {
+                    "Ref": "SsmParameterValueopenhandscomputeoriginverifysecretC96584B6F00A464EAD1953AFF4B05118Parameter",
+                  },
+                },
+              ],
             },
           ],
           "PriceClass": "PriceClass_100",
@@ -2035,27 +2269,7 @@ exports.handler = async (event) => {
       },
       "Type": "AWS::CloudFront::Distribution",
     },
-    "ExportsReader8B249524": {
-      "DeletionPolicy": "Delete",
-      "Properties": {
-        "ReaderProps": {
-          "imports": {
-            "/cdk/exports/TestEdgeStack/TestComputeStackuswest2FnGetAttOpenHandsAlb343FAEDADNSNameC8E8FDEC": "{{resolve:ssm:/cdk/exports/TestEdgeStack/TestComputeStackuswest2FnGetAttOpenHandsAlb343FAEDADNSNameC8E8FDEC}}",
-          },
-          "prefix": "TestEdgeStack",
-          "region": "us-east-1",
-        },
-        "ServiceToken": {
-          "Fn::GetAtt": [
-            "CustomCrossRegionExportReaderCustomResourceProviderHandler46647B68",
-            "Arn",
-          ],
-        },
-      },
-      "Type": "Custom::CrossRegionExportReader",
-      "UpdateReplacePolicy": "Delete",
-    },
-    "RuntimeWildcardARecordF1E6A47E": {
+    "RuntimeWildcardRecord40ECEBBE": {
       "Properties": {
         "AliasTarget": {
           "DNSName": {

@@ -7,17 +7,15 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
-import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
-import { OpenHandsConfig, ComputeStackOutput, AuthStackOutput } from './interfaces.js';
+import { OpenHandsConfig, AuthStackOutput } from './interfaces.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 export interface EdgeStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   authOutput: AuthStackOutput;
-  computeOutput: ComputeStackOutput;
-  alb: elbv2.IApplicationLoadBalancer;
 }
 
 /**
@@ -36,7 +34,18 @@ export class EdgeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EdgeStackProps) {
     super(scope, id, props);
 
-    const { config, alb, authOutput } = props;
+    const { config, authOutput } = props;
+
+    // Read ALB DNS name and origin secret from SSM parameters written by ComputeStack
+    // This avoids CDK cross-region reference issues when multiple Edge stacks share the same Compute stack
+    const albDnsName = ssm.StringParameter.valueForStringParameter(
+      this,
+      '/openhands/compute/alb-dns-name'
+    );
+    const originVerifySecret = ssm.StringParameter.valueForStringParameter(
+      this,
+      '/openhands/compute/origin-verify-secret'
+    );
     const fullDomain = `${config.subDomain}.${config.domainName}`;
     const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.test.kane.mx
 
@@ -264,16 +273,25 @@ exports.handler = async (event) => {
 
     // Note: CloudFront VPC Origin does NOT support WebSocket connections.
     // We use internet-facing ALB with HttpOrigin to support WebSocket.
-    const httpOrigin = new origins.HttpOrigin(alb.loadBalancerDnsName, {
+    //
+    // Security: ALB requires X-Origin-Verify header for origin verification.
+    // This prevents direct access to ALB bypassing CloudFront.
+    // ALB DNS name and origin secret are passed as strings to avoid cross-region CDK reference issues.
+    const httpOrigin = new origins.HttpOrigin(albDnsName, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
       readTimeout: cdk.Duration.seconds(60),
       keepaliveTimeout: cdk.Duration.seconds(60),
+      customHeaders: {
+        'X-Origin-Verify': originVerifySecret,
+      },
     });
 
     // Response Headers Policy for CORS support
     // Required because the origin sets access-control-allow-credentials but not access-control-allow-origin
+    // Include domain in name to support multiple Edge stacks in the same account
+    const domainSuffix = config.domainName.replace(/\./g, '-');
     const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'CorsHeadersPolicy', {
-      responseHeadersPolicyName: `OpenHands-CORS-Headers-${this.account}`,
+      responseHeadersPolicyName: `OpenHands-CORS-${domainSuffix}-${this.account}`,
       comment: 'Adds CORS headers for credentialed requests',
       corsBehavior: {
         accessControlAllowCredentials: true,
