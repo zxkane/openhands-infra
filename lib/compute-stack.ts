@@ -8,6 +8,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
@@ -152,6 +153,19 @@ export class ComputeStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // Origin verification secret for CloudFront-to-ALB authentication
+    // This secret is shared with EdgeStack via SSM Parameter Store in us-east-1
+    // CloudFront sends this in X-Origin-Verify header, ALB validates it
+    const originVerifySecret = cdk.Fn.select(2, cdk.Fn.split('/', `${cdk.Aws.STACK_ID}`));
+
+    // Store in local region for ALB listener rules
+    const originVerifyParam = new ssm.StringParameter(this, 'OriginVerifyParam', {
+      parameterName: '/openhands/cloudfront/origin-verify-secret',
+      stringValue: originVerifySecret,
+      description: 'Secret header value for CloudFront origin verification',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // Build custom Docker images using CDK DockerImageAsset
     // Images are built for ARM64 (Graviton) architecture during CDK deployment
     // and automatically pushed to CDK-managed ECR repositories
@@ -162,7 +176,13 @@ export class ComputeStack extends cdk.Stack {
         OPENHANDS_VERSION: DEFAULT_OPENHANDS_VERSION,
       },
       // Exclude agent-server subdirectories from the build context
-      exclude: ['agent-server', 'agent-server-custom'],
+      exclude: [
+        'agent-server',
+        'agent-server-custom',
+        '**/__pycache__',
+        '**/*.pyc',
+        '**/.pytest_cache',
+      ],
     });
 
     const customAgentServerImage = new DockerImageAsset(this, 'CustomAgentServerImage', {
@@ -395,9 +415,10 @@ export class ComputeStack extends cdk.Stack {
     // Note: Additional EBS volume needs to be added separately
     const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
 
-    // Internet-facing Application Load Balancer
-    // Note: CloudFront VPC Origin does NOT support WebSocket connections.
-    // We use internet-facing ALB with CloudFront HttpOrigin instead.
+    // Internet-facing Application Load Balancer (required for WebSocket support)
+    // CloudFront VPC Origin does NOT support WebSocket connections, so we use
+    // internet-facing ALB with CloudFront HttpOrigin instead.
+    // Security: ALB is protected by custom origin header verification (see listener rules below)
     const alb = new elbv2.ApplicationLoadBalancer(this, 'OpenHandsAlb', {
       vpc,
       internetFacing: true,
@@ -446,18 +467,34 @@ export class ComputeStack extends cdk.Stack {
     // Attach ASG to Runtime Target Group
     asg.attachToApplicationTargetGroup(runtimeTargetGroup);
 
-    // HTTP Listener (CloudFront connects via HTTP to internet-facing ALB)
+    // HTTP Listener with origin verification (CloudFront connects via HTTP to internet-facing ALB)
+    // Default action returns 403 - only requests with valid X-Origin-Verify header are allowed
     const listener = alb.addListener('HttpListener', {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultTargetGroups: [targetGroup],
+      defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+        contentType: 'text/plain',
+        messageBody: 'Access Denied - Invalid Origin',
+      }),
     });
 
-    // Add listener rule for runtime proxy paths (/runtime/*)
-    listener.addTargetGroups('RuntimeRule', {
+    // Rule: Forward requests with valid origin verification header to main target group
+    // Priority 20 (lower priority than runtime rule)
+    listener.addTargetGroups('VerifiedMainRule', {
+      priority: 20,
+      conditions: [
+        elbv2.ListenerCondition.httpHeader('X-Origin-Verify', [originVerifySecret]),
+      ],
+      targetGroups: [targetGroup],
+    });
+
+    // Rule: Forward /runtime/* requests with valid origin verification header
+    // Priority 10 (higher priority - more specific path match)
+    listener.addTargetGroups('VerifiedRuntimeRule', {
       priority: 10,
       conditions: [
         elbv2.ListenerCondition.pathPatterns(['/runtime/*']),
+        elbv2.ListenerCondition.httpHeader('X-Origin-Verify', [originVerifySecret]),
       ],
       targetGroups: [runtimeTargetGroup],
     });
@@ -465,6 +502,7 @@ export class ComputeStack extends cdk.Stack {
     // Store outputs
     this.output = {
       targetGroup,
+      originVerifySecret,
     };
     this.alb = alb;
 
@@ -525,6 +563,94 @@ export class ComputeStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
     diskAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    // Write ALB DNS name and origin secret to SSM in us-east-1 for EdgeStack consumption
+    // This avoids CDK cross-region reference issues when multiple Edge stacks share the same Compute stack
+    new cr.AwsCustomResource(this, 'SsmUsEast1Writer', {
+      onCreate: {
+        service: 'SSM',
+        action: 'putParameter',
+        parameters: {
+          Name: '/openhands/compute/alb-dns-name',
+          Value: alb.loadBalancerDnsName,
+          Type: 'String',
+          Overwrite: true,
+          Description: 'ALB DNS name for CloudFront origin',
+        },
+        region: 'us-east-1',
+        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-alb-dns'),
+      },
+      onUpdate: {
+        service: 'SSM',
+        action: 'putParameter',
+        parameters: {
+          Name: '/openhands/compute/alb-dns-name',
+          Value: alb.loadBalancerDnsName,
+          Type: 'String',
+          Overwrite: true,
+          Description: 'ALB DNS name for CloudFront origin',
+        },
+        region: 'us-east-1',
+        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-alb-dns'),
+      },
+      onDelete: {
+        service: 'SSM',
+        action: 'deleteParameter',
+        parameters: {
+          Name: '/openhands/compute/alb-dns-name',
+        },
+        region: 'us-east-1',
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
+          resources: [`arn:aws:ssm:us-east-1:${this.account}:parameter/openhands/compute/*`],
+        }),
+      ]),
+    });
+
+    new cr.AwsCustomResource(this, 'SsmUsEast1SecretWriter', {
+      onCreate: {
+        service: 'SSM',
+        action: 'putParameter',
+        parameters: {
+          Name: '/openhands/compute/origin-verify-secret',
+          Value: originVerifySecret,
+          Type: 'String',
+          Overwrite: true,
+          Description: 'Origin verification secret for CloudFront-to-ALB authentication',
+        },
+        region: 'us-east-1',
+        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-origin-secret'),
+      },
+      onUpdate: {
+        service: 'SSM',
+        action: 'putParameter',
+        parameters: {
+          Name: '/openhands/compute/origin-verify-secret',
+          Value: originVerifySecret,
+          Type: 'String',
+          Overwrite: true,
+          Description: 'Origin verification secret for CloudFront-to-ALB authentication',
+        },
+        region: 'us-east-1',
+        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-origin-secret'),
+      },
+      onDelete: {
+        service: 'SSM',
+        action: 'deleteParameter',
+        parameters: {
+          Name: '/openhands/compute/origin-verify-secret',
+        },
+        region: 'us-east-1',
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
+          resources: [`arn:aws:ssm:us-east-1:${this.account}:parameter/openhands/compute/*`],
+        }),
+      ]),
+    });
 
     // CloudFormation outputs
     new cdk.CfnOutput(this, 'AlbDnsName', {

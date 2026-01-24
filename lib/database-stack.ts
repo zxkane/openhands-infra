@@ -4,7 +4,10 @@ import * as rds from 'aws-cdk-lib/aws-rds';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
+import * as path from 'node:path';
 import { NetworkStackOutput, SecurityStackOutput, DatabaseStackOutput } from './interfaces.js';
 
 export interface DatabaseStackProps extends cdk.StackProps {
@@ -49,7 +52,8 @@ export class DatabaseStack extends cdk.Stack {
     const ec2Sg = ec2.SecurityGroup.fromSecurityGroupId(
       this,
       'Ec2Sg',
-      props.securityOutput.ec2SecurityGroupId
+      props.securityOutput.ec2SecurityGroupId,
+      { mutable: true, allowAllOutbound: false }
     );
 
     // Allow inbound from EC2 security group
@@ -153,96 +157,66 @@ export class DatabaseStack extends cdk.Stack {
     // using the clusterResourceId exported from this stack.
     // This avoids cyclic dependencies between SecurityStack and DatabaseStack.
 
-    // Create database users via Data API Custom Resource
-    // - openhands_iam: IAM authentication for direct cluster connections (backup)
-    // - openhands_proxy: Password authentication for RDS Proxy connections (primary)
-    // The proxy user password will be retrieved from Secrets Manager by the proxy
-    const createDatabaseUsersSql = `
-DO $$
-DECLARE
-  proxy_password TEXT;
-BEGIN
-  -- Create IAM user if not exists
-  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${iamDatabaseUser}') THEN
-    CREATE USER ${iamDatabaseUser};
-  END IF;
-  GRANT rds_iam TO ${iamDatabaseUser};
-
-  -- Create proxy user if not exists (password will be set via ALTER USER)
-  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${proxyDatabaseUser}') THEN
-    CREATE USER ${proxyDatabaseUser} WITH PASSWORD 'PLACEHOLDER_WILL_BE_UPDATED';
-  END IF;
-
-  -- Grant database permissions to both users
-  GRANT ALL PRIVILEGES ON DATABASE ${databaseName} TO ${iamDatabaseUser};
-  GRANT ALL PRIVILEGES ON DATABASE ${databaseName} TO ${proxyDatabaseUser};
-
-  -- Grant schema permissions (required for PostgreSQL 15+)
-  GRANT ALL ON SCHEMA public TO ${iamDatabaseUser};
-  GRANT CREATE ON SCHEMA public TO ${iamDatabaseUser};
-  GRANT ALL ON SCHEMA public TO ${proxyDatabaseUser};
-  GRANT CREATE ON SCHEMA public TO ${proxyDatabaseUser};
-
-  -- Grant table and sequence permissions
-  GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${iamDatabaseUser};
-  GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${iamDatabaseUser};
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${iamDatabaseUser};
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${iamDatabaseUser};
-
-  GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${proxyDatabaseUser};
-  GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${proxyDatabaseUser};
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${proxyDatabaseUser};
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${proxyDatabaseUser};
-END
-$$;
-    `.trim();
+    // Database bootstrap (idempotent):
+    // - Create required DB users
+    // - Ensure the RDS Proxy backend user's password matches the secret used by the proxy
+    // - Apply compatibility shim(s) needed by OpenHands migrations
+    //
+    // Implemented as a Lambda-backed Custom Resource so secrets never appear in CloudFormation
+    // resource properties, and so the same IaC works across accounts/regions without manual steps.
 
     // Build ARN manually to avoid cross-stack reference issues
     const clusterArn = `arn:aws:rds:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster:${this.cluster.clusterIdentifier}`;
 
-    const createDatabaseUsers = new cr.AwsCustomResource(this, 'CreateDatabaseUsers', {
-      onCreate: {
-        service: 'RDSDataService',
-        action: 'executeStatement',
-        parameters: {
-          resourceArn: clusterArn,
-          secretArn: this.cluster.secret!.secretArn,
-          database: databaseName,
-          sql: createDatabaseUsersSql,
-        },
-        physicalResourceId: cr.PhysicalResourceId.of('openhands-database-users'),
-      },
-      onUpdate: {
-        service: 'RDSDataService',
-        action: 'executeStatement',
-        parameters: {
-          resourceArn: clusterArn,
-          secretArn: this.cluster.secret!.secretArn,
-          database: databaseName,
-          sql: createDatabaseUsersSql,
-        },
-        physicalResourceId: cr.PhysicalResourceId.of('openhands-database-users'),
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: ['rds-data:ExecuteStatement'],
-          resources: [clusterArn],
-        }),
-        new iam.PolicyStatement({
-          actions: ['secretsmanager:GetSecretValue'],
-          resources: [this.cluster.secret!.secretArn],
-        }),
-      ]),
+    const dbBootstrapSecurityGroup = new ec2.SecurityGroup(this, 'DbBootstrapSecurityGroup', {
+      vpc,
+      description: 'Security group for database bootstrap Lambda',
+      allowAllOutbound: true,
     });
 
-    // Ensure custom resource runs after cluster is available
-    createDatabaseUsers.node.addDependency(this.cluster);
+    // Allow the bootstrap Lambda to connect to Aurora for one-time/idempotent initialization.
+    dbSecurityGroup.addIngressRule(
+      dbBootstrapSecurityGroup,
+      ec2.Port.tcp(5432),
+      'Allow PostgreSQL from DB bootstrap Lambda'
+    );
 
-    // Note: The proxy user password needs to be set manually after deployment
-    // using the password from the proxyUserSecret:
-    //   1. Get password: aws secretsmanager get-secret-value --secret-id openhands/database/proxy-user
-    //   2. Connect to Aurora as admin and run: ALTER USER openhands_proxy WITH PASSWORD '<password>';
-    // This is needed because RDS Data API doesn't support parameterized queries for ALTER USER
+    const dbBootstrapHandler = new lambdaNodejs.NodejsFunction(this, 'DbBootstrapHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '..', 'lambda', 'db-bootstrap', 'index.ts'),
+      handler: 'handler',
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [dbBootstrapSecurityGroup],
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 512,
+    });
+
+    // Needs to read DB admin + proxy user secrets to connect and sync credentials.
+    this.cluster.secret!.grantRead(dbBootstrapHandler);
+    proxyUserSecret.grantRead(dbBootstrapHandler);
+
+    const dbBootstrapProvider = new cr.Provider(this, 'DbBootstrapProvider', {
+      onEventHandler: dbBootstrapHandler,
+    });
+
+    const dbBootstrap = new cdk.CustomResource(this, 'DbBootstrap', {
+      serviceToken: dbBootstrapProvider.serviceToken,
+      properties: {
+        clusterArn,
+        adminSecretArn: this.cluster.secret!.secretArn,
+        host: this.cluster.clusterEndpoint.hostname,
+        port: this.cluster.clusterEndpoint.port.toString(),
+        database: databaseName,
+        iamDatabaseUser,
+        proxyDatabaseUser,
+        proxySecretArn: proxyUserSecret.secretArn,
+      },
+      resourceType: 'Custom::OpenHandsDbBootstrap',
+    });
+
+    dbBootstrap.node.addDependency(this.cluster);
+    dbBootstrap.node.addDependency(proxyUserSecret);
 
     // Grant IAM authentication permission to EC2 role for direct cluster access (backup)
     // Import role by ARN (using string) to avoid cross-stack token references
@@ -270,6 +244,14 @@ $$;
       ec2Sg,
       ec2.Port.tcp(5432),
       'Allow PostgreSQL from EC2'
+    );
+
+    // Allow EC2 security group egress to RDS Proxy
+    // Note: Must be added here (not in SecurityStack) because the proxy SG is created in this stack.
+    ec2Sg.addEgressRule(
+      proxySecurityGroup,
+      ec2.Port.tcp(5432),
+      'Allow PostgreSQL to RDS Proxy'
     );
 
     // Allow proxy to connect to Aurora
@@ -372,9 +354,5 @@ $$;
     });
 
     // Post-deployment setup instructions
-    new cdk.CfnOutput(this, 'PostDeploymentSetup', {
-      value: `After deployment, set the proxy user password: 1) Get password: aws secretsmanager get-secret-value --secret-id openhands/database/proxy-user --query SecretString --output text | jq -r .password 2) Connect as admin and run: ALTER USER ${proxyDatabaseUser} WITH PASSWORD '<password>';`,
-      description: 'One-time setup: Set proxy user password in Aurora',
-    });
   }
 }

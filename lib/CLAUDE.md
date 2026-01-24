@@ -2,14 +2,18 @@
 
 This document provides implementation details for the CDK stack files in this directory.
 
-## Stack Architecture (6 Stacks)
+## Stack Architecture (7 Stacks)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           us-east-1                                      │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │ EdgeStack: Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF   │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ AuthStack: Cognito User Pool, managed login branding             │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                    │                                     │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ EdgeStack: Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼ (VPC Origin)
@@ -46,7 +50,8 @@ This document provides implementation details for the CDK stack files in this di
 | `monitoring-stack.ts` | Observability & data store | CloudWatch, S3 data bucket |
 | `database-stack.ts` | Persistent storage | Aurora Serverless v2, IAM auth |
 | `compute-stack.ts` | Application runtime | EC2 ASG, Internal ALB, User Data |
-| `edge-stack.ts` | Edge & authentication | Cognito, Lambda@Edge, CloudFront |
+| `auth-stack.ts` | Shared authentication | Cognito User Pool, managed login |
+| `edge-stack.ts` | Edge & CDN | Lambda@Edge, CloudFront, WAF, Route 53 |
 
 ## Stack Dependencies
 
@@ -61,6 +66,7 @@ computeStack.addDependency(securityStack);
 computeStack.addDependency(monitoringStack);
 computeStack.addDependency(databaseStack);
 edgeStack.addDependency(computeStack);
+edgeStack.addDependency(authStack);  // Uses Cognito from AuthStack
 ```
 
 ## interfaces.ts

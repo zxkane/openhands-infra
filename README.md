@@ -5,21 +5,21 @@ AWS CDK TypeScript project for deploying [OpenHands](https://github.com/All-Hand
 ## Architecture Overview
 
 ```
-User → CloudFront (WAF+Lambda@Edge Auth) → VPC Origin → Internal ALB → EC2 m7g.xlarge Graviton (ASG)
-           │                                                                    ↓
-           └── Cognito (OAuth2)                                     OpenHands Docker + Watchtower
-                                                                                ↓
-                                                              VPC Endpoints → Bedrock / CloudWatch Logs
-                                                                                ↓
-                                                              RDS Proxy → Aurora Serverless v2 PostgreSQL
+User → CloudFront (WAF+Lambda@Edge Auth) → HTTP Origin → ALB (origin verified) → EC2 m7g.xlarge Graviton (ASG)
+           │                                                                              ↓
+           └── Cognito (OAuth2, Managed Login v2)                             OpenHands Docker + Watchtower
+                                                                                          ↓
+                                                                        VPC Endpoints → Bedrock / CloudWatch Logs
+                                                                                          ↓
+                                                                        RDS Proxy → Aurora Serverless v2 PostgreSQL
 
 Runtime Apps:
 {port}-{convId}.runtime.{subdomain}.{domain} → CloudFront → Lambda@Edge → OpenResty → Docker Container
 ```
 
 Key features:
-- **CloudFront VPC Origin**: Connects directly to internal ALB without exposing it to the internet
-- **Internal ALB**: No public IP, accessible only via CloudFront VPC Origin
+- **CloudFront with Origin Verification**: ALB requires X-Origin-Verify header - direct access returns 403
+- **Internet-facing ALB**: Required for WebSocket support (CloudFront VPC Origin doesn't support WebSocket)
 - **Self-Healing Architecture**: Conversation history persists across EC2 instance replacements
 - **Runtime Subdomain Routing**: User apps accessible via `{port}-{convId}.runtime.{subdomain}.{domain}` with proper in-app routing
 
@@ -62,6 +62,10 @@ Required context parameters:
 | `domainName` | Domain name | `example.com` |
 | `subDomain` | Subdomain for OpenHands | `openhands` |
 | `region` | AWS region (optional, defaults to us-east-1) | `us-west-2` |
+| `siteName` | Cognito managed login site name (optional) | `Openhands on AWS` |
+| `authCallbackDomains` | Extra OAuth callback domains for shared Cognito client (optional; JSON array or comma-separated) | `["openhands.example.com","openhands.test.example.com"]` |
+| `authDomainPrefixSuffix` | Suffix for Cognito domain prefix (optional; avoids collisions) | `shared` |
+| `edgeStackSuffix` | Suffix for Edge stack name in us-east-1 (optional; enables multiple Edge stacks) | `openhands-aws-kane-mx` |
 
 ### 3. Bootstrap CDK (First Time Only)
 
@@ -86,6 +90,7 @@ npx cdk deploy --all \
 ```
 
 **Deployment Order** (handled automatically by CDK):
+0. Auth (us-east-1) - shared Cognito (managed login branding + multi-domain callbacks)
 1. Network (main region)
 2. Monitoring (main region) - independent, creates S3 data bucket
 3. Security (main region) - depends on Network, Monitoring
@@ -104,16 +109,164 @@ https://<subdomain>.<domain-name>
 
 | Stack | Region | Description |
 |-------|--------|-------------|
+| `OpenHands-Auth` | us-east-1 | Cognito User Pool + Managed Login v2 branding |
 | `OpenHands-Network` | Main | VPC import, VPC Endpoints |
 | `OpenHands-Monitoring` | Main | CloudWatch Logs, Alarms, Dashboard, Backup, S3 Data Bucket |
 | `OpenHands-Security` | Main | IAM Roles, Security Groups |
 | `OpenHands-Database` | Main | Aurora Serverless v2 PostgreSQL with RDS Proxy |
 | `OpenHands-Compute` | Main | EC2 ASG, Launch Template, Internal ALB |
-| `OpenHands-Edge` | us-east-1 | Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 |
+| `OpenHands-Edge-*` | us-east-1 | Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 (per domain/environment) |
 
 **Notes**:
-- The Edge stack combines authentication (Cognito, Lambda@Edge) and CDN (CloudFront, WAF) into a single stack to avoid cross-stack reference issues during CloudFormation updates.
+- Cognito is provisioned in `OpenHands-Auth` so multiple Edge stacks can reuse a single user pool/client.
+- To add another domain/environment, include it in `authCallbackDomains`, deploy `OpenHands-Auth`, then deploy a new `OpenHands-Edge-<edgeStackSuffix>`.
 - The Database stack is **required** for self-healing architecture - it persists conversation history across EC2 instance replacements.
+
+## Multi-Domain Deployment
+
+You can deploy multiple OpenHands instances on different domains, all sharing the same backend infrastructure (Compute, Database, etc.) but with separate CloudFront distributions and DNS records.
+
+### Architecture
+
+```
+                                 ┌─────────────────────────────────┐
+                                 │      AuthStack (us-east-1)      │
+                                 │  Shared Cognito User Pool       │
+                                 │  - Multi-domain callbacks       │
+                                 └─────────────────────────────────┘
+                                              │
+              ┌───────────────────────────────┼───────────────────────────────┐
+              │                               │                               │
+              ▼                               ▼                               ▼
+┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
+│  EdgeStack-Domain1      │   │  EdgeStack-Domain2      │   │  EdgeStack-DomainN      │
+│  (us-east-1)            │   │  (us-east-1)            │   │  (us-east-1)            │
+│  - CloudFront           │   │  - CloudFront           │   │  - CloudFront           │
+│  - Lambda@Edge          │   │  - Lambda@Edge          │   │  - Lambda@Edge          │
+│  - WAF                  │   │  - WAF                  │   │  - WAF                  │
+│  - Route 53 records     │   │  - Route 53 records     │   │  - Route 53 records     │
+│  - ACM Certificate      │   │  - ACM Certificate      │   │  - ACM Certificate      │
+└─────────────────────────┘   └─────────────────────────┘   └─────────────────────────┘
+              │                               │                               │
+              └───────────────────────────────┼───────────────────────────────┘
+                                              │
+                                              ▼
+                           ┌─────────────────────────────────────┐
+                           │     ComputeStack (main region)      │
+                           │  - ALB with origin verification     │
+                           │  - EC2 ASG                          │
+                           │  - SSM parameters in us-east-1      │
+                           └─────────────────────────────────────┘
+                                              │
+                           ┌──────────────────┴──────────────────┐
+                           ▼                                     ▼
+              ┌─────────────────────────┐          ┌─────────────────────────┐
+              │     DatabaseStack       │          │    MonitoringStack      │
+              │  Aurora PostgreSQL      │          │  S3, CloudWatch         │
+              └─────────────────────────┘          └─────────────────────────┘
+```
+
+### Step 1: Configure Shared Authentication
+
+First, configure the Auth stack with all domains that will use it:
+
+```bash
+# Deploy Auth stack with all callback domains
+npx cdk deploy OpenHands-Auth \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<primary-hosted-zone-id> \
+  --context domainName=<primary-domain> \
+  --context subDomain=openhands \
+  --context region=<main-region> \
+  --context authCallbackDomains='["openhands.domain1.com","openhands.domain2.com"]' \
+  --require-approval never
+```
+
+### Step 2: Deploy Backend Infrastructure
+
+Deploy the shared backend infrastructure (only once):
+
+```bash
+npx cdk deploy OpenHands-Network OpenHands-Monitoring OpenHands-Security OpenHands-Database OpenHands-Compute \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<primary-hosted-zone-id> \
+  --context domainName=<primary-domain> \
+  --context subDomain=openhands \
+  --context region=<main-region> \
+  --require-approval never
+```
+
+### Step 3: Deploy Edge Stacks for Each Domain
+
+Deploy a separate Edge stack for each domain:
+
+```bash
+# Domain 1 (e.g., openhands.test.example.com)
+npx cdk deploy OpenHands-Edge-Test \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<hosted-zone-for-test-example-com> \
+  --context domainName=test.example.com \
+  --context subDomain=openhands \
+  --context region=<main-region> \
+  --context edgeStackSuffix=Test \
+  --exclusively \
+  --require-approval never
+
+# Domain 2 (e.g., openhands.prod.example.com)
+npx cdk deploy OpenHands-Edge-Prod \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<hosted-zone-for-prod-example-com> \
+  --context domainName=prod.example.com \
+  --context subDomain=openhands \
+  --context region=<main-region> \
+  --context edgeStackSuffix=Prod \
+  --exclusively \
+  --require-approval never
+```
+
+**Important**: Use `--exclusively` flag when deploying individual Edge stacks to avoid redeploying the backend stacks with different domain context.
+
+### How It Works
+
+1. **Shared Cognito**: All domains use the same Cognito User Pool. Users can log in with the same credentials on any domain.
+
+2. **ALB Origin Verification**: The internet-facing ALB is protected by a custom `X-Origin-Verify` header. Direct access returns 403 - only CloudFront with the valid header can reach the ALB.
+
+3. **SSM Parameter Sharing**: ComputeStack writes ALB DNS name and origin secret to SSM parameters in us-east-1. Edge stacks read from these parameters, avoiding CDK cross-region reference conflicts.
+
+4. **Unique Resource Names**: Each Edge stack has unique CloudFront ResponseHeadersPolicy names (includes domain) to avoid naming conflicts.
+
+### Adding a New Domain
+
+To add a new domain to an existing deployment:
+
+1. **Update Auth stack** with the new callback domain:
+   ```bash
+   npx cdk deploy OpenHands-Auth \
+     --context authCallbackDomains='["existing.com","new-domain.com"]' \
+     ...
+   ```
+
+2. **Deploy new Edge stack**:
+   ```bash
+   npx cdk deploy OpenHands-Edge-NewDomain \
+     --context hostedZoneId=<zone-for-new-domain> \
+     --context domainName=new-domain.com \
+     --context edgeStackSuffix=NewDomain \
+     --exclusively \
+     ...
+   ```
+
+### Removing a Domain
+
+To remove a domain:
+
+1. **Delete the Edge stack**:
+   ```bash
+   aws cloudformation delete-stack --stack-name OpenHands-Edge-<Suffix> --region us-east-1
+   ```
+
+2. **Optionally update Auth stack** to remove the callback domain (not required, but keeps config clean).
 
 ## Cost Estimate
 
@@ -135,12 +288,17 @@ https://<subdomain>.<domain-name>
 
 ### Bedrock Usage (Variable)
 
-| Model | Input Tokens | Output Tokens | Cost per 1M Tokens |
-|-------|--------------|---------------|-------------------|
-| Claude 3.5 Sonnet | - | - | $3 input / $15 output |
-| Claude 3 Haiku | - | - | $0.25 input / $1.25 output |
+Claude 4.5 models available on Amazon Bedrock:
 
-**Example**: 10M input + 2M output tokens/month with Claude 3.5 Sonnet ≈ $60/month
+| Model | Model ID | Input (per 1M) | Output (per 1M) |
+|-------|----------|----------------|-----------------|
+| Claude Opus 4.5 | `anthropic.claude-opus-4-5-20251101-v1:0` | $5 | $25 |
+| Claude Sonnet 4.5 | `anthropic.claude-sonnet-4-5-20250929-v1:0` | $3 | $15 |
+| Claude Haiku 4.5 | `anthropic.claude-haiku-4-5-20251001-v1:0` | $1 | $5 |
+
+**Example**: 10M input + 2M output tokens/month with Claude Sonnet 4.5 ≈ $60/month
+
+**Note**: Claude Sonnet 4.5 pricing increases for prompts >200K tokens ($6 input / $22.50 output per 1M).
 
 ## VPC Requirements
 

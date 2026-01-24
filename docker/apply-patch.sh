@@ -3,6 +3,16 @@
 # This script runs at container startup
 set -e  # Exit on error
 
+# Track critical patch failures for security-sensitive patches
+# Critical patches (like Patch 16 - user_id label) MUST succeed or startup fails
+CRITICAL_PATCH_FAILURES=""
+
+# Function to mark a critical patch as failed
+mark_critical_failure() {
+  CRITICAL_PATCH_FAILURES="${CRITICAL_PATCH_FAILURES}$1 "
+  echo "CRITICAL PATCH FAILURE: $1" >&2
+}
+
 PATCH_FILE="/opt/patch-fix.js"
 INDEX_FILE="/app/frontend/build/index.html"
 
@@ -786,9 +796,30 @@ try:
     print("user_id label patch applied successfully")
 except Exception as e:
     print(f"ERROR: Failed to apply user_id label patch: {e}", file=sys.stderr)
-    # Don't exit - let app try to start
+    # CRITICAL: This is a security patch - mark failure for startup check
+    print("PATCH16_FAILED", file=sys.stderr)
+    sys.exit(1)
 PYEOF
+    # Check if the Python script indicated failure
+    if [ $? -ne 0 ]; then
+      mark_critical_failure "Patch16-user_id_label"
+    fi
   fi
+fi
+
+# Final security check: fail startup if any critical patches failed
+if [ -n "$CRITICAL_PATCH_FAILURES" ]; then
+  echo "" >&2
+  echo "========================================" >&2
+  echo "CRITICAL SECURITY PATCHES FAILED" >&2
+  echo "========================================" >&2
+  echo "The following security-critical patches could not be applied:" >&2
+  echo "$CRITICAL_PATCH_FAILURES" >&2
+  echo "" >&2
+  echo "This may leave the application in an insecure state." >&2
+  echo "Refusing to start. Please check the patch patterns against the current OpenHands version." >&2
+  echo "========================================" >&2
+  exit 1
 fi
 
 echo "Starting OpenHands..."

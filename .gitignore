@@ -1,6 +1,7 @@
 *.js
 !jest.config.js
 !docker/*.js
+!lib/lambda-edge/*.js
 *.d.ts
 node_modules
 

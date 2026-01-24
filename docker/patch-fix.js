@@ -300,18 +300,22 @@
                   // Fallback to hardcoded Opus 4.5 global inference profile
                   defaultModel = defaultModel || "global.anthropic.claude-opus-4-5-20251101-v1:0";
 
-                  // Create minimal settings - LLM provider is "bedrock" for config.toml setup
-                  // IMPORTANT: Use the exact model format from config.toml with bedrock/ prefix
+                  // Create minimal settings for Bedrock via IAM instance profile
+                  // IMPORTANT: Use the exact model format with bedrock/ prefix
                   // The /api/options/models returns models without bedrock/ prefix, but OpenHands
                   // needs the full bedrock/ prefixed format to use instance profile auth
                   var bedrockModel = "bedrock/" + defaultModel;
                   console.log("Using Bedrock model:", bedrockModel);
 
+                  // Settings model fields (from openhands/storage/data_models/settings.py):
+                  // - llm_model: str | None - The model with provider prefix
+                  // - llm_api_key: SecretStr | None - Not needed for IAM auth
+                  // - llm_base_url: str | None - Not needed for Bedrock (uses AWS SDK)
+                  // NOTE: llm_provider is NOT a valid field - removed to prevent silent failures
                   var defaultSettings = {
-                    llm_provider: "bedrock",
                     llm_model: bedrockModel,
-                    llm_api_key: null,  // Not needed when using config.toml with instance profile
-                    aws_region: null    // Will use region from config.toml
+                    llm_api_key: null,     // Not needed when using IAM instance profile
+                    llm_base_url: null     // Not needed for Bedrock - uses AWS SDK directly
                   };
 
                   return fetch('/api/settings', {
@@ -333,13 +337,14 @@
                 }
               })
               .catch(function(e) {
-                console.log("Error checking settings:", e);
-                removeModal();
+                // Don't remove modal on error - let user see it and configure manually
+                console.error("Error checking settings:", e);
               });
           }
         })
         .catch(function(e) {
-          console.log("Error fetching models (LLM may not be configured):", e);
+          // Not an error if LLM isn't configured - modal stays open for user to configure
+          console.log("LLM may not be configured via config.toml:", e.message || e);
         });
       clearInterval(checkInterval);
       return;
