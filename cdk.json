@@ -17,11 +17,6 @@
     ]
   },
   "context": {
-    "authCallbackDomains": [
-      "openhands.example.com",
-      "openhands.test.example.com"
-    ],
-    "authDomainPrefixSuffix": "shared",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
