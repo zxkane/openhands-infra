@@ -112,7 +112,7 @@ export async function handler(event: OnEvent) {
     database,
     user: admin.username,
     password: admin.password,
-    ssl: { rejectUnauthorized: false },
+    ssl: { rejectUnauthorized: true },
   });
 
   try {

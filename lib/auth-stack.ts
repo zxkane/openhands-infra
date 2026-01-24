@@ -105,7 +105,12 @@ export class AuthStack extends cdk.Stack {
     // ========================================
 
     const readAssetBase64 = (assetPathFromRepoRoot: string) => {
-      const absolutePath = path.join(__dirname, '..', assetPathFromRepoRoot);
+      // Validate and normalize the path to prevent directory traversal
+      const normalizedPath = path.normalize(assetPathFromRepoRoot);
+      if (normalizedPath.includes('..') || path.isAbsolute(normalizedPath)) {
+        throw new Error(`Invalid asset path: ${assetPathFromRepoRoot}`);
+      }
+      const absolutePath = path.join(__dirname, '..', normalizedPath);
       return fs.readFileSync(absolutePath).toString('base64');
     };
 

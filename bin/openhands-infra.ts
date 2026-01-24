@@ -73,7 +73,8 @@ function parseDomainList(value: unknown, fallback: string[]): string[] {
         if (Array.isArray(parsed)) {
           return normalizeStringArray(parsed);
         }
-      } catch {
+      } catch (error) {
+        console.warn(`Failed to parse authCallbackDomains as JSON: ${error instanceof Error ? error.message : 'Unknown error'}. Falling back to comma-separated parsing.`);
         // fall through to comma-separated parsing
       }
     }
