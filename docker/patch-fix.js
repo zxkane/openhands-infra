@@ -432,10 +432,9 @@
   console.log("OpenHands auto-close settings modal patch loaded");
 })();
 
-// Auto-resume ARCHIVED conversations by triggering sandbox recreation
-// When a conversation is ARCHIVED (sandbox missing due to EC2 replacement), the frontend
-// shows "Connecting..." indefinitely because the sandbox doesn't exist.
-// This patch detects ARCHIVED status and triggers sandbox recreation via the start task endpoint.
+// Auto-resume MISSING sandbox conversations by triggering sandbox recreation
+// When a sandbox is missing (due to EC2 replacement), the frontend shows "Connecting..."
+// indefinitely. This patch detects sandbox_status=MISSING and triggers recreation.
 (function() {
   var resumeAttempted = {};  // Track which conversations we've tried to resume
   var checkInterval = null;
@@ -448,6 +447,10 @@
       return match[1].replace(/-/g, '');
     }
     return null;
+  }
+
+  function formatConversationId(convId) {
+    return convId.slice(0, 8) + '-' + convId.slice(8, 12) + '-' + convId.slice(12, 16) + '-' + convId.slice(16, 20) + '-' + convId.slice(20);
   }
 
   function checkAndResume() {
@@ -464,41 +467,52 @@
       return;
     }
 
-    // Fetch current conversation status
-    fetch('/api/conversations/' + convId.slice(0, 8) + '-' + convId.slice(8, 12) + '-' + convId.slice(12, 16) + '-' + convId.slice(16, 20) + '-' + convId.slice(20))
+    // Use app-conversations endpoint which returns sandbox_status
+    fetch('/api/v1/app-conversations?ids=' + convId)
       .then(function(resp) { return resp.json(); })
-      .then(function(conv) {
-        if (conv && conv.status === 'ARCHIVED') {
-          console.log('Auto-resume: conversation is ARCHIVED, triggering sandbox recreation...');
+      .then(function(convList) {
+        var conv = convList && convList[0];
+        if (!conv) {
+          console.log('Auto-resume: conversation not found');
+          return;
+        }
+
+        console.log('Auto-resume: checking conversation, sandbox_status=' + conv.sandbox_status);
+
+        if (conv.sandbox_status === 'MISSING') {
+          console.log('Auto-resume: sandbox is MISSING, triggering recreation...');
           resumeAttempted[convId] = true;
 
           // Trigger sandbox recreation by calling the resume endpoint (Patch 3c)
-          // The server-side Patch 3b will recreate the sandbox when it detects the missing container
-          var formattedId = convId.slice(0, 8) + '-' + convId.slice(8, 12) + '-' + convId.slice(12, 16) + '-' + convId.slice(16, 20) + '-' + convId.slice(20);
+          var formattedId = formatConversationId(convId);
           fetch('/api/v1/app-conversations/' + formattedId + '/resume', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({})
           }).then(function(resp) {
             if (resp.ok) {
-              console.log('Auto-resume: sandbox recreation triggered successfully');
+              console.log('Auto-resume: sandbox recreation triggered successfully, reloading...');
               // Reload the page to reconnect
               setTimeout(function() {
                 window.location.reload();
               }, 3000);
             } else {
-              console.warn('Auto-resume: failed to trigger sandbox recreation:', resp.status);
+              resp.text().then(function(text) {
+                console.warn('Auto-resume: failed to trigger sandbox recreation:', resp.status, text);
+              });
             }
           }).catch(function(err) {
             console.warn('Auto-resume: error triggering sandbox recreation:', err);
           });
-        } else if (conv && (conv.status === 'RUNNING' || conv.status === 'STARTING')) {
-          // Conversation is active, stop checking
+        } else if (conv.sandbox_status === 'RUNNING' || conv.sandbox_status === 'STARTING') {
+          // Sandbox is active, stop checking
+          console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
           clearInterval(checkInterval);
         }
       })
       .catch(function(err) {
         // Ignore errors - might be authentication redirect
+        console.log('Auto-resume: error fetching conversation:', err);
       });
   }
 
@@ -506,11 +520,12 @@
     var convId = getConversationId();
     if (!convId) return;
 
+    console.log('Auto-resume: initialized for conversation ' + convId);
     checkStartTime = Date.now();
     // Check every 5 seconds
     checkInterval = setInterval(checkAndResume, 5000);
-    // Also check immediately
-    setTimeout(checkAndResume, 1000);
+    // Also check immediately after a delay (let page load first)
+    setTimeout(checkAndResume, 2000);
   }
 
   // Start when DOM is ready
@@ -520,7 +535,7 @@
     init();
   }
 
-  console.log('OpenHands auto-resume ARCHIVED conversation patch loaded');
+  console.log('OpenHands auto-resume MISSING sandbox patch loaded');
 })();
 
 // Rewrite localhost URLs in displayed text (chat messages, etc.)
