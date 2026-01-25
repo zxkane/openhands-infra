@@ -153,12 +153,12 @@ export class ComputeStack extends cdk.Stack {
     });
     cdk.Tags.of(workspaceFileSystem).add('backup', 'true');
 
-    // Ensure the EFS file system policy allows mounting.
-    // Some environments may default to a policy that omits ClientMount, causing mounts to fail with "access denied".
+    // Ensure the EFS file system policy allows mounting from EC2 instances only.
+    // Restrict access to the specific EC2 role to prevent unauthorized access.
     workspaceFileSystem.addToResourcePolicy(new iam.PolicyStatement({
       sid: 'AllowClientMountViaMountTarget',
       effect: iam.Effect.ALLOW,
-      principals: [new iam.AnyPrincipal()],
+      principals: [ec2Role],
       actions: [
         'elasticfilesystem:ClientMount',
         'elasticfilesystem:ClientWrite',
@@ -174,6 +174,9 @@ export class ComputeStack extends cdk.Stack {
       },
     }));
 
+    // Access Point uses root (uid=0) because OpenHands sandbox containers run as root
+    // and need full access to workspace files for Docker operations and code execution.
+    // The EFS policy above restricts access to only the EC2 role via mount targets.
     const workspaceAccessPoint = new efs.AccessPoint(this, 'WorkspaceAccessPoint', {
       fileSystem: workspaceFileSystem,
       path: '/openhands',

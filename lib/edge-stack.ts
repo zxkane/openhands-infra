@@ -714,7 +714,7 @@ exports.handler = async (event) => {
     // Response Headers Policy for CORS support
     // Required because the origin sets access-control-allow-credentials but not access-control-allow-origin
     const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'CorsHeadersPolicy', {
-      responseHeadersPolicyName: `OpenHands-CORS-Headers-${this.account}`,
+      responseHeadersPolicyName: `OpenHands-CORS-${fullDomain.replace(/\./g, '-')}-${this.account}`,
       comment: 'Adds CORS headers for credentialed requests',
       corsBehavior: {
         accessControlAllowCredentials: true,
