@@ -3,7 +3,7 @@
 
 [core]
 # Base directory for workspace files
-workspace_base = "/opt/workspace_base"
+workspace_base = "/data/openhands/workspace"
 
 # Maximum number of concurrent conversations
 max_concurrent_conversations = 10
@@ -44,6 +44,14 @@ aws_region_name = "${AWS_REGION}"
 [sandbox]
 # Sandbox timeout in seconds
 timeout = 300
+
+# Persist sandbox workspace across EC2 replacement by mounting the EFS-backed host path
+# into each agent-server runtime at /workspace.
+#
+# NOTE: This is a single shared workspace base. If you need strict per-conversation
+# isolation for concurrent runtimes, this needs to be replaced with a per-session
+# mount strategy (not supported by OpenHands config today).
+volumes = "/data/openhands/workspace:/workspace:rw"
 
 # NOTE: use_host_network is NOT enabled because it causes port 8000 conflicts
 # when multiple agent-server containers run simultaneously. Each conversation

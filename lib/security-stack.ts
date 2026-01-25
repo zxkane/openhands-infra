@@ -68,6 +68,20 @@ export class SecurityStack extends cdk.Stack {
       allowAllOutbound: false,
     });
 
+    // Security Group for EFS (OpenHands workspaces)
+    const efsSecurityGroup = new ec2.SecurityGroup(this, 'EfsSecurityGroup', {
+      vpc,
+      description: 'Security group for OpenHands EFS (NFS)',
+      allowAllOutbound: false,
+    });
+
+    // Allow NFS from EC2 instances to EFS
+    efsSecurityGroup.addIngressRule(
+      ec2SecurityGroup,
+      ec2.Port.tcp(2049),
+      'Allow NFS from OpenHands EC2 instances'
+    );
+
     // Allow inbound from ALB on port 3000 (OpenHands app)
     ec2SecurityGroup.addIngressRule(
       albSecurityGroup,
@@ -94,6 +108,13 @@ export class SecurityStack extends cdk.Stack {
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(443),
       'Allow HTTPS outbound for Docker registry'
+    );
+
+    // Allow outbound NFS to EFS (EC2 SG has allowAllOutbound=false)
+    ec2SecurityGroup.addEgressRule(
+      efsSecurityGroup,
+      ec2.Port.tcp(2049),
+      'Allow NFS to OpenHands EFS'
     );
 
     // ALB outbound to EC2 (OpenHands app)
@@ -213,6 +234,8 @@ export class SecurityStack extends cdk.Stack {
       albSecurityGroup,
       ec2SecurityGroup,
       ec2SecurityGroupId: ec2SecurityGroup.securityGroupId,
+      efsSecurityGroup,
+      efsSecurityGroupId: efsSecurityGroup.securityGroupId,
       ec2Role,
       ec2InstanceProfile,
     };

@@ -117,6 +117,79 @@ PYEOF
   fi
 fi
 
+# Patch 2b: Per-sandbox workspace mount for agent-server containers
+# SANDBOX_VOLUMES is configured with a base host path, e.g.:
+#   /data/openhands/workspace:/workspace:rw
+# If we mount that base directly, concurrent sandboxes will share the same /workspace and collide.
+# Instead, when the mount targets /workspace, mount a per-sandbox subdirectory:
+#   /data/openhands/workspace/<sandbox_id> -> /workspace
+#
+# Note: docker_sandbox_service.py runs inside the openhands-app container, so we must be able to
+# create the host path from inside the container. ComputeStack mounts /data/openhands/workspace
+# into openhands-app at the same absolute path, enabling os.makedirs(...) to work.
+if [ -f "$SANDBOX_SERVICE_FILE" ]; then
+  if grep -q 'Per-sandbox workspace mount (patched by openhands-infra)' "$SANDBOX_SERVICE_FILE"; then
+    echo "Per-sandbox workspace mount patch already applied"
+  else
+    python3 << 'PYEOF'
+import re
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+    with open(file_path, "r") as f:
+        content = f.read()
+
+    # Find the "Prepare volumes" dict-comprehension and replace it with per-sandbox mount logic.
+    # Keep this tolerant to small formatting differences across upstream versions and our other patches.
+    pattern = re.compile(
+        r"(?P<lead>^[ \t]*# Prepare volumes[ \t]*\n)"
+        r"(?P<indent>^[ \t]*)volumes[ \t]*=[ \t]*\{"
+        r"(?s:.*?mount\.host_path.*?for[ \t]+mount[ \t]+in[ \t]+self\.mounts.*?\n[ \t]*\}[ \t]*\n)",
+        re.MULTILINE,
+    )
+
+    m = pattern.search(content)
+    if not m:
+        print("WARNING: Prepare volumes block not found; per-sandbox mount patch not applied", file=sys.stderr)
+        sys.exit(0)
+
+    indent = m.group("indent")
+    lead = m.group("lead")
+
+    replacement = (
+        lead
+        + f"{indent}# Per-sandbox workspace mount (patched by openhands-infra): treat mount.host_path as a base dir for /workspace\n"
+        + f"{indent}volumes = {{}}\n"
+        + f"{indent}for mount in self.mounts:\n"
+        + f"{indent}    host_path = mount.host_path\n"
+        + f"{indent}    if mount.container_path == '/workspace':\n"
+        + f"{indent}        import os as _os\n"
+        + f"{indent}        host_path = _os.path.join(host_path, sandbox_id)\n"
+        + f"{indent}        _os.makedirs(host_path, exist_ok=True)\n"
+        + f"{indent}        try:\n"
+        + f"{indent}            _os.chmod(host_path, 0o777)\n"
+        + f"{indent}        except Exception:\n"
+        + f"{indent}            pass\n"
+        + f"{indent}    volumes[host_path] = {{\n"
+        + f"{indent}        'bind': mount.container_path,\n"
+        + f"{indent}        'mode': mount.mode,\n"
+        + f"{indent}    }}\n"
+    )
+
+    content = content[: m.start()] + replacement + content[m.end() :]
+
+    with open(file_path, "w") as f:
+        f.write(content)
+
+    print("Per-sandbox workspace mount patch applied successfully")
+except Exception as e:
+    print(f"ERROR: Failed to apply per-sandbox workspace mount patch: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  fi
+fi
+
 # Patch 3: Conversation creation retry logic
 # This fixes the race condition where POST /api/conversations fails with 500
 # when the agent-server hasn't fully initialized yet after /alive returns 200.
@@ -178,6 +251,270 @@ try:
         print("Conversation retry patch pattern not found (may already be patched or code changed)")
 except Exception as e:
     print(f"ERROR: Failed to apply conversation retry patch: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  fi
+fi
+
+# Patch 3a: Add user_id parameter to start_sandbox() signature
+# This MUST run before Patch 3b so recreated sandboxes can pass user_id
+# for proper cross-user authorization in OpenResty.
+SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+if [ -f "$SANDBOX_SERVICE_FILE" ]; then
+  if grep -q "user_id: str | None = None" "$SANDBOX_SERVICE_FILE"; then
+    echo "start_sandbox user_id signature patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+
+    with open(file_path, 'r') as f:
+        content = f.read()
+
+    # Step 1: Add user_id parameter to start_sandbox method signature
+    # Handle both single-line and multi-line formats
+
+    # Try multi-line format first (OpenHands 1.2.1+)
+    old_sig_multiline = """async def start_sandbox(
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
+    ) -> SandboxInfo:"""
+    new_sig_multiline = """async def start_sandbox(
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None
+    ) -> SandboxInfo:"""
+
+    if old_sig_multiline in content:
+        content = content.replace(old_sig_multiline, new_sig_multiline)
+        print("Step 1: start_sandbox signature updated (multi-line format)")
+    else:
+        # Try old single-line format
+        old_sig = "async def start_sandbox(self, sandbox_id: str | None = None) -> Sandbox:"
+        new_sig = "async def start_sandbox(self, sandbox_id: str | None = None, user_id: str | None = None) -> Sandbox:"
+        if old_sig in content:
+            content = content.replace(old_sig, new_sig)
+            print("Step 1: start_sandbox signature updated (single-line format)")
+        else:
+            print("Step 1: start_sandbox signature not found or already patched")
+
+    # Step 2: Add user_id to labels dict (after Patch 10 adds conversation_id)
+    old_labels = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+        }"""
+    new_labels = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+            'user_id': user_id,  # Patch 3a: Enable cross-user authorization
+        }"""
+
+    if old_labels in content:
+        content = content.replace(old_labels, new_labels)
+        print("Step 2: user_id label added to labels dict")
+    else:
+        # Maybe Patch 10 wasn't applied yet, try the original pattern
+        old_labels_orig = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+        }"""
+        new_labels_orig = """labels = {
+            'sandbox_spec_id': sandbox_spec.id,
+            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
+            'user_id': user_id,  # Patch 3a: Enable cross-user authorization
+        }"""
+        if old_labels_orig in content:
+            content = content.replace(old_labels_orig, new_labels_orig)
+            print("Step 2: user_id and conversation_id labels added (Patch 10 combined)")
+        else:
+            print("Step 2: labels pattern not found (may need Patch 10 first)")
+
+    with open(file_path, 'w') as f:
+        f.write(content)
+
+    print("start_sandbox user_id signature patch applied successfully")
+except Exception as e:
+    print(f"ERROR: Failed to apply start_sandbox signature patch: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  fi
+fi
+
+# Patch 3b: Recreate missing sandbox on resume (EC2 replacement)
+# When the EC2 host is replaced, previously running agent-server containers are gone.
+# The conversation still references task.request.sandbox_id, and the default behavior
+# is to raise "Sandbox not found", leaving the UI stuck in "Connecting...".
+#
+# Fix: if get_sandbox(...) returns None, create a new sandbox using the same
+# sandbox id (strip the standard container prefix if present) so the workspace
+# can be re-mounted from the EFS-backed host path and the conversation can continue.
+#
+# NOTE: Patch 3a MUST run first to add user_id parameter to start_sandbox() signature.
+CONV_SERVICE_FILE="/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+if [ -f "$CONV_SERVICE_FILE" ]; then
+  if grep -q 'Recreate missing sandbox (EC2 replacement)' "$CONV_SERVICE_FILE"; then
+    echo "Missing sandbox resume patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
+    with open(file_path, "r") as f:
+        content = f.read()
+
+    old_block = """            if sandbox_info is None:
+                raise SandboxError(f'Sandbox not found: {task.request.sandbox_id}')
+            sandbox = sandbox_info
+"""
+
+    new_block = """            if sandbox_info is None:
+                # Recreate missing sandbox (EC2 replacement): the host was replaced so the docker
+                # container no longer exists, but the workspace is persisted on EFS.
+                import logging
+                _resume_logger = logging.getLogger(__name__)
+                _resume_logger.info(f'Sandbox missing for conversation, recreating: {task.request.sandbox_id}')
+                sandbox_id_for_start = task.request.sandbox_id
+                prefix = 'oh-agent-server-'
+                if sandbox_id_for_start.startswith(prefix):
+                    sandbox_id_for_start = sandbox_id_for_start[len(prefix):]
+                sandbox = await self.sandbox_service.start_sandbox(
+                    sandbox_id=sandbox_id_for_start,
+                    user_id=task.created_by_user_id,
+                )
+                task.sandbox_id = sandbox.id
+                task.request.sandbox_id = sandbox.id
+                _resume_logger.info(f'Sandbox recreated with user_id={task.created_by_user_id}: {sandbox.id}')
+            else:
+                sandbox = sandbox_info
+"""
+
+    if old_block not in content:
+        print("WARNING: Missing-sandbox resume block not found; patch not applied", file=sys.stderr)
+        sys.exit(0)
+
+    content = content.replace(old_block, new_block, 1)
+    # Add an idempotency marker.
+    content = content.replace(
+        "# Recreate missing sandbox (EC2 replacement):",
+        "# Recreate missing sandbox (EC2 replacement) (patched by openhands-infra):",
+        1,
+    )
+
+    with open(file_path, "w") as f:
+        f.write(content)
+
+    print("Missing sandbox resume patch applied successfully")
+except Exception as e:
+    print(f"ERROR: Failed to apply missing sandbox resume patch: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  fi
+fi
+
+# Patch 3c: Add /resume endpoint to trigger sandbox recreation for ARCHIVED conversations
+# When EC2 is replaced, sandbox containers are gone and conversations show ARCHIVED status.
+# The frontend calls this endpoint to trigger sandbox recreation directly via sandbox_service.
+CONV_ROUTER_FILE="/app/openhands/app_server/app_conversation/app_conversation_router.py"
+if [ -f "$CONV_ROUTER_FILE" ]; then
+  if grep -q 'resume_app_conversation' "$CONV_ROUTER_FILE"; then
+    echo "Resume endpoint patch already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    file_path = "/app/openhands/app_server/app_conversation/app_conversation_router.py"
+    with open(file_path, "r") as f:
+        content = f.read()
+
+    # Add the resume endpoint after the update endpoint (@router.patch)
+    old_endpoint = """@router.patch('/{conversation_id}')
+async def update_app_conversation("""
+
+    new_endpoint = """@router.post('/{conversation_id}/resume')
+async def resume_app_conversation(
+    conversation_id: str,
+    request: Request,
+    response: Response,
+    app_conversation_service: AppConversationService = app_conversation_service_dependency,
+) -> dict:
+    '''Resume an ARCHIVED conversation by recreating its sandbox.
+
+    This endpoint triggers sandbox recreation for conversations that were archived
+    due to EC2 instance replacement. The sandbox will be recreated with the same
+    conversation_id and user_id labels, allowing the workspace to be reconnected.
+    '''
+    import logging
+    from uuid import UUID
+    _logger = logging.getLogger(__name__)
+
+    conv_uuid = UUID(conversation_id)
+
+    # Get the conversation info to check status and get user_id
+    conversations = await app_conversation_service.batch_get_app_conversations([conv_uuid])
+    if not conversations or not conversations[0]:
+        response.status_code = 404
+        return {"error": "Conversation not found"}
+
+    conv = conversations[0]
+
+    # Only resume ARCHIVED conversations (sandbox is MISSING)
+    from openhands.app_server.sandbox.sandbox_models import SandboxStatus
+    if conv.sandbox_status != SandboxStatus.MISSING:
+        return {"status": "ok", "message": "Conversation is not archived", "sandbox_status": str(conv.sandbox_status)}
+
+    _logger.info(f"Resume requested for ARCHIVED conversation: {conversation_id}")
+
+    # Get the user_id from the conversation info service
+    conv_info = await app_conversation_service.app_conversation_info_service.get_app_conversation_info(conv_uuid)
+    if not conv_info:
+        response.status_code = 404
+        return {"error": "Conversation info not found"}
+
+    user_id = conv_info.created_by_user_id
+    sandbox_id = conv_info.sandbox_id
+
+    if not sandbox_id:
+        response.status_code = 400
+        return {"error": "No sandbox_id found for conversation"}
+
+    _logger.info(f"Recreating sandbox {sandbox_id} for user {user_id}")
+
+    try:
+        # Strip the oh-agent-server- prefix if present
+        sandbox_id_for_start = sandbox_id
+        prefix = 'oh-agent-server-'
+        if sandbox_id_for_start.startswith(prefix):
+            sandbox_id_for_start = sandbox_id_for_start[len(prefix):]
+
+        # Directly call sandbox_service.start_sandbox with user_id (Patch 3a signature)
+        sandbox = await app_conversation_service.sandbox_service.start_sandbox(
+            sandbox_id=sandbox_id_for_start,
+            user_id=user_id,
+        )
+
+        _logger.info(f"Sandbox recreated for conversation {conversation_id}: {sandbox.id}")
+        return {"status": "ok", "sandbox_id": sandbox.id}
+    except Exception as e:
+        _logger.exception(f"Failed to resume conversation {conversation_id}: {e}")
+        response.status_code = 500
+        return {"error": str(e)}
+
+
+@router.patch('/{conversation_id}')
+async def update_app_conversation("""
+
+    if old_endpoint not in content:
+        print("WARNING: Could not find update_app_conversation endpoint; resume patch not applied", file=sys.stderr)
+        sys.exit(0)
+
+    content = content.replace(old_endpoint, new_endpoint, 1)
+
+    with open(file_path, "w") as f:
+        f.write(content)
+
+    print("Resume endpoint patch applied successfully")
+except Exception as e:
+    print(f"ERROR: Failed to apply resume endpoint patch: {e}", file=sys.stderr)
     sys.exit(1)
 PYEOF
   fi
@@ -452,15 +789,16 @@ PYEOF
   fi
 fi
 
-# Patch 12: Add webhook headers for agent-server to openhands-app authentication
-# When agent-server sends webhook callbacks to openhands-app, it needs to include
+# Patch 12 + Patch 17: Add webhook headers and git safe.directory for agent-server containers
+# Patch 12: When agent-server sends webhook callbacks to openhands-app, it needs to include
 # the X-Session-API-Key header for authentication. Without this, webhook endpoints
 # return 401 Unauthorized and conversations fail to initialize properly.
-# The WebhookSpec class supports a 'headers' field that must be set via OH_WEBHOOKS_0_HEADERS env var.
+# Patch 17: Fix git "dubious ownership" error when workspace files created by host user
+# are accessed inside container by different user. Sets GIT_CONFIG_PARAMETERS='safe.directory=*'.
 SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
 if [ -f "$SANDBOX_SERVICE_FILE" ]; then
-  if grep -q "OH_WEBHOOKS_0_HEADERS" "$SANDBOX_SERVICE_FILE"; then
-    echo "webhook headers patch already applied"
+  if grep -q "GIT_CONFIG_PARAMETERS" "$SANDBOX_SERVICE_FILE"; then
+    echo "Patch 12 (webhook headers) and Patch 17 (git safe.directory) already applied"
   else
     python3 << 'PYEOF'
 import sys
@@ -476,34 +814,50 @@ try:
         # Add after the first import block
         content = content.replace('import logging', 'import json\nimport logging', 1)
 
-    # Find the env_vars assignment for WEBHOOK_CALLBACK_VARIABLE and add HEADERS
-    # Original pattern (the lines may vary slightly):
-    #         env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
-    #             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
-    #         )
-    # We need to add after this:
-    #         env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
-
-    old_pattern = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
+    # Check if this is an upgrade (Patch 12 exists but Patch 17 missing)
+    if 'OH_WEBHOOKS_0_HEADERS' in content and 'GIT_CONFIG_PARAMETERS' not in content:
+        # Upgrade path: add Patch 17 to existing Patch 12
+        old_headers_pattern = """env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})"""
+        new_headers_code = """env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
+        # Patch 17: Fix git "dubious ownership" error for EFS-persisted workspaces
+        # When workspace files are created by one user (ec2-user on host) but accessed by
+        # another user (inside container), git fails with "dubious ownership" error.
+        # Setting safe.directory=* allows git operations on any directory.
+        env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
+        if old_headers_pattern in content:
+            content = content.replace(old_headers_pattern, new_headers_code)
+            with open(file_path, 'w') as f:
+                f.write(content)
+            print("Patch 17 (git safe.directory) added to existing Patch 12")
+        else:
+            print("WARNING: Could not find Patch 12 pattern to add Patch 17")
+    else:
+        # Fresh install: apply both Patch 12 and Patch 17
+        old_pattern = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
         )"""
 
-    new_code = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
+        new_code = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
         )
         # Patch 12: Add webhook headers for authentication
         # Agent-server needs X-Session-API-Key header when calling back to openhands-app
-        env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})"""
+        env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
+        # Patch 17: Fix git "dubious ownership" error for EFS-persisted workspaces
+        # When workspace files are created by one user (ec2-user on host) but accessed by
+        # another user (inside container), git fails with "dubious ownership" error.
+        # Setting safe.directory=* allows git operations on any directory.
+        env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
 
-    if old_pattern in content:
-        content = content.replace(old_pattern, new_code)
-        with open(file_path, 'w') as f:
-            f.write(content)
-        print("webhook headers patch applied successfully")
-    else:
-        print("webhook headers patch pattern not found (code structure may have changed)")
+        if old_pattern in content:
+            content = content.replace(old_pattern, new_code)
+            with open(file_path, 'w') as f:
+                f.write(content)
+            print("Patch 12 (webhook headers) and Patch 17 (git safe.directory) applied successfully")
+        else:
+            print("Patch 12/17 pattern not found (code structure may have changed)")
 except Exception as e:
-    print(f"ERROR: Failed to apply webhook headers patch: {e}", file=sys.stderr)
+    print(f"ERROR: Failed to apply Patch 12/17: {e}", file=sys.stderr)
     # Don't exit - let app try to start
 PYEOF
   fi
@@ -652,121 +1006,32 @@ PYEOF
   fi
 fi
 
-# Patch 16: Add user_id label to sandbox containers for authorization
-# This enables OpenResty to verify container ownership. When a user requests access to
-# a runtime URL, OpenResty checks that the X-Cognito-User-Id header (from Lambda@Edge JWT)
-# matches the container's user_id label. Without this, any logged-in user can access
-# any other user's runtime services.
-# This patch:
-# 1. Modifies start_sandbox() to accept user_id parameter
-# 2. Adds 'user_id' to container labels
-# 3. Updates the caller to pass user_id from task.created_by_user_id
-SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+# Patch 16: Pass user_id to start_sandbox() for NEW conversations
+# This complements Patch 3a (signature modification) and Patch 3b (resume sandbox recreation).
+# Patch 3a adds the user_id parameter to start_sandbox() and adds user_id to container labels.
+# Patch 3b passes user_id when recreating sandboxes for archived conversations.
+# This patch (16) passes user_id when creating NEW conversation sandboxes.
+#
+# Together, these patches ensure:
+# - All sandboxes (new and recreated) get the user_id label
+# - OpenResty can verify container ownership for runtime URL access
+# - Authorization works correctly for both new and resumed conversations
 CONV_SERVICE_FILE="/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
-if [ -f "$SANDBOX_SERVICE_FILE" ] && [ -f "$CONV_SERVICE_FILE" ]; then
-  if grep -q "'user_id':" "$SANDBOX_SERVICE_FILE"; then
-    echo "user_id label patch already applied"
+if [ -f "$CONV_SERVICE_FILE" ]; then
+  if grep -q "user_id=task.created_by_user_id,  # Patch 16" "$CONV_SERVICE_FILE"; then
+    echo "Patch 16 (user_id for new conversations) already applied"
   else
     python3 << 'PYEOF'
 import sys
-import re
 
 try:
-    # Part 1: Update docker_sandbox_service.py
-    sandbox_file = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
-
-    with open(sandbox_file, 'r') as f:
-        content = f.read()
-
-    # Step 1a: Add user_id parameter to start_sandbox method signature
-    # Handle both old single-line and new multi-line formats:
-    #
-    # Old format (pre-1.2.1):
-    #     async def start_sandbox(self, sandbox_id: str | None = None) -> Sandbox:
-    #
-    # New format (1.2.1+):
-    #     async def start_sandbox(
-    #         self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
-    #     ) -> SandboxInfo:
-    #
-    # We need to add user_id: str | None = None after sandbox_id parameter
-
-    # Try old single-line format first
-    old_sig = "async def start_sandbox(self, sandbox_id: str | None = None) -> Sandbox:"
-    new_sig = "async def start_sandbox(self, sandbox_id: str | None = None, user_id: str | None = None) -> Sandbox:"
-
-    if old_sig in content:
-        content = content.replace(old_sig, new_sig)
-        print("Step 1a: start_sandbox signature updated (single-line format)")
-    else:
-        # Try new multi-line format (1.2.1+)
-        old_sig_multiline = """async def start_sandbox(
-        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
-    ) -> SandboxInfo:"""
-        new_sig_multiline = """async def start_sandbox(
-        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None
-    ) -> SandboxInfo:"""
-        if old_sig_multiline in content:
-            content = content.replace(old_sig_multiline, new_sig_multiline)
-            print("Step 1a: start_sandbox signature updated (multi-line format)")
-        elif "user_id: str | None = None" in content and "async def start_sandbox" in content:
-            print("Step 1a: start_sandbox signature already has user_id parameter")
-        else:
-            print("Step 1a: start_sandbox signature not found (code structure may have changed)")
-
-    # Step 1b: Add user_id to labels dict
-    # After Patch 10, the labels look like:
-    #         labels = {
-    #             'sandbox_spec_id': sandbox_spec.id,
-    #             'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-    #         }
-    # We need to add user_id:
-    #         labels = {
-    #             'sandbox_spec_id': sandbox_spec.id,
-    #             'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-    #             'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
-    #         }
-    old_labels = """labels = {
-            'sandbox_spec_id': sandbox_spec.id,
-            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-        }"""
-
-    new_labels = """labels = {
-            'sandbox_spec_id': sandbox_spec.id,
-            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-            'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
-        }"""
-
-    if old_labels in content:
-        content = content.replace(old_labels, new_labels)
-        print("Step 1b: user_id label added to labels dict")
-    else:
-        # Maybe Patch 10 wasn't applied yet, try the original pattern
-        old_labels_orig = """labels = {
-            'sandbox_spec_id': sandbox_spec.id,
-        }"""
-        new_labels_orig = """labels = {
-            'sandbox_spec_id': sandbox_spec.id,
-            'conversation_id': sandbox_id,  # Patch 10: Enable OpenResty dynamic routing
-            'user_id': user_id,  # Patch 16: Enable cross-user authorization (None if not authenticated)
-        }"""
-        if old_labels_orig in content:
-            content = content.replace(old_labels_orig, new_labels_orig)
-            print("Step 1b: user_id and conversation_id labels added (Patch 10 combined)")
-        else:
-            print("Step 1b: labels pattern not found (code structure may have changed)")
-
-    with open(sandbox_file, 'w') as f:
-        f.write(content)
-    print("docker_sandbox_service.py patched successfully")
-
-    # Part 2: Update live_status_app_conversation_service.py to pass user_id
     conv_file = "/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
 
     with open(conv_file, 'r') as f:
         content = f.read()
 
-    # Find the start_sandbox call and add user_id parameter
+    # Find the start_sandbox call for NEW conversations and add user_id parameter
+    # This call is in the "if not task.request.sandbox_id:" block (new conversation)
     # Original:
     #             sandbox = await self.sandbox_service.start_sandbox(
     #                 sandbox_id=sandbox_id_str
@@ -789,13 +1054,15 @@ try:
         content = content.replace(old_call, new_call)
         with open(conv_file, 'w') as f:
             f.write(content)
-        print("live_status_app_conversation_service.py patched successfully")
+        print("Patch 16: user_id added to start_sandbox call for new conversations")
+    elif "user_id=task.created_by_user_id" in content:
+        print("Patch 16: start_sandbox already has user_id parameter")
     else:
-        print("start_sandbox call pattern not found (code structure may have changed)")
+        print("Patch 16: start_sandbox call pattern not found (code structure may have changed)")
 
-    print("user_id label patch applied successfully")
+    print("Patch 16 applied successfully")
 except Exception as e:
-    print(f"ERROR: Failed to apply user_id label patch: {e}", file=sys.stderr)
+    print(f"ERROR: Failed to apply Patch 16: {e}", file=sys.stderr)
     # CRITICAL: This is a security patch - mark failure for startup check
     print("PATCH16_FAILED", file=sys.stderr)
     sys.exit(1)

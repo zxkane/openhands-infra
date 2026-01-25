@@ -108,6 +108,9 @@ const edgeStackId = edgeStackSuffix
   ? `${prefix}-Edge-${edgeStackSuffix}`
   : `${prefix}-Edge`;
 
+const skipS3Endpoint = app.node.tryGetContext('skipS3Endpoint') === 'true' ||
+  app.node.tryGetContext('skipS3Endpoint') === true;
+
 // Environment configuration
 const mainEnv = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
@@ -136,6 +139,7 @@ const authStack = new AuthStack(app, `${prefix}-Auth`, {
 const networkStack = new NetworkStack(app, `${prefix}-Network`, {
   env: mainEnv,
   config,
+  skipS3Endpoint,  // Skip if VPC already has S3 endpoint
   description: 'OpenHands Network Infrastructure - VPC Endpoints',
   crossRegionReferences: true,
 });
@@ -197,6 +201,8 @@ computeStack.addDependency(databaseStack);
 const edgeStack = new EdgeStack(app, edgeStackId, {
   env: usEast1Env,
   config,
+  alb: computeStack.alb,
+  computeOutput: computeStack.output,
   authOutput: authStack.output,
   description: 'OpenHands Edge Infrastructure - Lambda@Edge, CloudFront, WAF, Route 53',
   crossRegionReferences: true,

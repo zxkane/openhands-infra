@@ -46,15 +46,30 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function connectWithRetries(client: Client, attempts: number, delayMs: number): Promise<void> {
+interface ClientConfig {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  ssl: boolean | { rejectUnauthorized: boolean };
+}
+
+async function connectWithRetries(config: ClientConfig, attempts: number, delayMs: number): Promise<Client> {
   let lastError: unknown;
   for (let i = 0; i < attempts; i++) {
+    // pg Client cannot reconnect after failure - create a new instance each attempt
+    const client = new Client(config);
     try {
       await client.connect();
-      return;
+      return client;
     } catch (err) {
       lastError = err;
-      await sleep(delayMs);
+      // Ensure cleanup on failed attempt
+      await client.end().catch(() => {});
+      if (i < attempts - 1) {
+        await sleep(delayMs);
+      }
     }
   }
   throw new Error(`Failed to connect to database after ${attempts} attempts: ${String(lastError)}`);
@@ -106,17 +121,20 @@ export async function handler(event: OnEvent) {
   const admin = await getSecretJson(adminSecretArn);
   const proxy = await getSecretJson(proxySecretArn);
 
-  const client = new Client({
+  const clientConfig: ClientConfig = {
     host,
     port,
     database,
     user: admin.username,
     password: admin.password,
-    ssl: { rejectUnauthorized: true },
-  });
+    // Enable SSL with certificate verification
+    // NODE_EXTRA_CA_CERTS env var points to Lambda's built-in RDS CA certificates
+    ssl: true,
+  };
+
+  const client = await connectWithRetries(clientConfig, 12, 5000);
 
   try {
-    await connectWithRetries(client, 12, 5000);
 
     // Ensure roles exist.
     if (!(await roleExists(client, iamDatabaseUser))) {

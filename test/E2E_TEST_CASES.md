@@ -102,7 +102,7 @@ Create a test user in Cognito User Pool if it doesn't already exist.
 1. Get Cognito User Pool ID from stack outputs
    ```bash
    USER_POOL_ID=$(aws cloudformation describe-stacks \
-     --stack-name OpenHands-Edge \
+     --stack-name OpenHands-Auth \
      --region us-east-1 \
      --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' \
      --output text)
@@ -1027,6 +1027,114 @@ Verify that main application authentication still works correctly after authoriz
 
 ---
 
+## TC-014: Verify Archived Conversation Resume After EC2 Replacement
+
+### Description
+Verify that an archived (existing) conversation can be re-opened via the UI and continued after the ASG replaces the EC2 instance (e.g., due to deployment, health checks, or manual termination).
+
+### Prerequisites
+- Infrastructure deployed with persistent workspaces (EFS mounted at `/data/openhands`)
+- Logged in as a valid Cognito user (see TC-003)
+- At least one existing conversation with files created in the workspace
+
+### Steps
+
+1. Create a new conversation and write a marker file
+   - In the OpenHands UI, start a new conversation (TC-005)
+   - Prompt the agent to create a file, e.g.:
+     - `Create /workspace/project/persist_check.txt with content: hello-from-before-replace`
+     - `List files in /workspace/project and confirm persist_check.txt exists`
+
+2. Record the conversation id (`convId`)
+   - Use the URL, runtime URL, or conversation list item id to capture `<convId>` for the next steps
+
+3. Find the current ASG instance and terminate it (forces replacement)
+   ```bash
+   ASG_NAME=$(aws cloudformation describe-stacks \
+     --stack-name OpenHands-Compute \
+     --region $DEPLOY_REGION \
+     --query 'Stacks[0].Outputs[?OutputKey==`AsgName`].OutputValue' \
+     --output text)
+
+   INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+     --auto-scaling-group-names "$ASG_NAME" \
+     --region $DEPLOY_REGION \
+     --query 'AutoScalingGroups[0].Instances[0].InstanceId' \
+     --output text)
+
+   aws autoscaling terminate-instance-in-auto-scaling-group \
+     --instance-id "$INSTANCE_ID" \
+     --no-should-decrement-desired-capacity \
+     --region $DEPLOY_REGION
+   ```
+
+4. Wait for the replacement instance to become healthy
+   ```bash
+   aws autoscaling wait group-in-service \
+     --auto-scaling-group-names "$ASG_NAME" \
+     --region $DEPLOY_REGION
+   ```
+
+5. Navigate to home page and click on the archived conversation
+   ```javascript
+   // Navigate to home page
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+
+   // Find the archived conversation in "Recent Conversations" list and click it
+   mcp__chrome-devtools__click({ uid: "<conversation-link-uid>" })
+   ```
+
+6. Wait for conversation to load and verify chat history appears
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 180000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+7. Send a new prompt to resume the conversation
+   ```javascript
+   mcp__chrome-devtools__click({ uid: "<chat-input-uid>" })
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Read persist_check.txt and print its content"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+8. Wait for agent response and verify workspace file still exists
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "hello-from-before-replace",  // File content should appear
+     timeout: 120000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+9. Optional: Host-level verification (EFS-backed per-sandbox directory)
+   ```bash
+   # SSH to EC2 and check file directly
+   cat /data/openhands/workspace/<convId>/project/persist_check.txt
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Conversation list loads after EC2 replacement | "Recent Conversations" displays previous sessions |
+| 2 | Archived conversation clickable in UI | Click navigates to conversation page |
+| 3 | Chat history loads without errors | Previous messages visible; URL contains conversation ID |
+| 4 | Sandbox auto-resumes | Status shows "Waiting for task" (sandbox is active) |
+| 5 | Workspace contents persist | `persist_check.txt` exists with original content |
+| 6 | Conversation can continue | New agent actions execute successfully after replacement |
+
+---
+
 ## Test Summary Checklist
 
 Use this checklist to track test execution:
@@ -1046,6 +1154,7 @@ Use this checklist to track test execution:
 | TC-011 | Cross-User Access Denied | [ ] | Requires 2 test users |
 | TC-012 | Unauthenticated Access Denied | [ ] | Runtime returns 401 |
 | TC-013 | Main App Access Works | [ ] | Regression test |
+| TC-014 | Resume After EC2 Replacement | [ ] | Conversation + workspace persistence |
 
 ## Troubleshooting Guide
 

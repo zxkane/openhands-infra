@@ -135,6 +135,14 @@
   window.WebSocket.CLOSING = origWS.CLOSING;
   window.WebSocket.CLOSED = origWS.CLOSED;
 
+  function parseJsonSafe(resp) {
+    try {
+      return resp.json();
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  }
+
   var origFetch = window.fetch;
   window.fetch = function(url, opts) {
     var newUrl = url;
@@ -163,7 +171,46 @@
         console.log("Fetch patched:", url, "->", newUrl);
       }
     }
-    return origFetch.call(this, newUrl, opts);
+    var method = (opts && opts.method ? String(opts.method).toUpperCase() : "GET");
+    var isCreateConversation =
+      method === "POST" &&
+      typeof newUrl === "string" &&
+      newUrl.indexOf("/api/conversations") !== -1;
+
+    var alreadyRetried = false;
+    try {
+      alreadyRetried = !!(opts && typeof opts === "object" && opts.__ohSettingsRetried);
+    } catch (e) {}
+
+    if (!isCreateConversation || alreadyRetried) {
+      return origFetch.call(this, newUrl, opts);
+    }
+
+    return origFetch.call(this, newUrl, opts).then(function(resp) {
+      if (!resp || resp.status !== 400) return resp;
+
+      try {
+        return parseJsonSafe(resp.clone()).then(function(body) {
+          if (!body || body.msg_id !== "CONFIGURATION$SETTINGS_NOT_FOUND") return resp;
+          if (typeof window.__ohEnsureDefaultSettings !== "function") return resp;
+
+          console.warn("Conversation creation failed due to missing settings; creating defaults and retrying once...");
+
+          return window.__ohEnsureDefaultSettings().then(function(ok) {
+            if (!ok) return resp;
+            var retryOpts = opts;
+            try {
+              if (opts && typeof opts === "object") {
+                retryOpts = Object.assign({}, opts, { __ohSettingsRetried: true });
+              }
+            } catch (e) {}
+            return origFetch.call(window, newUrl, retryOpts);
+          });
+        }).catch(function() { return resp; });
+      } catch (e) {
+        return resp;
+      }
+    });
   };
 
   var origOpen = XMLHttpRequest.prototype.open;
@@ -216,15 +263,16 @@
   console.log("OpenHands runtime subdomain URL fix loaded");
 })();
 
-// Auto-close AI settings modal when LLM is already configured via config.toml
-// The modal opens when /api/settings returns 404 but LLM may already be set up
-// When LLM is configured but settings don't exist, create default settings first
-// This modal is intentionally non-dismissible (no close button, backdrop click ignored)
-// So we remove it from DOM directly when LLM is already configured
+// Auto-create default settings when LLM is already configured via config.toml.
+// NOTE: Some deployments hide the settings UI (HIDE_LLM_SETTINGS=true), which prevents
+// the settings modal from opening and can break conversation creation with:
+//   400 {"msg_id":"CONFIGURATION$SETTINGS_NOT_FOUND", ...}
+// This patch proactively creates default settings and closes the modal (if present).
 (function() {
   var checkInterval = null;
   var checkCount = 0;
   var maxChecks = 50; // Check for 5 seconds max (50 * 100ms)
+  var ensurePromise = null;
 
   function removeModal() {
     var overlay = document.querySelector('.fixed.inset-0.flex.items-center.justify-center.z-60');
@@ -234,118 +282,124 @@
     }
   }
 
+  function parseJsonSafe(resp) {
+    try {
+      return resp.json();
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  }
+
+  function isSettingsMissingResponse(resp) {
+    if (!resp) return Promise.resolve(false);
+    if (resp.status === 404) return Promise.resolve(true);
+    if (resp.status !== 400) return Promise.resolve(false);
+    return parseJsonSafe(resp).then(function(body) {
+      return !!(body && (body.msg_id === "CONFIGURATION$SETTINGS_NOT_FOUND" || body.message === "Settings not found"));
+    }).catch(function() { return false; });
+  }
+
+  function pickDefaultModel(models) {
+    var defaultModel = null;
+    var modelPatterns = [
+      /^global\.anthropic\.claude-opus/i,
+      /^global\.anthropic\.claude-sonnet/i,
+      /^anthropic\.claude-opus/i,
+      /^anthropic\.claude-sonnet-4/i,
+      /^anthropic\.claude-sonnet/i,
+      /^anthropic\.claude.*v\d+:\d+$/
+    ];
+
+    if (Array.isArray(models)) {
+      for (var p = 0; p < modelPatterns.length && !defaultModel; p++) {
+        for (var i = 0; i < models.length; i++) {
+          var model = models[i];
+          if (typeof model !== 'string') continue;
+          if (model.indexOf('embed') !== -1 || model.indexOf('haiku') !== -1) continue;
+          if (modelPatterns[p].test(model)) {
+            defaultModel = model;
+            break;
+          }
+        }
+      }
+
+      if (!defaultModel) {
+        for (var j = 0; j < models.length; j++) {
+          if (typeof models[j] === 'string' && /^anthropic\.claude.*v\d+:\d+$/.test(models[j])) {
+            defaultModel = models[j];
+            break;
+          }
+        }
+      }
+    }
+
+    return defaultModel || "global.anthropic.claude-opus-4-5-20251101-v1:0";
+  }
+
+  function ensureDefaultSettings() {
+    if (ensurePromise) return ensurePromise;
+
+    ensurePromise = fetch('/api/options/models')
+      .then(function(r) { return r.json(); })
+      .then(function(models) {
+        var hasModels = Array.isArray(models) ? models.length > 0 : false;
+        if (!hasModels) return false;
+
+        return fetch('/api/settings').then(function(settingsResp) {
+          if (settingsResp.ok) return true;
+          return isSettingsMissingResponse(settingsResp.clone ? settingsResp.clone() : settingsResp).then(function(missing) {
+            if (!missing) return false;
+
+            console.log("Settings not found, creating default settings...");
+            var defaultModel = pickDefaultModel(models);
+            var bedrockModel = "bedrock/" + defaultModel;
+            console.log("Using Bedrock model:", bedrockModel);
+
+            var defaultSettings = {
+              llm_provider: "bedrock",
+              llm_model: bedrockModel,
+              llm_api_key: null,
+              aws_region: null
+            };
+
+            return fetch('/api/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(defaultSettings)
+            }).then(function(createResp) {
+              if (createResp.ok) {
+                console.log("Default settings created successfully");
+                return true;
+              }
+              return parseJsonSafe(createResp).then(function(body) {
+                console.warn("Failed to create settings:", createResp.status, body);
+                return false;
+              }).catch(function() {
+                console.warn("Failed to create settings:", createResp.status);
+                return false;
+              });
+            });
+          });
+        });
+      })
+      .catch(function() {
+        // Common on unauthenticated routes - ignore.
+        return false;
+      });
+
+    return ensurePromise;
+  }
+
+  // Expose for other patches (e.g., fetch retry on /api/conversations).
+  try { window.__ohEnsureDefaultSettings = ensureDefaultSettings; } catch (e) {}
+
   function closeSettingsModal() {
     // Find the modal by test ID
     var modal = document.querySelector('[data-testid="ai-config-modal"]');
     if (modal) {
-      // Check if LLM is configured by fetching /api/options/models
-      // If models are available, LLM is configured via config.toml
-      fetch('/api/options/models')
-        .then(function(r) { return r.json(); })
-        .then(function(models) {
-          // API returns array directly, not {models: [...]}
-          var hasModels = Array.isArray(models) ? models.length > 0 : false;
-          if (hasModels) {
-            console.log("LLM configured via config.toml, checking if settings exist...");
-
-            // Check if settings already exist
-            fetch('/api/settings')
-              .then(function(settingsResp) {
-                if (settingsResp.status === 404) {
-                  // Settings don't exist, create default settings
-                  console.log("Settings not found, creating default settings...");
-
-                  // Model selection priority for Bedrock Claude:
-                  // 1. Claude 4 / Opus models (best tool calling support)
-                  // 2. Claude Sonnet 4 models
-                  // 3. Any other Claude model (avoid Haiku for tool-heavy workflows)
-                  var defaultModel = null;
-
-                  // Priority patterns (higher priority first)
-                  var modelPatterns = [
-                    // Global inference profiles (opus, sonnet in priority order)
-                    /^global\.anthropic\.claude-opus/i,
-                    /^global\.anthropic\.claude-sonnet/i,
-                    // Regional opus and sonnet models
-                    /^anthropic\.claude-opus/i,
-                    /^anthropic\.claude-sonnet-4/i,
-                    /^anthropic\.claude-sonnet/i,
-                    // Any Claude model (except embed and haiku)
-                    /^anthropic\.claude.*v\d+:\d+$/
-                  ];
-
-                  // Find best model based on priority
-                  for (var p = 0; p < modelPatterns.length && !defaultModel; p++) {
-                    for (var i = 0; i < models.length; i++) {
-                      var model = models[i];
-                      // Skip embedding and haiku models for tool-heavy workflows
-                      if (model.indexOf('embed') !== -1 || model.indexOf('haiku') !== -1) continue;
-                      if (modelPatterns[p].test(model)) {
-                        defaultModel = model;
-                        break;
-                      }
-                    }
-                  }
-
-                  // Fallback: if only haiku is available, use it (better than nothing)
-                  if (!defaultModel) {
-                    for (var i = 0; i < models.length; i++) {
-                      if (/^anthropic\.claude.*v\d+:\d+$/.test(models[i])) {
-                        defaultModel = models[i];
-                        break;
-                      }
-                    }
-                  }
-
-                  // Fallback to hardcoded Opus 4.5 global inference profile
-                  defaultModel = defaultModel || "global.anthropic.claude-opus-4-5-20251101-v1:0";
-
-                  // Create minimal settings for Bedrock via IAM instance profile
-                  // IMPORTANT: Use the exact model format with bedrock/ prefix
-                  // The /api/options/models returns models without bedrock/ prefix, but OpenHands
-                  // needs the full bedrock/ prefixed format to use instance profile auth
-                  var bedrockModel = "bedrock/" + defaultModel;
-                  console.log("Using Bedrock model:", bedrockModel);
-
-                  // Settings model fields (from openhands/storage/data_models/settings.py):
-                  // - llm_model: str | None - The model with provider prefix
-                  // - llm_api_key: SecretStr | None - Not needed for IAM auth
-                  // - llm_base_url: str | None - Not needed for Bedrock (uses AWS SDK)
-                  // NOTE: llm_provider is NOT a valid field - removed to prevent silent failures
-                  var defaultSettings = {
-                    llm_model: bedrockModel,
-                    llm_api_key: null,     // Not needed when using IAM instance profile
-                    llm_base_url: null     // Not needed for Bedrock - uses AWS SDK directly
-                  };
-
-                  return fetch('/api/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(defaultSettings)
-                  }).then(function(createResp) {
-                    if (createResp.ok) {
-                      console.log("Default settings created successfully");
-                    } else {
-                      console.log("Failed to create settings:", createResp.status);
-                    }
-                    return removeModal();
-                  });
-                } else {
-                  // Settings exist, just close modal
-                  console.log("Settings already exist");
-                  return removeModal();
-                }
-              })
-              .catch(function(e) {
-                // Don't remove modal on error - let user see it and configure manually
-                console.error("Error checking settings:", e);
-              });
-          }
-        })
-        .catch(function(e) {
-          // Not an error if LLM isn't configured - modal stays open for user to configure
-          console.log("LLM may not be configured via config.toml:", e.message || e);
-        });
+      ensureDefaultSettings().then(function(ok) {
+        if (ok) removeModal();
+      });
       clearInterval(checkInterval);
       return;
     }
@@ -358,14 +412,130 @@
 
   // Start checking after page load
   if (document.readyState === 'complete') {
+    try {
+      if (!(window.location.pathname || '').startsWith('/_')) {
+        ensureDefaultSettings().then(function() { /* no-op */ });
+      }
+    } catch (e) {}
     checkInterval = setInterval(closeSettingsModal, 100);
   } else {
     window.addEventListener('load', function() {
+      try {
+        if (!(window.location.pathname || '').startsWith('/_')) {
+          ensureDefaultSettings().then(function() { /* no-op */ });
+        }
+      } catch (e) {}
       checkInterval = setInterval(closeSettingsModal, 100);
     });
   }
 
   console.log("OpenHands auto-close settings modal patch loaded");
+})();
+
+// Auto-resume MISSING sandbox conversations by triggering sandbox recreation
+// When a sandbox is missing (due to EC2 replacement), the frontend shows "Connecting..."
+// indefinitely. This patch detects sandbox_status=MISSING and triggers recreation.
+(function() {
+  var resumeAttempted = {};  // Track which conversations we've tried to resume
+  var checkInterval = null;
+  var maxCheckTime = 120000;  // 2 minutes max check time
+  var checkStartTime = null;
+
+  function getConversationId() {
+    var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
+    if (match) {
+      return match[1].replace(/-/g, '');
+    }
+    return null;
+  }
+
+  function formatConversationId(convId) {
+    return convId.slice(0, 8) + '-' + convId.slice(8, 12) + '-' + convId.slice(12, 16) + '-' + convId.slice(16, 20) + '-' + convId.slice(20);
+  }
+
+  function checkAndResume() {
+    var convId = getConversationId();
+    if (!convId) return;
+
+    // Don't retry if we've already attempted for this conversation
+    if (resumeAttempted[convId]) return;
+
+    // Check timeout
+    if (checkStartTime && (Date.now() - checkStartTime > maxCheckTime)) {
+      console.log('Auto-resume: timeout reached, stopping checks');
+      clearInterval(checkInterval);
+      return;
+    }
+
+    // Use app-conversations endpoint which returns sandbox_status
+    fetch('/api/v1/app-conversations?ids=' + convId)
+      .then(function(resp) { return resp.json(); })
+      .then(function(convList) {
+        var conv = convList && convList[0];
+        if (!conv) {
+          console.log('Auto-resume: conversation not found');
+          return;
+        }
+
+        console.log('Auto-resume: checking conversation, sandbox_status=' + conv.sandbox_status);
+
+        if (conv.sandbox_status === 'MISSING') {
+          console.log('Auto-resume: sandbox is MISSING, triggering recreation...');
+          resumeAttempted[convId] = true;
+
+          // Trigger sandbox recreation by calling the resume endpoint (Patch 3c)
+          var formattedId = formatConversationId(convId);
+          fetch('/api/v1/app-conversations/' + formattedId + '/resume', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          }).then(function(resp) {
+            if (resp.ok) {
+              console.log('Auto-resume: sandbox recreation triggered successfully, reloading...');
+              // Reload the page to reconnect
+              setTimeout(function() {
+                window.location.reload();
+              }, 3000);
+            } else {
+              resp.text().then(function(text) {
+                console.warn('Auto-resume: failed to trigger sandbox recreation:', resp.status, text);
+              });
+            }
+          }).catch(function(err) {
+            console.warn('Auto-resume: error triggering sandbox recreation:', err);
+          });
+        } else if (conv.sandbox_status === 'RUNNING' || conv.sandbox_status === 'STARTING') {
+          // Sandbox is active, stop checking
+          console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
+          clearInterval(checkInterval);
+        }
+      })
+      .catch(function(err) {
+        // Ignore errors - might be authentication redirect
+        console.log('Auto-resume: error fetching conversation:', err);
+      });
+  }
+
+  function init() {
+    var convId = getConversationId();
+    if (!convId) return;
+
+    console.log('Auto-resume: initialized for conversation ' + convId);
+    checkStartTime = Date.now();
+    // Check every 5 seconds
+    checkInterval = setInterval(checkAndResume, 5000);
+    // Also check immediately after a delay (let page load first)
+    setTimeout(checkAndResume, 2000);
+  }
+
+  // Start when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  console.log('OpenHands auto-resume MISSING sandbox patch loaded');
 })();
 
 // Rewrite localhost URLs in displayed text (chat messages, etc.)

@@ -7,23 +7,27 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Construct } from 'constructs';
-import { OpenHandsConfig, AuthStackOutput } from './interfaces.js';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { OpenHandsConfig, ComputeStackOutput, AuthStackOutput } from './interfaces.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface EdgeStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
+  computeOutput?: ComputeStackOutput;
+  alb: elbv2.IApplicationLoadBalancer;
+  /** Required - provides Cognito configuration from AuthStack */
   authOutput: AuthStackOutput;
 }
 
 /**
- * EdgeStack - CDN + edge auth enforcement (us-east-1)
+ * EdgeStack - Combined Auth and CDN infrastructure (us-east-1)
  *
  * This stack must be deployed to us-east-1 for Lambda@Edge and CloudFront certificates.
  *
  * Components:
+ * - Cognito User Pool for user authentication
  * - Lambda@Edge function for JWT validation
  * - ACM certificate for CloudFront
  * - CloudFront distribution with VPC Origin
@@ -34,20 +38,9 @@ export class EdgeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EdgeStackProps) {
     super(scope, id, props);
 
-    const { config, authOutput } = props;
-
-    // Read ALB DNS name and origin secret from SSM parameters written by ComputeStack
-    // This avoids CDK cross-region reference issues when multiple Edge stacks share the same Compute stack
-    const albDnsName = ssm.StringParameter.valueForStringParameter(
-      this,
-      '/openhands/compute/alb-dns-name'
-    );
-    const originVerifySecret = ssm.StringParameter.valueForStringParameter(
-      this,
-      '/openhands/compute/origin-verify-secret'
-    );
+    const { config, alb, computeOutput } = props;
     const fullDomain = `${config.subDomain}.${config.domainName}`;
-    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.openhands.example.com
+    const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.{subdomain}.{domain}
 
     // ========================================
     // Route 53 & Certificate
@@ -63,15 +56,23 @@ export class EdgeStack extends cdk.Stack {
     // Includes both main domain and runtime wildcard as SAN
     const certificate = new acm.Certificate(this, 'Certificate', {
       domainName: fullDomain,
-      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.openhands.example.com
+      subjectAlternativeNames: [`*.${runtimeDomain}`], // *.runtime.{subdomain}.{domain}
       validation: acm.CertificateValidation.fromDns(hostedZone),
     });
 
     // ========================================
-    // Cognito (AuthStack)
+    // Cognito (from AuthStack output)
     // ========================================
-    // User pool, client, and managed login branding are provisioned in AuthStack and reused
-    // by multiple EdgeStack deployments (one per environment/domain).
+
+    // AuthStack provides Cognito configuration via authOutput prop
+    const { authOutput } = props;
+    if (!authOutput) {
+      throw new Error('EdgeStack requires authOutput from AuthStack');
+    }
+    const userPoolId = authOutput.userPoolId;
+    const userPoolClientId = authOutput.userPoolClientId;
+    const userPoolDomainPrefix = authOutput.userPoolDomainPrefix;
+    const clientSecretName = authOutput.clientSecretName;
 
     // ========================================
     // Lambda@Edge for Authentication
@@ -87,32 +88,27 @@ export class EdgeStack extends cdk.Stack {
       ],
     });
 
-    // Load Lambda@Edge auth handler from external file for testability
-    // Replace placeholders with actual config values at synth time
-    const authHandlerPath = path.join(__dirname, 'lambda-edge', 'auth-handler.js');
-    let authHandlerCode = fs.readFileSync(authHandlerPath, 'utf8');
-
-    // Strip the module.exports section (used only for testing)
-    authHandlerCode = authHandlerCode.replace(/\/\/ Export functions for testing[\s\S]*$/, '');
-
-    // Replace CONFIG placeholders with actual values
-    authHandlerCode = authHandlerCode
-      .replace("'{{USER_POOL_ID}}'", `'${authOutput.userPoolId}'`)
-      .replace("'{{CLIENT_ID}}'", `'${authOutput.userPoolClientId}'`)
-      .replace("'{{CLIENT_SECRET}}'", `'{{resolve:secretsmanager:${authOutput.clientSecretName}:SecretString}}'`)
-      .replace("'{{COGNITO_DOMAIN}}'", `'${authOutput.userPoolDomainPrefix}.auth.${authOutput.region}.amazoncognito.com'`)
-      .replace("'{{JWKS_URI}}'", `'https://cognito-idp.${authOutput.region}.amazonaws.com/${authOutput.userPoolId}/.well-known/jwks.json'`)
-      .replace("'{{ISSUER}}'", `'https://cognito-idp.${authOutput.region}.amazonaws.com/${authOutput.userPoolId}'`)
-      .replace("'{{REGION}}'", `'${authOutput.region}'`)
-      // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
-      // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
-      // The broader scope is REQUIRED for runtime functionality - restricting to .{subdomain}.{domain}
-      // would break access to runtime subdomains. WAF and Lambda@Edge provide additional protection.
-      .replace("'{{COOKIE_DOMAIN}}'", `'.${config.domainName}'`);
-
     // Lambda@Edge function with proper JWKS signature verification
+    // Load auth handler from external file for unit testing coverage
+    // Note: Lambda@Edge cannot access regional services, so config is embedded at deploy time
+    const authHandlerPath = path.join(__dirname, 'lambda-edge', 'auth-handler.js');
+    let authHandlerCode = fs.readFileSync(authHandlerPath, 'utf-8');
+
+    // Replace placeholders with actual config values
+    // SECURITY NOTE: Cookie domain set to base domain for runtime subdomain access
+    // This allows auth cookies to work on both main domain and *.runtime.{subdomain}.{domain}
+    authHandlerCode = authHandlerCode
+      .replace(/'\{\{USER_POOL_ID\}\}'/g, `'${userPoolId}'`)
+      .replace(/'\{\{CLIENT_ID\}\}'/g, `'${userPoolClientId}'`)
+      .replace(/'\{\{CLIENT_SECRET\}\}'/g, `'{{resolve:secretsmanager:${clientSecretName}:SecretString}}'`)
+      .replace(/'\{\{COGNITO_DOMAIN\}\}'/g, `'${userPoolDomainPrefix}.auth.${authOutput.region}.amazoncognito.com'`)
+      .replace(/'\{\{JWKS_URI\}\}'/g, `'https://cognito-idp.${authOutput.region}.amazonaws.com/${userPoolId}/.well-known/jwks.json'`)
+      .replace(/'\{\{ISSUER\}\}'/g, `'https://cognito-idp.${authOutput.region}.amazonaws.com/${userPoolId}'`)
+      .replace(/'\{\{REGION\}\}'/g, `'${authOutput.region}'`)
+      .replace(/'\{\{COOKIE_DOMAIN\}\}'/g, `'.${config.domainName}'`);
+
     const authFunction = new lambda.Function(this, 'AuthFunction', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(authHandlerCode),
       role: authFunctionRole,
@@ -122,6 +118,7 @@ export class EdgeStack extends cdk.Stack {
 
     // Create version for Lambda@Edge
     const authFunctionVersion = authFunction.currentVersion;
+
 
     // ========================================
     // Lambda@Edge for Runtime Security Headers
@@ -139,14 +136,32 @@ export class EdgeStack extends cdk.Stack {
 
     // Lambda@Edge function for origin-response - adds security headers for runtime requests
     const securityHeadersFunction = new lambda.Function(this, 'SecurityHeadersFunction', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(`
 // Origin Response Handler - adds security headers for runtime requests
+// and prevents caching of HTML files to ensure patches are always fresh
 exports.handler = async (event) => {
   const response = event.Records[0].cf.response;
   const request = event.Records[0].cf.request;
   const host = request.headers.host ? request.headers.host[0].value : '';
+  const uri = request.uri || '';
+  const contentType = response.headers['content-type'] ? response.headers['content-type'][0].value : '';
+
+  // Prevent caching of HTML files to ensure patches are always fresh
+  // This is important for the patched index.html with auto-resume functionality
+  const isHtmlRequest = uri === '/' || uri.endsWith('.html') ||
+    uri.startsWith('/conversations') || uri.startsWith('/settings') ||
+    contentType.includes('text/html');
+
+  if (isHtmlRequest && !host.includes('.runtime.')) {
+    response.headers['cache-control'] = [{
+      key: 'Cache-Control',
+      value: 'no-cache, no-store, must-revalidate'
+    }];
+    response.headers['pragma'] = [{ key: 'Pragma', value: 'no-cache' }];
+    response.headers['expires'] = [{ key: 'Expires', value: '0' }];
+  }
 
   // Check if this is a runtime request (runtime subdomain)
   if (host.includes('.runtime.')) {
@@ -273,11 +288,9 @@ exports.handler = async (event) => {
 
     // Note: CloudFront VPC Origin does NOT support WebSocket connections.
     // We use internet-facing ALB with HttpOrigin to support WebSocket.
-    //
-    // Security: ALB requires X-Origin-Verify header for origin verification.
-    // This prevents direct access to ALB bypassing CloudFront.
-    // ALB DNS name and origin secret are passed as strings to avoid cross-region CDK reference issues.
-    const httpOrigin = new origins.HttpOrigin(albDnsName, {
+    // Origin verification header prevents direct ALB access bypassing CloudFront/WAF
+    const originVerifySecret = computeOutput?.originVerifySecret ?? 'fallback-secret';
+    const httpOrigin = new origins.HttpOrigin(alb.loadBalancerDnsName, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
       readTimeout: cdk.Duration.seconds(60),
       keepaliveTimeout: cdk.Duration.seconds(60),
@@ -288,10 +301,8 @@ exports.handler = async (event) => {
 
     // Response Headers Policy for CORS support
     // Required because the origin sets access-control-allow-credentials but not access-control-allow-origin
-    // Include domain in name to support multiple Edge stacks in the same account
-    const domainSuffix = config.domainName.replace(/\./g, '-');
     const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'CorsHeadersPolicy', {
-      responseHeadersPolicyName: `OpenHands-CORS-${domainSuffix}-${this.account}`,
+      responseHeadersPolicyName: `OpenHands-CORS-${fullDomain.replace(/\./g, '-')}-${this.account}`,
       comment: 'Adds CORS headers for credentialed requests',
       corsBehavior: {
         accessControlAllowCredentials: true,
@@ -324,8 +335,8 @@ exports.handler = async (event) => {
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: 'OpenHands CloudFront Distribution',
       domainNames: [
-        fullDomain,                  // openhands.example.com (main app)
-        `*.${runtimeDomain}`,        // *.runtime.openhands.example.com (runtime subdomains)
+        fullDomain,                  // {subdomain}.{domain} (main app)
+        `*.${runtimeDomain}`,        // *.runtime.{subdomain}.{domain} (runtime subdomains)
       ],
       certificate: certificate,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
@@ -334,52 +345,94 @@ exports.handler = async (event) => {
       defaultBehavior: {
         origin: httpOrigin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
         responseHeadersPolicy: responseHeadersPolicy,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         edgeLambdas: [
           {
-            functionVersion: authFunctionVersion,
             eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+            functionVersion: authFunctionVersion,
+            includeBody: false,
           },
           {
-            functionVersion: securityHeadersFunctionVersion,
             eventType: cloudfront.LambdaEdgeEventType.ORIGIN_RESPONSE,
+            functionVersion: securityHeadersFunctionVersion,
+            includeBody: false,
           },
         ],
+      },
+      // Runtime proxy behavior for path-based routing (/runtime/{conv_id}/{port}/...)
+      // This is used for WebSocket connections to agent-server (sockets/events)
+      // which require authentication via the main domain cookie
+      additionalBehaviors: {
+        '/runtime/*': {
+          origin: httpOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+          responseHeadersPolicy: responseHeadersPolicy,
+          // Add Lambda@Edge to verify JWT and inject X-Cognito-User-Id header
+          // This is required for OpenResty to authorize runtime requests
+          edgeLambdas: [
+            {
+              eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+              functionVersion: authFunctionVersion,
+              includeBody: false,
+            },
+          ],
+        },
       },
     });
 
     // ========================================
-    // Route 53 Records
+    // Route 53 DNS Records
     // ========================================
 
-    // A record for main domain (keep 'AliasRecord' ID for backwards compatibility)
+    // Main domain record: {subdomain}.{domain}
     new route53.ARecord(this, 'AliasRecord', {
       zone: hostedZone,
       recordName: config.subDomain,
-      target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.CloudFrontTarget(distribution)
+      ),
     });
 
-    // Wildcard A record for runtime subdomains (keep 'RuntimeWildcardRecord' ID for backwards compatibility)
-    // *.runtime.{subdomain}.{domain} → CloudFront
+    // Runtime wildcard record: *.runtime.{subdomain}.{domain}
     new route53.ARecord(this, 'RuntimeWildcardRecord', {
       zone: hostedZone,
       recordName: `*.runtime.${config.subDomain}`,
-      target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.CloudFrontTarget(distribution)
+      ),
     });
 
     // ========================================
-    // Outputs
+    // CloudFormation Outputs
     // ========================================
+
+    new cdk.CfnOutput(this, 'DistributionId', {
+      value: distribution.distributionId,
+      description: 'CloudFront Distribution ID',
+    });
 
     new cdk.CfnOutput(this, 'DistributionDomainName', {
       value: distribution.distributionDomainName,
+      description: 'CloudFront Distribution Domain Name',
     });
 
     new cdk.CfnOutput(this, 'SiteUrl', {
       value: `https://${fullDomain}`,
+      description: 'OpenHands Application URL',
     });
+
+    new cdk.CfnOutput(this, 'WebAclArn', {
+      value: webAcl.attrArn,
+      description: 'WAF WebACL ARN',
+    });
+
   }
 }

@@ -29,6 +29,7 @@ Key features:
 - **AWS Bedrock**: LLM inference via IAM Role (no API keys)
 - **Aurora Serverless v2**: PostgreSQL database with RDS Proxy for connection pooling and high availability
 - **S3 Data Persistence**: Conversation events, settings stored in S3 (survives instance replacement)
+- **EFS Workspace Persistence**: Sandbox workspaces stored in EFS under `/data/openhands` (survives instance replacement)
 - **Self-Healing**: ASG with ELB health checks + persistent database = no data loss on instance replacement
 - **Auto-updates**: Watchtower for Docker image updates
 - **Security**: Cognito auth (30-day session), WAF, VPC Endpoints, private subnets, Secrets Manager
@@ -316,7 +317,7 @@ OpenHands data is stored durably for self-healing across instance replacements:
 | Conversation Metadata | Aurora PostgreSQL | Permanent (via RDS Proxy) |
 | Conversation Events | S3 | Permanent (survives instance replacement) |
 | User Settings | S3 | Permanent |
-| Workspace Files | Local EBS | Ephemeral (cleared on instance replacement) |
+| Workspace Files | EFS | Persistent (survives instance replacement) |
 
 **Aurora Serverless v2 with RDS Proxy**:
 - PostgreSQL 15.8 with RDS Proxy for connection pooling
@@ -339,6 +340,42 @@ OpenHands data is stored durably for self-healing across instance replacements:
 - Block all public access
 - Enforce SSL
 - Removal policy: RETAIN (data preserved if stack is deleted)
+
+### Conversation Resume (Self-Healing)
+
+When EC2 instances are replaced (ASG scaling, CDK deployment, health check failure), sandbox Docker containers are terminated. OpenHands marks these conversations as `ARCHIVED` because the sandbox is missing. However, all conversation data is preserved:
+
+| Data | Storage | Survives EC2 Replacement |
+|------|---------|--------------------------|
+| Conversation metadata | Aurora PostgreSQL | ✅ Yes |
+| Conversation events/history | S3 | ✅ Yes |
+| Workspace files | EFS (`/data/openhands`) | ✅ Yes |
+
+**Auto-Resume Flow**:
+
+```
+User clicks archived conversation
+    ↓
+Frontend detects ARCHIVED status
+    ↓
+Calls POST /api/v1/app-conversations/{id}/resume
+    ↓
+Backend recreates sandbox container with:
+  - Same conversation ID
+  - user_id label (for authorization)
+  - EFS workspace mounted
+    ↓
+Page reloads → conversation is usable again
+```
+
+**What happens automatically**:
+1. User navigates to an archived conversation
+2. Frontend patch detects `status: ARCHIVED` and triggers resume
+3. Backend creates a new sandbox container with the original workspace
+4. Container gets `user_id` label for runtime URL authorization
+5. Page reloads and conversation is ready for use
+
+**Note**: The workspace files on EFS are preserved, so any code or files created in the previous session are still available after resume.
 
 ## Session Management
 
@@ -440,6 +477,33 @@ ACM certificates use DNS validation. Ensure the Hosted Zone is correctly configu
 ### EC2 Instance Not Starting
 Check CloudWatch Logs at `/openhands/application` for container startup errors.
 
+## CI/CD
+
+This project uses GitHub Actions for continuous integration:
+
+| Workflow | Trigger | Description |
+|----------|---------|-------------|
+| **CI** | Push/PR to main, develop | Build TypeScript, run all tests (Jest + pytest) |
+| **Security Scan** | Push/PR to main, daily | npm audit, Checkov, git-secrets, Semgrep SAST, cfn-lint |
+
+### Running Tests Locally
+
+```bash
+# Run all tests (build + TypeScript + Python)
+npm run test
+
+# Run TypeScript tests only
+npm run test:ts
+
+# Run Python tests only (requires .venv)
+npm run test:py
+
+# Update snapshots after intentional changes
+npm run test:ts -- -u
+```
+
 ## License
 
-This project is for deploying OpenHands. See [OpenHands License](https://github.com/All-Hands-AI/OpenHands/blob/main/LICENSE) for the main application.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+This infrastructure project deploys [OpenHands](https://github.com/All-Hands-AI/OpenHands). See the [OpenHands License](https://github.com/All-Hands-AI/OpenHands/blob/main/LICENSE) for the main application.

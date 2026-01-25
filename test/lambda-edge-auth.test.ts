@@ -334,4 +334,111 @@ describe('Lambda@Edge Auth Handler (lib/lambda-edge/auth-handler.js)', () => {
       authHandler._setConfig({ clientId: '{{CLIENT_ID}}' });
     });
   });
+
+  describe('handler - Runtime Subdomain Authentication', () => {
+    // Helper to create CloudFront event
+    const createRuntimeEvent = (host: string, cookies?: Array<{ value: string }>) => ({
+      Records: [{
+        cf: {
+          request: {
+            uri: '/app',
+            headers: {
+              host: [{ value: host }],
+              ...(cookies ? { cookie: cookies } : {}),
+            },
+            querystring: '',
+          },
+        },
+      }],
+    });
+
+    test('returns 401 for runtime request without id_token cookie', async () => {
+      const event = createRuntimeEvent(
+        '5000-abc123def456789012345678901234ab.runtime.openhands.example.com'
+      );
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      expect(response.body).toContain('Authentication required');
+    });
+
+    test('returns 401 for runtime request with empty cookies', async () => {
+      const event = createRuntimeEvent(
+        '5000-abc123def456789012345678901234ab.runtime.openhands.example.com',
+        [{ value: 'other_cookie=value' }]
+      );
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      expect(response.body).toContain('Authentication required');
+    });
+
+    test('returns 401 for runtime request with invalid token', async () => {
+      const event = createRuntimeEvent(
+        '5000-abc123def456789012345678901234ab.runtime.openhands.example.com',
+        [{ value: 'id_token=invalid.token.here' }]
+      );
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      expect(response.body).toContain('Invalid or expired token');
+    });
+
+    test('returns 401 for runtime request with malformed JWT', async () => {
+      const event = createRuntimeEvent(
+        '3000-abc123def456789012345678901234ab.runtime.openhands.example.com',
+        [{ value: 'id_token=not-a-jwt' }]
+      );
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+    });
+
+    test('returns 401 with multiple invalid tokens from different User Pools', async () => {
+      // Simulates the case where user has stale cookies from old User Pools
+      const event = createRuntimeEvent(
+        '5000-abc123def456789012345678901234ab.runtime.openhands.example.com',
+        [
+          { value: 'id_token=old.invalid.token1' },
+          { value: 'id_token=old.invalid.token2' },
+        ]
+      );
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      expect(response.body).toContain('Invalid or expired token');
+    });
+
+    test('non-runtime requests without token redirect to login (not 401)', async () => {
+      const event = {
+        Records: [{
+          cf: {
+            request: {
+              uri: '/api/conversations',
+              headers: {
+                host: [{ value: 'openhands.example.com' }],
+              },
+              querystring: '',
+            },
+          },
+        }],
+      };
+
+      const response = await authHandler.handler(event);
+
+      // Non-runtime requests redirect to login instead of returning 401
+      expect(response.status).toBe('302');
+      expect(response.headers.location[0].value).toContain('/login');
+    });
+  });
 });
