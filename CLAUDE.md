@@ -328,6 +328,64 @@ aws cognito-idp admin-set-user-password \
   --region us-east-1
 ```
 
+## Lambda@Edge Development Guidelines
+
+### External Handler Files Required
+
+**CRITICAL**: Lambda@Edge handler code MUST be stored in external files under `lib/lambda-edge/`, NOT inlined in CDK stack definitions.
+
+| Do | Don't |
+|----|-------|
+| `lib/lambda-edge/auth-handler.js` + `fs.readFileSync()` | `code: lambda.Code.fromInline(\`...\`)` with embedded code |
+| External file with `{{PLACEHOLDER}}` syntax | Template literals with `${variable}` in stack |
+
+**Rationale**:
+1. **Unit Testing**: External files enable Jest unit tests with mocking
+2. **Maintainability**: Easier to read, edit, and debug
+3. **Code Review**: Changes are visible in diff without escaping issues
+4. **IDE Support**: Proper syntax highlighting and linting
+
+### Placeholder Replacement Pattern
+
+Lambda@Edge cannot access environment variables or regional services. Configuration must be embedded at synth time using placeholder replacement:
+
+```typescript
+// In CDK stack (lib/edge-stack.ts)
+const authHandlerPath = path.join(__dirname, 'lambda-edge', 'auth-handler.js');
+let authHandlerCode = fs.readFileSync(authHandlerPath, 'utf-8');
+
+authHandlerCode = authHandlerCode
+  .replace(/'{{USER_POOL_ID}}'/g, `'${userPoolId}'`)
+  .replace(/'{{CLIENT_ID}}'/g, `'${clientId}'`);
+
+const authFunction = new lambda.Function(this, 'AuthFunction', {
+  code: lambda.Code.fromInline(authHandlerCode),
+  // ...
+});
+```
+
+```javascript
+// In external handler (lib/lambda-edge/auth-handler.js)
+const CONFIG = {
+  userPoolId: '{{USER_POOL_ID}}',  // Replaced at synth time
+  clientId: '{{CLIENT_ID}}',
+};
+```
+
+### Testing External Handlers
+
+```javascript
+// test/lambda-edge-auth.test.ts
+import { handler, getCookie, parseRuntimeSubdomain } from '../lib/lambda-edge/auth-handler.js';
+
+describe('auth-handler', () => {
+  test('parseRuntimeSubdomain extracts port and convId', () => {
+    expect(parseRuntimeSubdomain('5000-abc123.runtime.example.com'))
+      .toEqual({ port: '5000', convId: 'abc123', isRuntime: true });
+  });
+});
+```
+
 ## Lambda@Edge Deletion Note
 
 Lambda@Edge functions cannot be deleted immediately after CloudFront distribution removal. AWS requires several hours for edge replicas to be cleaned up. If stack deletion fails due to Lambda@Edge, use `--retain-resources` flag.
