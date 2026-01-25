@@ -789,15 +789,16 @@ PYEOF
   fi
 fi
 
-# Patch 12: Add webhook headers for agent-server to openhands-app authentication
-# When agent-server sends webhook callbacks to openhands-app, it needs to include
+# Patch 12 + Patch 17: Add webhook headers and git safe.directory for agent-server containers
+# Patch 12: When agent-server sends webhook callbacks to openhands-app, it needs to include
 # the X-Session-API-Key header for authentication. Without this, webhook endpoints
 # return 401 Unauthorized and conversations fail to initialize properly.
-# The WebhookSpec class supports a 'headers' field that must be set via OH_WEBHOOKS_0_HEADERS env var.
+# Patch 17: Fix git "dubious ownership" error when workspace files created by host user
+# are accessed inside container by different user. Sets GIT_CONFIG_PARAMETERS='safe.directory=*'.
 SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
 if [ -f "$SANDBOX_SERVICE_FILE" ]; then
-  if grep -q "OH_WEBHOOKS_0_HEADERS" "$SANDBOX_SERVICE_FILE"; then
-    echo "webhook headers patch already applied"
+  if grep -q "GIT_CONFIG_PARAMETERS" "$SANDBOX_SERVICE_FILE"; then
+    echo "Patch 12 (webhook headers) and Patch 17 (git safe.directory) already applied"
   else
     python3 << 'PYEOF'
 import sys
@@ -813,34 +814,50 @@ try:
         # Add after the first import block
         content = content.replace('import logging', 'import json\nimport logging', 1)
 
-    # Find the env_vars assignment for WEBHOOK_CALLBACK_VARIABLE and add HEADERS
-    # Original pattern (the lines may vary slightly):
-    #         env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
-    #             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
-    #         )
-    # We need to add after this:
-    #         env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
-
-    old_pattern = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
+    # Check if this is an upgrade (Patch 12 exists but Patch 17 missing)
+    if 'OH_WEBHOOKS_0_HEADERS' in content and 'GIT_CONFIG_PARAMETERS' not in content:
+        # Upgrade path: add Patch 17 to existing Patch 12
+        old_headers_pattern = """env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})"""
+        new_headers_code = """env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
+        # Patch 17: Fix git "dubious ownership" error for EFS-persisted workspaces
+        # When workspace files are created by one user (ec2-user on host) but accessed by
+        # another user (inside container), git fails with "dubious ownership" error.
+        # Setting safe.directory=* allows git operations on any directory.
+        env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
+        if old_headers_pattern in content:
+            content = content.replace(old_headers_pattern, new_headers_code)
+            with open(file_path, 'w') as f:
+                f.write(content)
+            print("Patch 17 (git safe.directory) added to existing Patch 12")
+        else:
+            print("WARNING: Could not find Patch 12 pattern to add Patch 17")
+    else:
+        # Fresh install: apply both Patch 12 and Patch 17
+        old_pattern = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
         )"""
 
-    new_code = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
+        new_code = """env_vars[WEBHOOK_CALLBACK_VARIABLE] = (
             f'http://host.docker.internal:{self.host_port}/api/v1/webhooks'
         )
         # Patch 12: Add webhook headers for authentication
         # Agent-server needs X-Session-API-Key header when calling back to openhands-app
-        env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})"""
+        env_vars['OH_WEBHOOKS_0_HEADERS'] = json.dumps({'X-Session-API-Key': session_api_key})
+        # Patch 17: Fix git "dubious ownership" error for EFS-persisted workspaces
+        # When workspace files are created by one user (ec2-user on host) but accessed by
+        # another user (inside container), git fails with "dubious ownership" error.
+        # Setting safe.directory=* allows git operations on any directory.
+        env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
 
-    if old_pattern in content:
-        content = content.replace(old_pattern, new_code)
-        with open(file_path, 'w') as f:
-            f.write(content)
-        print("webhook headers patch applied successfully")
-    else:
-        print("webhook headers patch pattern not found (code structure may have changed)")
+        if old_pattern in content:
+            content = content.replace(old_pattern, new_code)
+            with open(file_path, 'w') as f:
+                f.write(content)
+            print("Patch 12 (webhook headers) and Patch 17 (git safe.directory) applied successfully")
+        else:
+            print("Patch 12/17 pattern not found (code structure may have changed)")
 except Exception as e:
-    print(f"ERROR: Failed to apply webhook headers patch: {e}", file=sys.stderr)
+    print(f"ERROR: Failed to apply Patch 12/17: {e}", file=sys.stderr)
     # Don't exit - let app try to start
 PYEOF
   fi

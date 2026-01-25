@@ -439,7 +439,7 @@ echo "",
                   {
                     "Ref": "WorkspaceFileSystem5CB98ACC",
                   },
-                  ":/ /data/openhands efs _netdev,tls,accesspoint=",
+                  ":/ /data/openhands efs _netdev,tls,iam,accesspoint=",
                   {
                     "Ref": "WorkspaceAccessPointA307771F",
                   },
@@ -480,7 +480,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5c17276b7864fb98c8914256cf7473da2d06108ddc491549840b42e55b87113a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:6ff7d4ff8387dbf6c7f4c08b93781efba1e9cb078606bfe59065491e781bc218",
                   },
                   "
     container_name: openhands-app
@@ -621,7 +621,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5c17276b7864fb98c8914256cf7473da2d06108ddc491549840b42e55b87113a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:6ff7d4ff8387dbf6c7f4c08b93781efba1e9cb078606bfe59065491e781bc218",
                   },
                   ""
 pull_with_retry "",
@@ -753,8 +753,8 @@ echo "OpenHands setup complete!"",
         "SsmUsEast1SecretWriterCustomResourcePolicyC856BD77",
       ],
       "Properties": {
-        "Create": "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/origin-verify-secret","Value":"TestComputeStack","Type":"String","Overwrite":true,"Description":"Origin verification secret for CloudFront-to-ALB authentication"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-origin-secret"}}",
-        "Delete": "{"service":"SSM","action":"deleteParameter","parameters":{"Name":"/openhands/compute/origin-verify-secret"},"region":"us-east-1"}",
+        "Create": "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/us-west-2/origin-verify-secret","Value":"TestComputeStack","Type":"String","Overwrite":true,"Description":"Origin verification secret for CloudFront-to-ALB authentication (us-west-2)"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-origin-secret-us-west-2"}}",
+        "Delete": "{"service":"SSM","action":"deleteParameter","parameters":{"Name":"/openhands/compute/us-west-2/origin-verify-secret"},"region":"us-east-1"}",
         "InstallLatestAwsSdk": true,
         "ServiceToken": {
           "Fn::GetAtt": [
@@ -762,7 +762,7 @@ echo "OpenHands setup complete!"",
             "Arn",
           ],
         },
-        "Update": "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/origin-verify-secret","Value":"TestComputeStack","Type":"String","Overwrite":true,"Description":"Origin verification secret for CloudFront-to-ALB authentication"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-origin-secret"}}",
+        "Update": "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/us-west-2/origin-verify-secret","Value":"TestComputeStack","Type":"String","Overwrite":true,"Description":"Origin verification secret for CloudFront-to-ALB authentication (us-west-2)"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-origin-secret-us-west-2"}}",
       },
       "Type": "Custom::AWS",
       "UpdateReplacePolicy": "Delete",
@@ -777,7 +777,7 @@ echo "OpenHands setup complete!"",
                 "ssm:DeleteParameter",
               ],
               "Effect": "Allow",
-              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/openhands/compute/*",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/openhands/compute/us-west-2/*",
             },
           ],
           "Version": "2012-10-17",
@@ -801,18 +801,18 @@ echo "OpenHands setup complete!"",
           "Fn::Join": [
             "",
             [
-              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/alb-dns-name","Value":"",
+              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/us-west-2/alb-dns-name","Value":"",
               {
                 "Fn::GetAtt": [
                   "OpenHandsAlb343FAEDA",
                   "DNSName",
                 ],
               },
-              "","Type":"String","Overwrite":true,"Description":"ALB DNS name for CloudFront origin"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-alb-dns"}}",
+              "","Type":"String","Overwrite":true,"Description":"ALB DNS name for CloudFront origin (us-west-2)"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-alb-dns-us-west-2"}}",
             ],
           ],
         },
-        "Delete": "{"service":"SSM","action":"deleteParameter","parameters":{"Name":"/openhands/compute/alb-dns-name"},"region":"us-east-1"}",
+        "Delete": "{"service":"SSM","action":"deleteParameter","parameters":{"Name":"/openhands/compute/us-west-2/alb-dns-name"},"region":"us-east-1"}",
         "InstallLatestAwsSdk": true,
         "ServiceToken": {
           "Fn::GetAtt": [
@@ -824,14 +824,14 @@ echo "OpenHands setup complete!"",
           "Fn::Join": [
             "",
             [
-              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/alb-dns-name","Value":"",
+              "{"service":"SSM","action":"putParameter","parameters":{"Name":"/openhands/compute/us-west-2/alb-dns-name","Value":"",
               {
                 "Fn::GetAtt": [
                   "OpenHandsAlb343FAEDA",
                   "DNSName",
                 ],
               },
-              "","Type":"String","Overwrite":true,"Description":"ALB DNS name for CloudFront origin"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-alb-dns"}}",
+              "","Type":"String","Overwrite":true,"Description":"ALB DNS name for CloudFront origin (us-west-2)"},"region":"us-east-1","physicalResourceId":{"id":"openhands-ssm-alb-dns-us-west-2"}}",
             ],
           ],
         },
@@ -849,7 +849,7 @@ echo "OpenHands setup complete!"",
                 "ssm:DeleteParameter",
               ],
               "Effect": "Allow",
-              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/openhands/compute/*",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/openhands/compute/us-west-2/*",
             },
           ],
           "Version": "2012-10-17",

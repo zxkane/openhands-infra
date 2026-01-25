@@ -191,6 +191,24 @@ export class ComputeStack extends cdk.Stack {
       },
     });
 
+    // Grant EC2 role permission to access EFS (required for IAM-authenticated mount)
+    // Use Resource='*' to avoid circular dependency between SecurityStack and ComputeStack.
+    // The EFS resource policy above restricts access to only this specific role.
+    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'EfsClientAccess',
+      actions: [
+        'elasticfilesystem:ClientMount',
+        'elasticfilesystem:ClientWrite',
+        'elasticfilesystem:ClientRootAccess',
+      ],
+      resources: ['*'],
+      conditions: {
+        Bool: {
+          'elasticfilesystem:AccessedViaMountTarget': 'true',
+        },
+      },
+    }));
+
     // SSM Parameters for Docker image versions (allows runtime updates without redeploying)
     const openhandsVersionParam = new ssm.StringParameter(this, 'OpenHandsVersionParam', {
       parameterName: '/openhands/docker/openhands-version',
@@ -301,7 +319,7 @@ export class ComputeStack extends cdk.Stack {
       'mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab',
       '# Mount EFS at /data/openhands (persists workspaces across EC2 replacement)',
       'mkdir -p /data/openhands',
-      `echo "${workspaceFileSystem.fileSystemId}:/ /data/openhands efs _netdev,tls,accesspoint=${workspaceAccessPoint.accessPointId} 0 0" >> /etc/fstab`,
+      `echo "${workspaceFileSystem.fileSystemId}:/ /data/openhands efs _netdev,tls,iam,accesspoint=${workspaceAccessPoint.accessPointId} 0 0" >> /etc/fstab`,
       'retry mount -a',
       'mountpoint -q /data/openhands || exit 1',
       'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
@@ -575,6 +593,7 @@ export class ComputeStack extends cdk.Stack {
     this.output = {
       targetGroup,
       originVerifySecret,
+      computeRegion: this.region,
     };
     this.alb = alb;
 
@@ -637,46 +656,49 @@ export class ComputeStack extends cdk.Stack {
     diskAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
 
     // Write ALB DNS name and origin secret to SSM in us-east-1 for EdgeStack consumption
-    // This avoids CDK cross-region reference issues when multiple Edge stacks share the same Compute stack
+    // SSM parameter path includes the Compute stack's region to support multi-region deployments
+    // Each Compute stack in a different region gets its own SSM namespace: /openhands/compute/{region}/*
+    const ssmPathPrefix = `/openhands/compute/${this.region}`;
+
     new cr.AwsCustomResource(this, 'SsmUsEast1Writer', {
       onCreate: {
         service: 'SSM',
         action: 'putParameter',
         parameters: {
-          Name: '/openhands/compute/alb-dns-name',
+          Name: `${ssmPathPrefix}/alb-dns-name`,
           Value: alb.loadBalancerDnsName,
           Type: 'String',
           Overwrite: true,
-          Description: 'ALB DNS name for CloudFront origin',
+          Description: `ALB DNS name for CloudFront origin (${this.region})`,
         },
         region: 'us-east-1',
-        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-alb-dns'),
+        physicalResourceId: cr.PhysicalResourceId.of(`openhands-ssm-alb-dns-${this.region}`),
       },
       onUpdate: {
         service: 'SSM',
         action: 'putParameter',
         parameters: {
-          Name: '/openhands/compute/alb-dns-name',
+          Name: `${ssmPathPrefix}/alb-dns-name`,
           Value: alb.loadBalancerDnsName,
           Type: 'String',
           Overwrite: true,
-          Description: 'ALB DNS name for CloudFront origin',
+          Description: `ALB DNS name for CloudFront origin (${this.region})`,
         },
         region: 'us-east-1',
-        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-alb-dns'),
+        physicalResourceId: cr.PhysicalResourceId.of(`openhands-ssm-alb-dns-${this.region}`),
       },
       onDelete: {
         service: 'SSM',
         action: 'deleteParameter',
         parameters: {
-          Name: '/openhands/compute/alb-dns-name',
+          Name: `${ssmPathPrefix}/alb-dns-name`,
         },
         region: 'us-east-1',
       },
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
           actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
-          resources: [`arn:aws:ssm:us-east-1:${this.account}:parameter/openhands/compute/*`],
+          resources: [`arn:aws:ssm:us-east-1:${this.account}:parameter/openhands/compute/${this.region}/*`],
         }),
       ]),
     });
@@ -686,40 +708,40 @@ export class ComputeStack extends cdk.Stack {
         service: 'SSM',
         action: 'putParameter',
         parameters: {
-          Name: '/openhands/compute/origin-verify-secret',
+          Name: `${ssmPathPrefix}/origin-verify-secret`,
           Value: originVerifySecret,
           Type: 'String',
           Overwrite: true,
-          Description: 'Origin verification secret for CloudFront-to-ALB authentication',
+          Description: `Origin verification secret for CloudFront-to-ALB authentication (${this.region})`,
         },
         region: 'us-east-1',
-        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-origin-secret'),
+        physicalResourceId: cr.PhysicalResourceId.of(`openhands-ssm-origin-secret-${this.region}`),
       },
       onUpdate: {
         service: 'SSM',
         action: 'putParameter',
         parameters: {
-          Name: '/openhands/compute/origin-verify-secret',
+          Name: `${ssmPathPrefix}/origin-verify-secret`,
           Value: originVerifySecret,
           Type: 'String',
           Overwrite: true,
-          Description: 'Origin verification secret for CloudFront-to-ALB authentication',
+          Description: `Origin verification secret for CloudFront-to-ALB authentication (${this.region})`,
         },
         region: 'us-east-1',
-        physicalResourceId: cr.PhysicalResourceId.of('openhands-ssm-origin-secret'),
+        physicalResourceId: cr.PhysicalResourceId.of(`openhands-ssm-origin-secret-${this.region}`),
       },
       onDelete: {
         service: 'SSM',
         action: 'deleteParameter',
         parameters: {
-          Name: '/openhands/compute/origin-verify-secret',
+          Name: `${ssmPathPrefix}/origin-verify-secret`,
         },
         region: 'us-east-1',
       },
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
           actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
-          resources: [`arn:aws:ssm:us-east-1:${this.account}:parameter/openhands/compute/*`],
+          resources: [`arn:aws:ssm:us-east-1:${this.account}:parameter/openhands/compute/${this.region}/*`],
         }),
       ]),
     });
