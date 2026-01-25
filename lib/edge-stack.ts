@@ -570,10 +570,28 @@ exports.handler = async (event) => {
       handler: 'index.handler',
       code: lambda.Code.fromInline(`
 // Origin Response Handler - adds security headers for runtime requests
+// and prevents caching of HTML files to ensure patches are always fresh
 exports.handler = async (event) => {
   const response = event.Records[0].cf.response;
   const request = event.Records[0].cf.request;
   const host = request.headers.host ? request.headers.host[0].value : '';
+  const uri = request.uri || '';
+  const contentType = response.headers['content-type'] ? response.headers['content-type'][0].value : '';
+
+  // Prevent caching of HTML files to ensure patches are always fresh
+  // This is important for the patched index.html with auto-resume functionality
+  const isHtmlRequest = uri === '/' || uri.endsWith('.html') ||
+    uri.startsWith('/conversations') || uri.startsWith('/settings') ||
+    contentType.includes('text/html');
+
+  if (isHtmlRequest && !host.includes('.runtime.')) {
+    response.headers['cache-control'] = [{
+      key: 'Cache-Control',
+      value: 'no-cache, no-store, must-revalidate'
+    }];
+    response.headers['pragma'] = [{ key: 'Pragma', value: 'no-cache' }];
+    response.headers['expires'] = [{ key: 'Expires', value: '0' }];
+  }
 
   // Check if this is a runtime request (runtime subdomain)
   if (host.includes('.runtime.')) {

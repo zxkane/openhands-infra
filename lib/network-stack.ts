@@ -5,6 +5,11 @@ import { OpenHandsConfig, NetworkStackOutput } from './interfaces.js';
 
 export interface NetworkStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
+  /**
+   * Skip creating S3 VPC Gateway Endpoint if one already exists in the VPC.
+   * Set to true when deploying to a VPC that already has an S3 endpoint.
+   */
+  skipS3Endpoint?: boolean;
 }
 
 /**
@@ -61,11 +66,13 @@ export class NetworkStack extends cdk.Stack {
       });
     }
 
-    // Create Gateway VPC Endpoint for S3
-    new ec2.GatewayVpcEndpoint(this, 'S3Endpoint', {
-      vpc,
-      service: ec2.GatewayVpcEndpointAwsService.S3,
-    });
+    // Create Gateway VPC Endpoint for S3 (unless already exists)
+    if (!props.skipS3Endpoint) {
+      new ec2.GatewayVpcEndpoint(this, 'S3Endpoint', {
+        vpc,
+        service: ec2.GatewayVpcEndpointAwsService.S3,
+      });
+    }
 
     // Store outputs
     this.output = {
