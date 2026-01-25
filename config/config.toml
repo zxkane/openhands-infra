@@ -72,9 +72,25 @@ volumes = "/data/openhands/workspace:/workspace:rw"
 # Browser operations require Chromium which is not installed in agent-server containers
 enable_browsing = false
 
-# Disable MCP (Model Context Protocol) to avoid DNS resolution issues
-# The agent-server containers cannot resolve host.docker.internal for MCP connection
-enable_mcp = false
+# Enable MCP (Model Context Protocol) for AI tool integrations
+# DNS resolution is handled via extra_hosts in SANDBOX_DOCKER_RUNTIME_KWARGS
+enable_mcp = true
+
+[mcp]
+# AWS Documentation MCP server (HTTP-based, no local dependencies)
+# Provides access to up-to-date AWS documentation and best practices
+shttp_servers = [
+    { url = "https://knowledge-mcp.global.api.aws" }
+]
+
+# Chrome DevTools MCP server for browser automation
+# Requires Chromium installed in sandbox container (custom runtime image)
+# --isolated: Uses temp profile directory (auto-cleanup)
+# --headless: Runs without display
+# -e: Specifies Chromium executable path
+stdio_servers = [
+    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium"] }
+]
 
 [security]
 # Disable confirmation mode for automated workflows
