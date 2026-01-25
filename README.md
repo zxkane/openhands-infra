@@ -483,7 +483,7 @@ This project uses GitHub Actions for continuous integration:
 
 | Workflow | Trigger | Description |
 |----------|---------|-------------|
-| **CI** | Push/PR to main, develop | Build TypeScript, run all tests (Jest + pytest), CDK synth validation |
+| **CI** | Push/PR to main, develop | Build TypeScript, run all tests (Jest + pytest) |
 | **Security Scan** | Push/PR to main, daily | npm audit, Checkov, git-secrets, Semgrep SAST, cfn-lint |
 
 ### Running Tests Locally

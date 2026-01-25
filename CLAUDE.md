@@ -82,8 +82,7 @@ Scope: runtime, edge, compute, security, etc.
 
 | Check | Description | Action if Failed |
 |-------|-------------|------------------|
-| CI / build-and-test | Build + all unit tests | Fix code or update snapshots |
-| CI / cdk-synth | CDK synthesis validation | Fix CDK stack code |
+| CI / build-and-test | Build + all unit tests (Jest + pytest) | Fix code or update snapshots |
 | Security Scan | SAST, npm audit, secrets | Fix security issues |
 | Amazon Q Developer | Security review | Address findings or document design decisions |
 
