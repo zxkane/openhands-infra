@@ -219,9 +219,11 @@ All CDK commands require these context parameters:
 
 ## Architecture
 
-### Stack Dependency Graph (6 Stacks)
+### Stack Dependency Graph (7 Stacks)
 
 ```
+AuthStack (us-east-1) ← Cognito User Pool (shared across domains)
+    ↓
 NetworkStack (main region)
     ↓
 SecurityStack (main region) ← depends on NetworkStack.output
@@ -232,7 +234,7 @@ DatabaseStack (main region) ← depends on Network + Security outputs
     ↓
 ComputeStack (main region) ← depends on Network + Security + Monitoring + Database outputs
     ↓
-EdgeStack (us-east-1) ← depends on ComputeStack outputs + alb
+EdgeStack (us-east-1) ← depends on ComputeStack outputs + AuthStack
 ```
 
 ### Self-Healing Architecture
@@ -468,8 +470,18 @@ npx cdk bootstrap --region us-east-1  # Required for Lambda@Edge and CloudFront
 
 ### Deploy All Stacks
 
+**⚠️ IMPORTANT: Multi-Domain Cognito Callback URLs**
+
+When multiple domains share the same Cognito User Pool (Auth stack), deploying one domain without specifying ALL callback domains will **break authentication for other domains**. The CDK will replace Cognito callback URLs entirely with only the current domain.
+
+**Option A: Exclude Auth Stack (Recommended for routine updates)**
+
+For non-auth changes (Compute, Edge, Network, etc.), exclude Auth stack to preserve existing Cognito configuration:
+
 ```bash
-npx cdk deploy --all \
+npx cdk deploy --all --exclusively \
+  OpenHands-Network OpenHands-Monitoring OpenHands-Security \
+  OpenHands-Database OpenHands-Compute OpenHands-Edge \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<hosted-zone-id> \
   --context domainName=<domain-name> \
@@ -478,13 +490,37 @@ npx cdk deploy --all \
   --require-approval never
 ```
 
+**Option B: Include All Callback Domains (Required when deploying Auth stack)**
+
+For first-time deployment or Cognito changes, specify ALL domains that share the Auth stack:
+
+```bash
+npx cdk deploy --all \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<hosted-zone-id> \
+  --context domainName=<domain-name> \
+  --context subDomain=<subdomain> \
+  --context region=<region> \
+  --context authCallbackDomains='["domain1.example.com","domain2.example.com"]' \
+  --require-approval never
+```
+
+**Decision Matrix:**
+
+| Change Type | Deploy Command |
+|-------------|----------------|
+| Compute/Edge/Network changes | Option A (exclude Auth stack) |
+| Cognito configuration changes | Option B (include all callback domains) |
+| First-time deployment | Option B (include all callback domains) |
+
 **Deployment Order** (handled automatically by CDK):
-1. OpenHands-Network (main region)
-2. OpenHands-Security (main region) - depends on Network
-3. OpenHands-Monitoring (main region) - independent
-4. OpenHands-Database (main region) - depends on Network, Security
-5. OpenHands-Compute (main region) - depends on Network, Security, Monitoring, Database
-6. OpenHands-Edge (us-east-1) - depends on Compute
+1. OpenHands-Auth (us-east-1) - Cognito User Pool (only if included)
+2. OpenHands-Network (main region)
+3. OpenHands-Security (main region) - depends on Network
+4. OpenHands-Monitoring (main region) - independent
+5. OpenHands-Database (main region) - depends on Network, Security
+6. OpenHands-Compute (main region) - depends on Network, Security, Monitoring, Database
+7. OpenHands-Edge (us-east-1) - depends on Compute, Auth
 
 ### Verify Deployment
 

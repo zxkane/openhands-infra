@@ -15,6 +15,9 @@ cdk.out
 .local.json
 CLAUDE.local.md
 
+# Claude Code hook state files (workflow tracking)
+.claude/state/
+
 # Environment files
 .env
 .env.*
