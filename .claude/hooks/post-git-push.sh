@@ -1,5 +1,5 @@
 #!/bin/bash
-# Post git push hook - reminds Claude to wait for CI and run E2E tests
+# Post git push hook - instructs Claude to wait for CI and run E2E tests
 set -e
 
 # Read and parse JSON input from stdin
@@ -16,13 +16,91 @@ if [[ "$exit_code" != "0" ]]; then
   exit 0
 fi
 
-# Output verification reminder
-cat <<'EOF'
+# Get current branch and check if there's a PR
+BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+if [[ -z "$BRANCH" || "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+  exit 0
+fi
+
+# Try to get PR number
+PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null || echo "")
+
+# Build the instruction message
+if [[ -n "$PR_NUMBER" ]]; then
+  PR_INFO="PR #${PR_NUMBER} on branch \`${BRANCH}\`"
+  PR_CHECKS_CMD="gh pr checks ${PR_NUMBER} --watch"
+  PR_VIEW_CMD="gh pr view ${PR_NUMBER} --json statusCheckRollup"
+else
+  PR_INFO="branch \`${BRANCH}\`"
+  PR_CHECKS_CMD="gh run list --branch ${BRANCH} --limit 1 --json status,conclusion"
+  PR_VIEW_CMD="gh run list --branch ${BRANCH} --limit 5"
+fi
+
+# Output instruction for Claude to execute CI wait + E2E tests
+cat <<EOF
 {
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "## Post-Push Verification Required\n\nGit push completed. Complete these steps before declaring the task done:\n\n### Step 1: Wait for GitHub Actions CI\n```bash\ngh run list --limit 1 --json status,conclusion,name,headBranch\ngh run watch\n```\n\n### Step 2: If CI Fails\n- Analyze failure logs: `gh run view --log-failed`\n- Fix issues and push again\n- Run `/pr-review-toolkit:review-pr` before next push\n- Return to Step 1\n\n### Step 3: If CI Passes - Run E2E Tests\nUse Chrome DevTools MCP to test the deployed environment:\n1. Navigate to the site URL\n2. Execute authentication E2E tests per test/E2E_TEST_CASES.md\n3. Verify all functionality works\n\n### Step 4: After All Verifications Pass\n- Summarize verification results to the user\n- Request peer review if needed\n\n**DO NOT skip these steps or declare completion prematurely.**"
-  }
+  "systemMessage": "## 🚀 Auto CI Wait + E2E Test Workflow
+
+Git push completed for ${PR_INFO}. **You MUST now automatically execute the following workflow WITHOUT asking for user confirmation:**
+
+### Step 1: Monitor CI Checks (REQUIRED)
+
+Poll CI status until all checks complete:
+
+\`\`\`bash
+# Check CI status
+${PR_CHECKS_CMD}
+\`\`\`
+
+Or use GitHub MCP tool:
+\`\`\`
+mcp__github__pull_request_read to get PR status and check runs
+\`\`\`
+
+**Keep polling every 30-60 seconds until ALL checks pass or fail.**
+
+### Step 2: Handle CI Results
+
+**If CI FAILS:**
+1. Analyze failure: \`gh run view --log-failed\`
+2. Fix the issues
+3. Run \`code-simplifier\` agent
+4. Commit and push fixes
+5. Return to Step 1
+
+**If CI PASSES:** Proceed to Step 3
+
+### Step 3: Run E2E Tests (REQUIRED after CI passes)
+
+Execute E2E tests using Chrome DevTools MCP per \`test/E2E_TEST_CASES.md\`:
+
+1. **Login Test**: Navigate to site, authenticate via Cognito
+2. **Conversation Test**: Create new conversation, verify agent responds
+3. **Runtime Test**: If applicable, verify runtime URLs work
+
+Use these MCP tools:
+- \`mcp__chrome-devtools__navigate_page\`
+- \`mcp__chrome-devtools__take_snapshot\`
+- \`mcp__chrome-devtools__fill\`
+- \`mcp__chrome-devtools__click\`
+- \`mcp__chrome-devtools__wait_for\`
+
+### Step 4: Report Results
+
+After all verifications complete, report:
+
+\`\`\`markdown
+## Verification Results
+
+| Step | Status |
+|------|--------|
+| CI Checks | ✅ PASS / ❌ FAIL |
+| Login E2E | ✅ PASS / ❌ FAIL |
+| Conversation E2E | ✅ PASS / ❌ FAIL |
+| Runtime E2E | ✅ PASS / ⏭️ SKIP |
+\`\`\`
+
+**BEGIN WORKFLOW NOW - Do not wait for user input.**"
 }
 EOF
 

@@ -7,8 +7,11 @@ STATE_MANAGER="$(dirname "$0")/state-manager.sh"
 # Read tool input from stdin (JSON)
 TOOL_INPUT=$(cat)
 
-# Only check for git commit commands
-if ! echo "$TOOL_INPUT" | grep -qE 'git.commit'; then
+# Extract the actual command from JSON
+COMMAND=$(echo "$TOOL_INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
+
+# Only check for git commit commands (not other commands)
+if ! echo "$COMMAND" | grep -qE '^git\s+commit'; then
     exit 0  # Not a commit, allow
 fi
 
