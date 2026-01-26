@@ -51,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │     - Fix issues or add documentation explaining design choice  │
 │     - Push fixes and wait for checks again                      │
 │     - Reply DIRECTLY to each review comment (not a single PR    │
-│       comment) to close the discussion threads                  │
+│       comment) and RESOLVE each conversation thread             │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -90,9 +90,11 @@ Scope: runtime, edge, compute, security, etc.
 
 ### Responding to Review Comments
 
-**IMPORTANT**: When addressing reviewer bot findings, you MUST reply directly to each review comment thread, NOT add a single general PR comment.
+**IMPORTANT**: When addressing reviewer bot findings, you MUST:
+1. Reply directly to each review comment thread (NOT add a single general PR comment)
+2. Resolve each conversation after replying
 
-**Correct approach** (reply to each discussion):
+**Step 1: Reply to each discussion**
 ```bash
 # Get review comment IDs
 gh api repos/{owner}/{repo}/pulls/{pr}/comments \
@@ -105,6 +107,35 @@ gh api repos/{owner}/{repo}/pulls/{pr}/comments \
   -F in_reply_to=<comment_id>
 ```
 
+**Step 2: Resolve each review thread**
+```bash
+# Get review thread IDs
+gh api graphql -f query='
+query {
+  repository(owner: "{owner}", name: "{repo}") {
+    pullRequest(number: {pr}) {
+      reviewThreads(first: 10) {
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes { body }
+          }
+        }
+      }
+    }
+  }
+}'
+
+# Resolve each thread
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "<thread_id>"}) {
+    thread { isResolved }
+  }
+}'
+```
+
 **Wrong approach** (single PR comment):
 ```bash
 # DON'T do this - it doesn't close the discussion threads
@@ -112,8 +143,8 @@ gh pr comment {pr} --body "Fixed all issues"
 ```
 
 This ensures:
-- Each discussion thread is properly closed
-- Reviewers can see the response in context
+- Each discussion thread is properly replied to
+- Conversations are marked as resolved
 - PR shows all conversations as resolved
 
 ### No Environment-Specific Information in Source Control
