@@ -46,7 +46,7 @@ Tests CognitoUserAuth class:
 
 ## E2E Testing with Chrome DevTools
 
-**Comprehensive test cases are in `test/E2E_TEST_CASES.md`.**
+**Comprehensive test cases are in `test/E2E_TEST_CASES.md` (exists in repository).**
 
 ### Prerequisites
 

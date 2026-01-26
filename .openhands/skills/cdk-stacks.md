@@ -192,13 +192,20 @@ Update these when upgrading OpenHands.
 
 ### nginx Runtime Proxy (Port 8080)
 
-Proxies `/runtime/{port}/` to localhost containers:
+Proxies `/runtime/{port}/` to localhost containers (simplified example):
 
 ```nginx
 location ~ ^/runtime/(?<target_port>\d+)(?<remaining_path>/.*)?$ {
+    set $proxy_path $remaining_path;
+    if ($proxy_path = "") {
+        set $proxy_path "/";
+    }
     proxy_pass http://127.0.0.1:$target_port$proxy_path;
 }
 ```
+
+Note: The actual implementation in `docker/openresty/nginx.conf` includes additional 
+logic for container discovery via Docker API and user authorization.
 
 **Dynamic Port Support**: Agent-server containers run with `network_mode='host'` (via Patch 7 in apply-patch.sh), allowing dynamic ports from user applications (Flask apps, etc.) to be accessible via `/runtime/{port}/`.
 

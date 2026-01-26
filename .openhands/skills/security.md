@@ -34,7 +34,7 @@ triggers:
 
 Before deploying:
 
-1. [ ] Run security scan: `./security-check.sh`
+1. [ ] Run security scan: `./security-check.sh` (exists in repository root)
 2. [ ] Verify no secrets in code: `npm audit`
 3. [ ] Check IAM policies are least-privilege
 4. [ ] Ensure Cognito settings are production-ready

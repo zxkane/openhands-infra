@@ -48,7 +48,7 @@ pytest test_cognito_user_auth.py
 
 1. Always build for `linux/amd64` platform for ECS compatibility
 2. Test authentication locally before deploying
-3. Check `docker/CLAUDE.md` for container-specific guidelines
+3. Check `docker/CLAUDE.md` for container-specific guidelines (exists in repository)
 
 ---
 

@@ -33,14 +33,17 @@ npx cdk deploy --all --require-approval broadening
 
 ## Stack Dependencies
 
-Deploy in this order:
+Deploy in this order (based on CDK dependencies in `bin/openhands-infra.ts`):
+
 1. NetworkStack (VPC, subnets)
-2. SecurityStack (IAM, WAF)
-3. AuthStack (Cognito)
-4. DatabaseStack (RDS)
-5. ComputeStack (ECS)
-6. EdgeStack (CloudFront)
-7. MonitoringStack (CloudWatch)
+2. MonitoringStack (CloudWatch, S3) - no dependencies
+3. AuthStack (Cognito) - no dependencies, can deploy in parallel
+4. SecurityStack (IAM, WAF) - depends on NetworkStack and MonitoringStack
+5. DatabaseStack (RDS) - depends on NetworkStack and SecurityStack
+6. ComputeStack (ECS) - depends on NetworkStack, SecurityStack, MonitoringStack, and DatabaseStack
+7. EdgeStack (CloudFront) - depends on ComputeStack and AuthStack
+
+Note: `npx cdk deploy --all` handles dependency ordering automatically.
 
 ## Post-deployment Verification
 
