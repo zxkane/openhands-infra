@@ -94,12 +94,25 @@ function getContextString(key: string, fallback: string | undefined): string | u
   return fallback;
 }
 
-const authCallbackDomains = parseDomainList(
-  app.node.tryGetContext('authCallbackDomains'),
-  [fullDomain]
-);
+const authCallbackDomainsRaw = app.node.tryGetContext('authCallbackDomains');
+const authCallbackDomains = parseDomainList(authCallbackDomainsRaw, [fullDomain]);
 
 const authDomainPrefixSuffix = getContextString('authDomainPrefixSuffix', 'shared') as string;
+
+// Warn if deploying shared Auth stack with only one callback domain
+// This prevents accidental overwrite of multi-domain Cognito configuration
+if (!authCallbackDomainsRaw && authDomainPrefixSuffix === 'shared') {
+  console.warn(`
+⚠️  WARNING: Deploying shared Auth stack with only one callback domain.
+   Current callback domains: ${authCallbackDomains.join(', ')}
+   If multiple domains share this Auth stack, specify ALL domains:
+   --context authCallbackDomains='["${fullDomain}","other-domain.com"]'
+
+   To deploy without changing Auth stack, exclude it:
+   npx cdk deploy --all --exclusively OpenHands-Network OpenHands-Monitoring \\
+     OpenHands-Security OpenHands-Database OpenHands-Compute OpenHands-Edge
+`);
+}
 const edgeStackSuffix = getContextString('edgeStackSuffix', undefined);
 
 // Backwards-compatible default: if no suffix is provided, keep the legacy stack name `OpenHands-Edge`
