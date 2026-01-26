@@ -2,6 +2,12 @@
 # State manager for hookify blocking hooks
 # Tracks whether required actions (code-simplifier, pr-review) were completed
 
+# Check for required dependencies
+if ! command -v jq &> /dev/null; then
+    echo "Warning: jq not installed, state management disabled" >&2
+    exit 0  # Allow operation to continue
+fi
+
 STATE_DIR="${CLAUDE_PROJECT_ROOT:-.}/.claude/state"
 MAX_AGE_MINUTES=30
 
@@ -80,8 +86,21 @@ check_completed() {
         local staged_files=$(git diff --cached --name-only 2>/dev/null | sort)
         local reviewed_files=$(jq -r '.files[]' "$state_file" 2>/dev/null | sort)
 
+        # Skip file comparison if no staged files or no reviewed files
+        if [ -z "$staged_files" ]; then
+            echo "OK: No staged files to check"
+            return 0
+        fi
+
+        # If reviewed_files is empty but staged_files is not, files weren't reviewed
+        if [ -z "$reviewed_files" ]; then
+            echo "MISMATCH: Staged files exist but no reviewed files recorded"
+            return 1
+        fi
+
         # Allow if reviewed files is a superset of staged files
-        local missing=$(comm -23 <(echo "$staged_files") <(echo "$reviewed_files"))
+        # Use process substitution with explicit newline handling to avoid comm errors
+        local missing=$(comm -23 <(echo "$staged_files" | grep -v '^$') <(echo "$reviewed_files" | grep -v '^$') 2>/dev/null || echo "")
         if [ -n "$missing" ]; then
             echo "MISMATCH: These staged files were not reviewed: $missing"
             return 1

@@ -2,6 +2,12 @@
 # Pre-commit hook: Check if code-simplifier was run
 # Exit 0 = allow, Exit 2 = block (Claude Code convention)
 
+# Check for required dependencies
+if ! command -v jq &> /dev/null; then
+    echo "Warning: jq not installed, skipping code-simplifier check" >&2
+    exit 0  # Allow operation to continue
+fi
+
 STATE_MANAGER="$(dirname "$0")/state-manager.sh"
 
 # Read tool input from stdin (JSON)

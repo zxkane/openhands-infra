@@ -2,6 +2,17 @@
 # Post git push hook - instructs Claude to wait for CI and run E2E tests
 set -e
 
+# Check for required dependencies
+if ! command -v jq &> /dev/null; then
+    echo "Warning: jq not installed, skipping post-push CI workflow" >&2
+    exit 0
+fi
+
+if ! command -v gh &> /dev/null; then
+    echo "Warning: gh CLI not installed, skipping post-push CI workflow" >&2
+    exit 0
+fi
+
 # Read and parse JSON input from stdin
 input=$(cat)
 command=$(echo "$input" | jq -r '.tool_input.command // ""')
