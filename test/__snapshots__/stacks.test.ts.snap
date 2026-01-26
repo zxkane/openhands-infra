@@ -554,10 +554,12 @@ cat > /data/openhands/config/config.toml << CONFIG
 [core]
 workspace_base = "/data/openhands/workspace"
 max_concurrent_conversations = 10
+send_telemetry = false
 conversation_max_age_seconds = 15552000
 default_agent = "CodeActAgent"
 [llm]
 model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+api_key = "not-needed-for-bedrock"
 aws_region_name = "\${REGION}"
 [sandbox]
 timeout = 300
@@ -570,7 +572,7 @@ shttp_servers = [
     { url = "https://knowledge-mcp.global.api.aws" }
 ]
 stdio_servers = [
-    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium"] }
+    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium", "--chrome-arg=--no-sandbox", "--chrome-arg=--disable-gpu", "--chrome-arg=--disable-dev-shm-usage"] }
 ]
 [security]
 confirmation_mode = false
