@@ -66,7 +66,7 @@ Required context parameters:
 | `siteName` | Cognito managed login site name (optional) | `Openhands on AWS` |
 | `authCallbackDomains` | Extra OAuth callback domains for shared Cognito client (optional; JSON array or comma-separated) | `["openhands.example.com","openhands.test.example.com"]` |
 | `authDomainPrefixSuffix` | Suffix for Cognito domain prefix (optional; avoids collisions) | `shared` |
-| `edgeStackSuffix` | Suffix for Edge stack name in us-east-1 (optional; enables multiple Edge stacks) | `openhands-aws-kane-mx` |
+| `edgeStackSuffix` | Suffix for Edge stack name in us-east-1 (optional; enables multiple Edge stacks) | `my-project` |
 
 ### 3. Bootstrap CDK (First Time Only)
 

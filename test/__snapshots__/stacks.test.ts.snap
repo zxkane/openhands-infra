@@ -447,11 +447,6 @@ echo "",
 retry mount -a
 mountpoint -q /data/openhands || exit 1
 mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands
-RUNTIME_VERSION=$(aws ssm get-parameter --name "",
-                  {
-                    "Ref": "RuntimeVersionParam2CECFC75",
-                  },
-                  "" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "1.2-nikolaik")
 cat > /data/openhands/docker-compose.yml << EOF
 services:
   openresty:
@@ -480,14 +475,18 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:4e44512fa2556a4ec7220f9c633b705bb79133149dce1e8bf773112edfb6cd2f",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3fd51045d859e498f3dda2d1cc66071ae3d2248c620a1b11c9e092c55f9d3c52",
                   },
                   "
     container_name: openhands-app
     restart: unless-stopped
     environment:
       - SANDBOX_USER_ID=0
-      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION
+      - SANDBOX_RUNTIME_CONTAINER_IMAGE=",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1888ccd2b40d7658b451b124eb6424c9ddbf01b77d1434cb6bf29c27134249dd",
+                  },
+                  "
       - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw
       - WORKSPACE_MOUNT_PATH=/data/openhands/workspace
       - WORKSPACE_BASE=/data/openhands/workspace
@@ -517,7 +516,7 @@ services:
                   "/cdk-hnb659fds-container-assets-123456789012-us-west-2
       - AGENT_SERVER_IMAGE_TAG=3a6444823da5ec080bdbc8786ec89ff48dbdd5c7af437ca401211f4b13ecc72c
       - AGENT_ENABLE_BROWSING=false
-      - AGENT_ENABLE_MCP=false
+      - AGENT_ENABLE_MCP=true
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}
       - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
       - DB_PORT=5432
@@ -555,17 +554,26 @@ cat > /data/openhands/config/config.toml << CONFIG
 [core]
 workspace_base = "/data/openhands/workspace"
 max_concurrent_conversations = 10
+send_telemetry = false
 conversation_max_age_seconds = 15552000
 default_agent = "CodeActAgent"
 [llm]
 model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+api_key = "placeholder-not-used-for-bedrock-iam-auth"
 aws_region_name = "\${REGION}"
 [sandbox]
 timeout = 300
 volumes = "/data/openhands/workspace:/workspace:rw"
 [agent]
 enable_browsing = false
-enable_mcp = false
+enable_mcp = true
+[mcp]
+shttp_servers = [
+    { url = "https://knowledge-mcp.global.api.aws" }
+]
+stdio_servers = [
+    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium", "--chrome-arg=--no-sandbox", "--chrome-arg=--disable-gpu", "--chrome-arg=--disable-dev-shm-usage"] }
+]
 [security]
 confirmation_mode = false
 security_analyzer = "llm"
@@ -621,7 +629,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:4e44512fa2556a4ec7220f9c633b705bb79133149dce1e8bf773112edfb6cd2f",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3fd51045d859e498f3dda2d1cc66071ae3d2248c620a1b11c9e092c55f9d3c52",
                   },
                   ""
 pull_with_retry "",
@@ -629,7 +637,11 @@ pull_with_retry "",
                     "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:37c6a79b76ecf633887da106303243cb24b25e7e54642c5c9d515a453b98c02a",
                   },
                   ""
-pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"
+pull_with_retry "",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1888ccd2b40d7658b451b124eb6424c9ddbf01b77d1434cb6bf29c27134249dd",
+                  },
+                  ""
 pull_with_retry "",
                   {
                     "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3a6444823da5ec080bdbc8786ec89ff48dbdd5c7af437ca401211f4b13ecc72c",

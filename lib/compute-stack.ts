@@ -270,10 +270,21 @@ export class ComputeStack extends cdk.Stack {
       platform: Platform.LINUX_ARM64,
     });
 
+    // Build custom runtime Docker image with Chromium for browser automation (MCP chrome-devtools)
+    // This runtime image is used as the sandbox container where agent code executes
+    const customRuntimeImage = new DockerImageAsset(this, 'CustomRuntimeImage', {
+      directory: path.join(__dirname, '..', 'docker', 'runtime-custom'),
+      platform: Platform.LINUX_ARM64,
+      buildArgs: {
+        RUNTIME_VERSION: DEFAULT_RUNTIME_VERSION,
+      },
+    });
+
     // Grant EC2 role permission to pull from CDK-managed ECR repositories
     customOpenhandsImage.repository.grantPull(ec2Role);
     customAgentServerImage.repository.grantPull(ec2Role);
     openrestyImage.repository.grantPull(ec2Role);
+    customRuntimeImage.repository.grantPull(ec2Role);
 
     // Note: IAM authentication permission for Aurora PostgreSQL is granted in DatabaseStack
     // using the EC2 role ARN to avoid cyclic cross-stack dependencies
@@ -323,7 +334,6 @@ export class ComputeStack extends cdk.Stack {
       'retry mount -a',
       'mountpoint -q /data/openhands || exit 1',
       'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
-      `RUNTIME_VERSION=$(aws ssm get-parameter --name "${runtimeVersionParam.parameterName}" --region $REGION --query "Parameter.Value" --output text 2>/dev/null || echo "${DEFAULT_RUNTIME_VERSION}")`,
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
       // OpenResty reverse proxy - runs as container on Docker bridge network
@@ -353,7 +363,7 @@ export class ComputeStack extends cdk.Stack {
       '    restart: unless-stopped',
       '    environment:',
       '      - SANDBOX_USER_ID=0',
-      '      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION',
+      `      - SANDBOX_RUNTIME_CONTAINER_IMAGE=${customRuntimeImage.imageUri}`,
       // Ensure agent-server containers bind-mount the host workspace into /workspace.
       // The host path (/data/openhands/workspace) is backed by EFS so it persists across EC2 replacement.
       '      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw',
@@ -378,7 +388,7 @@ export class ComputeStack extends cdk.Stack {
       `      - AGENT_SERVER_IMAGE_REPOSITORY=${agentServerRepo}`,
       `      - AGENT_SERVER_IMAGE_TAG=${agentServerTag}`,
       '      - AGENT_ENABLE_BROWSING=false',
-      '      - AGENT_ENABLE_MCP=false',
+      '      - AGENT_ENABLE_MCP=true',
       '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}',
       // DB_* env vars enable PostgreSQL mode in OpenHands V1 (DbSessionInjector checks DB_HOST)
       // DB_SSL=require is essential for Aurora IAM auth (asyncpg requires explicit SSL)
@@ -439,7 +449,7 @@ export class ComputeStack extends cdk.Stack {
       'pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }',
       `pull_with_retry "${openhandsImageUri}"`,
       `pull_with_retry "${openrestyImageUri}"`,  // OpenResty runtime proxy
-      'pull_with_retry "docker.openhands.dev/openhands/runtime:$RUNTIME_VERSION"',
+      `pull_with_retry "${customRuntimeImage.imageUri}"`,  // Custom runtime with Chromium for MCP
       `pull_with_retry "${agentServerImageUri}"`,
       'set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap \'error_handler $LINENO\' ERR',
       'systemctl daemon-reload && systemctl enable openhands && systemctl start openhands',

@@ -1155,6 +1155,322 @@ Use this checklist to track test execution:
 | TC-012 | Unauthenticated Access Denied | [ ] | Runtime returns 401 |
 | TC-013 | Main App Access Works | [ ] | Regression test |
 | TC-014 | Resume After EC2 Replacement | [ ] | Conversation + workspace persistence |
+| TC-015 | AWS Docs MCP Server | [ ] | Verify awsdocs shttp server |
+| TC-016 | Chrome DevTools MCP Server | [ ] | Verify chrome-devtools stdio server |
+
+---
+
+## TC-015: Verify AWS Documentation MCP Server
+
+### Description
+Verify that the AWS Documentation MCP server (awsdocs) is properly configured and accessible to the AI agent. This server provides access to up-to-date AWS documentation and best practices via the shttp (streamable HTTP) protocol.
+
+### Prerequisites
+- Infrastructure deployed with MCP enabled (`AGENT_ENABLE_MCP=true`)
+- TC-003 completed (logged in)
+- TC-005 completed (new conversation ready with "Waiting for task" status)
+
+### MCP Server Configuration
+
+The awsdocs server is configured in `config/config.toml`:
+```toml
+[mcp]
+shttp_servers = [
+    { url = "https://knowledge-mcp.global.api.aws" }
+]
+```
+
+### Steps
+
+1. Start a new conversation or use existing one
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Click "Start new conversation" if needed
+   ```
+
+2. Wait for agent to be ready
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 180000
+   })
+   ```
+
+3. Submit a prompt that triggers AWS documentation lookup
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Use the AWS documentation MCP tools to explain how Lambda function URLs work, including authentication options and CORS configuration"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+4. Wait for agent to start processing
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Running",
+     timeout: 60000
+   })
+   ```
+
+5. Monitor agent progress and look for MCP tool usage
+   ```javascript
+   // Take snapshots periodically to observe agent behavior
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+6. Wait for agent response with AWS documentation content
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Lambda function URL",  // Key term from AWS docs
+     timeout: 300000
+   })
+   mcp__chrome-devtools__take_screenshot({})
+   ```
+
+7. Verify response contains accurate AWS documentation
+   ```javascript
+   mcp__chrome-devtools__take_snapshot({})
+   // Look for AWS-specific terminology:
+   // - "function URL"
+   // - "IAM authentication" or "AWS_IAM"
+   // - "CORS"
+   // - URLs like "https://<url-id>.lambda-url.<region>.on.aws"
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Agent acknowledges MCP tools available | Agent mentions using AWS documentation or MCP tools |
+| 2 | MCP server connection succeeds | No "MCP connection failed" errors in response |
+| 3 | Response contains AWS-specific content | Mentions Lambda function URL features accurately |
+| 4 | Response is up-to-date | Contains current AWS documentation (not outdated info) |
+| 5 | Agent can search and retrieve docs | Response demonstrates retrieval from AWS docs |
+
+### Expected Agent Behavior
+
+The agent should:
+1. Recognize the request requires AWS documentation
+2. Use MCP tools to query the AWS documentation server
+3. Retrieve relevant documentation about Lambda function URLs
+4. Synthesize the information into a coherent response
+
+### Verification via EC2 Logs
+
+```bash
+# SSH to EC2
+INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names OpenHands-Compute-* \
+  --region $DEPLOY_REGION \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws ssm start-session --target $INSTANCE_ID --region $DEPLOY_REGION
+
+# Check MCP configuration loaded
+docker logs openhands-app 2>&1 | grep -i mcp
+
+# Check for MCP tool invocations
+docker logs openhands-app 2>&1 | grep -i "shttp\|aws.*mcp\|knowledge-mcp"
+```
+
+### Troubleshooting
+
+| Issue | Possible Cause | Resolution |
+|-------|----------------|------------|
+| "MCP not available" | `AGENT_ENABLE_MCP=false` | Verify compute-stack has `AGENT_ENABLE_MCP=true` |
+| Connection timeout | Network/DNS issue | Check sandbox can reach `knowledge-mcp.global.api.aws` |
+| "No tools found" | MCP config not loaded | Verify `config.toml` has `[mcp]` section |
+| Generic response | MCP not used | Agent may answer from training data instead |
+
+---
+
+## TC-016: Verify Chrome DevTools MCP Server
+
+### Description
+Verify that the Chrome DevTools MCP server is properly configured and the AI agent can use it for browser automation tasks. This server runs as a stdio-based MCP server inside the sandbox container, which requires Chromium installed in the custom runtime image.
+
+### Prerequisites
+- Infrastructure deployed with:
+  - MCP enabled (`AGENT_ENABLE_MCP=true`)
+  - Custom runtime image with Chromium (`SANDBOX_RUNTIME_CONTAINER_IMAGE` pointing to custom ECR image)
+- TC-003 completed (logged in)
+- TC-005 completed (new conversation ready with "Waiting for task" status)
+
+### MCP Server Configuration
+
+The chrome-devtools server is configured in `config/config.toml`:
+```toml
+[mcp]
+stdio_servers = [
+    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium"] }
+]
+```
+
+### Custom Runtime Image
+
+The custom runtime image (`docker/runtime-custom/Dockerfile`) includes:
+- Chromium browser (`/usr/bin/chromium`)
+- Required dependencies for headless operation
+- Environment variables for browser detection
+
+### Steps
+
+1. Start a new conversation or use existing one
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Click "Start new conversation" if needed
+   ```
+
+2. Wait for agent to be ready
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 180000
+   })
+   ```
+
+3. Submit a prompt that triggers Chrome DevTools MCP usage
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Use the chrome-devtools MCP server to navigate to https://example.com and take a screenshot. Save the screenshot to /workspace/example-screenshot.png"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+4. Wait for agent to start processing
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Running",
+     timeout: 60000
+   })
+   ```
+
+5. Monitor agent progress
+   ```javascript
+   // Take snapshots periodically to observe agent behavior
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+6. Wait for agent to complete the browser task
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "screenshot",  // Agent should mention screenshot
+     timeout: 300000
+   })
+   mcp__chrome-devtools__take_screenshot({})
+   ```
+
+7. Verify the screenshot was saved
+   ```javascript
+   // Ask agent to confirm the file exists
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "List files in /workspace and confirm example-screenshot.png exists"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+8. Wait for file confirmation
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "example-screenshot.png",
+     timeout: 60000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Agent acknowledges chrome-devtools MCP | Agent mentions using browser automation or MCP tools |
+| 2 | Chromium starts successfully | No "chromium not found" errors |
+| 3 | Navigation succeeds | Agent confirms navigating to example.com |
+| 4 | Screenshot captured | Agent reports screenshot taken |
+| 5 | File saved to workspace | `/workspace/example-screenshot.png` exists |
+| 6 | No browser crashes | Agent completes task without errors |
+
+### Expected Agent Behavior
+
+The agent should:
+1. Recognize the request requires browser automation
+2. Use chrome-devtools MCP tools to launch headless Chromium
+3. Navigate to the specified URL
+4. Capture a screenshot
+5. Save the screenshot to the workspace
+
+### Alternative Test Prompt
+
+If the screenshot test fails, try a simpler test:
+```javascript
+mcp__chrome-devtools__fill({
+  uid: "<chat-input-uid>",
+  value: "Use the chrome-devtools MCP to get the page title of https://example.com"
+})
+```
+
+Expected response should mention "Example Domain" (the title of example.com).
+
+### Verification via EC2 Logs
+
+```bash
+# SSH to EC2
+INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names OpenHands-Compute-* \
+  --region $DEPLOY_REGION \
+  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+aws ssm start-session --target $INSTANCE_ID --region $DEPLOY_REGION
+
+# Check custom runtime image is being used
+docker logs openhands-app 2>&1 | grep -i "runtime.*image\|sandbox.*image"
+
+# Check for Chromium-related logs
+docker logs openhands-app 2>&1 | grep -i "chromium\|chrome\|browser"
+
+# Check MCP stdio server logs
+docker logs openhands-app 2>&1 | grep -i "chrome-devtools\|stdio.*mcp"
+
+# Verify custom runtime image has Chromium
+docker run --rm <custom-runtime-image> which chromium
+# Should output: /usr/bin/chromium
+```
+
+### Troubleshooting
+
+| Issue | Possible Cause | Resolution |
+|-------|----------------|------------|
+| "chromium not found" | Standard runtime image used | Verify `SANDBOX_RUNTIME_CONTAINER_IMAGE` points to custom ECR image |
+| "MCP server failed to start" | npx/npm not available | Check sandbox has Node.js installed |
+| Browser crash | Missing dependencies | Verify runtime image has all Chromium deps |
+| "No display" error | Missing `--headless` flag | Verify MCP config has `--headless` argument |
+| Screenshot empty/corrupt | Rendering issue | Try simpler tasks like `get_page_title` |
+| Timeout waiting for browser | Slow container startup | Increase timeout, check container resources |
+
+### Custom Runtime Image Verification
+
+To verify the custom runtime image is correctly built and deployed:
+
+```bash
+# Check the deployed runtime image URI
+docker logs openhands-app 2>&1 | head -50 | grep SANDBOX_RUNTIME
+
+# Pull and inspect the custom runtime image
+docker pull <custom-runtime-image-uri>
+docker run --rm <custom-runtime-image-uri> chromium --version
+# Should output: Chromium <version>
+
+# Verify required environment variables
+docker run --rm <custom-runtime-image-uri> env | grep -E "CHROME|CHROMIUM|PLAYWRIGHT|PUPPETEER"
+```
+
+---
 
 ## Troubleshooting Guide
 

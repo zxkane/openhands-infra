@@ -50,6 +50,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │     - Review other automated security/code review findings      │
 │     - Fix issues or add documentation explaining design choice  │
 │     - Push fixes and wait for checks again                      │
+│     - Reply DIRECTLY to each review comment (not a single PR    │
+│       comment) and RESOLVE each conversation thread             │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -85,6 +87,65 @@ Scope: runtime, edge, compute, security, etc.
 | CI / build-and-test | Build + all unit tests (Jest + pytest) | Fix code or update snapshots |
 | Security Scan | SAST, npm audit, secrets | Fix security issues |
 | Amazon Q Developer | Security review | Address findings or document design decisions |
+
+### Responding to Review Comments
+
+**IMPORTANT**: When addressing reviewer bot findings, you MUST:
+1. Reply directly to each review comment thread (NOT add a single general PR comment)
+2. Resolve each conversation after replying
+
+**Step 1: Reply to each discussion**
+```bash
+# Get review comment IDs
+gh api repos/{owner}/{repo}/pulls/{pr}/comments \
+  --jq '.[] | {id: .id, path: .path, body: .body[:50]}'
+
+# Reply to each comment using in_reply_to
+gh api repos/{owner}/{repo}/pulls/{pr}/comments \
+  -X POST \
+  -f body="Addressed in commit abc123 - <description of fix>" \
+  -F in_reply_to=<comment_id>
+```
+
+**Step 2: Resolve each review thread**
+```bash
+# Get review thread IDs
+gh api graphql -f query='
+query {
+  repository(owner: "{owner}", name: "{repo}") {
+    pullRequest(number: {pr}) {
+      reviewThreads(first: 10) {
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes { body }
+          }
+        }
+      }
+    }
+  }
+}'
+
+# Resolve each thread
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "<thread_id>"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+**Wrong approach** (single PR comment):
+```bash
+# DON'T do this - it doesn't close the discussion threads
+gh pr comment {pr} --body "Fixed all issues"
+```
+
+This ensures:
+- Each discussion thread is properly replied to
+- Conversations are marked as resolved
+- PR shows all conversations as resolved
 
 ### No Environment-Specific Information in Source Control
 

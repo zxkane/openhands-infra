@@ -8,6 +8,9 @@ workspace_base = "/data/openhands/workspace"
 # Maximum number of concurrent conversations
 max_concurrent_conversations = 10
 
+# Disable anonymous usage data collection
+send_telemetry = false
+
 # Maximum age of a conversation in seconds (180 days)
 # Default is 10 days (864000), we extend to 180 days for better user experience
 conversation_max_age_seconds = 15552000
@@ -29,6 +32,12 @@ default_agent = "CodeActAgent"
 # - Claude Haiku 4.5:  $1/1M input, $5/1M output  - Fastest, most cost-effective
 #
 model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+
+# Dummy API key required by OpenHands config loading logic
+# Bedrock uses IAM roles for authentication, but Settings.from_config() returns None
+# if api_key is not set, which prevents MCP config from being merged into user settings.
+# This placeholder ensures config.toml settings (including MCP servers) are loaded.
+api_key = "placeholder-not-used-for-bedrock-iam-auth"
 # model = "bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
 # model = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -72,9 +81,26 @@ volumes = "/data/openhands/workspace:/workspace:rw"
 # Browser operations require Chromium which is not installed in agent-server containers
 enable_browsing = false
 
-# Disable MCP (Model Context Protocol) to avoid DNS resolution issues
-# The agent-server containers cannot resolve host.docker.internal for MCP connection
-enable_mcp = false
+# Enable MCP (Model Context Protocol) for AI tool integrations
+# DNS resolution is handled via extra_hosts in SANDBOX_DOCKER_RUNTIME_KWARGS
+enable_mcp = true
+
+[mcp]
+# AWS Documentation MCP server (HTTP-based, no local dependencies)
+# Provides access to up-to-date AWS documentation and best practices
+shttp_servers = [
+    { url = "https://knowledge-mcp.global.api.aws" }
+]
+
+# Chrome DevTools MCP server for browser automation
+# Requires Chromium installed in sandbox container (custom runtime image)
+# --isolated: Uses temp profile directory (auto-cleanup)
+# --headless: Runs without display
+# --chrome-arg: Pass Chrome flags (--no-sandbox required for Docker, --disable-gpu for headless, --disable-dev-shm-usage prevents shared memory issues)
+# -e: Specifies Chromium executable path
+stdio_servers = [
+    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium", "--chrome-arg=--no-sandbox", "--chrome-arg=--disable-gpu", "--chrome-arg=--disable-dev-shm-usage"] }
+]
 
 [security]
 # Disable confirmation mode for automated workflows
