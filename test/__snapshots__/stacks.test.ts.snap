@@ -475,7 +475,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:47379e484aaf269c2a10fd0a03ff7f0e62db287d578eae6097cb14a92b908f4d",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3fd51045d859e498f3dda2d1cc66071ae3d2248c620a1b11c9e092c55f9d3c52",
                   },
                   "
     container_name: openhands-app
@@ -484,7 +484,7 @@ services:
       - SANDBOX_USER_ID=0
       - SANDBOX_RUNTIME_CONTAINER_IMAGE=",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1b9824a93f21d9081f9121399545eee9e1b19687c2ddc5f61647d859ca990a2a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1888ccd2b40d7658b451b124eb6424c9ddbf01b77d1434cb6bf29c27134249dd",
                   },
                   "
       - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw
@@ -559,7 +559,7 @@ conversation_max_age_seconds = 15552000
 default_agent = "CodeActAgent"
 [llm]
 model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
-api_key = "not-needed-for-bedrock"
+api_key = "placeholder-not-used-for-bedrock-iam-auth"
 aws_region_name = "\${REGION}"
 [sandbox]
 timeout = 300
@@ -629,7 +629,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:47379e484aaf269c2a10fd0a03ff7f0e62db287d578eae6097cb14a92b908f4d",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3fd51045d859e498f3dda2d1cc66071ae3d2248c620a1b11c9e092c55f9d3c52",
                   },
                   ""
 pull_with_retry "",
@@ -639,7 +639,7 @@ pull_with_retry "",
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1b9824a93f21d9081f9121399545eee9e1b19687c2ddc5f61647d859ca990a2a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1888ccd2b40d7658b451b124eb6424c9ddbf01b77d1434cb6bf29c27134249dd",
                   },
                   ""
 pull_with_retry "",

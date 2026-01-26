@@ -23,9 +23,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxdamage1 \
     libxrandr2 \
     libgbm1 \
-    libxss1 \
-    libgtk-3-0 \
-    libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set environment variables for Chromium location
