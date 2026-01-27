@@ -39,6 +39,11 @@ COPY cognito_user_auth.py /app/openhands/server/user_auth/
 # This stores conversations under user-specific paths in S3
 COPY cognito_file_conversation_store.py /app/openhands/storage/conversation/
 
+# Copy user config loader module
+# This enables loading user-specific MCP configurations from S3
+# Placed in /opt/ and copied to /app/ at runtime by apply-patch.sh (Patch 18)
+COPY user_config_loader.py /opt/user_config_loader.py
+
 # Patch server_config.py to use CognitoUserAuth instead of DefaultUserAuth
 # OpenHands hardcodes user_auth_class and doesn't read from environment variables,
 # so we must patch the source file directly

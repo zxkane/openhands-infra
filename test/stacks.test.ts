@@ -7,6 +7,7 @@ import { ComputeStack } from '../lib/compute-stack';
 import { EdgeStack } from '../lib/edge-stack';
 import { DatabaseStack } from '../lib/database-stack';
 import { AuthStack } from '../lib/auth-stack';
+import { UserConfigStack } from '../lib/user-config-stack';
 import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput } from '../lib/interfaces';
 
 // Test configuration
@@ -570,6 +571,152 @@ describe('OpenHands Infrastructure Stacks', () => {
     });
   });
 
+  describe('UserConfigStack', () => {
+    let networkStack: NetworkStack;
+    let monitoringStack: MonitoringStack;
+    let securityStack: SecurityStack;
+
+    beforeEach(() => {
+      networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      monitoringStack = new MonitoringStack(app, 'TestMonitoringStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      securityStack = new SecurityStack(app, 'TestSecurityStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        dataBucket: monitoringStack.output.dataBucket,
+      });
+    });
+
+    test('synthesizes correctly', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify Lambda function is created with correct runtime
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Runtime: 'python3.12',
+        Handler: 'handler.handler',
+        FunctionName: 'openhands-user-config-api',
+      });
+
+      // Verify HTTP API Gateway is created
+      template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+        Name: 'openhands-user-config',
+        ProtocolType: 'HTTP',
+      });
+
+      // Verify CORS configuration exists
+      template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+        CorsConfiguration: {
+          AllowMethods: Match.arrayWith(['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS']),
+        },
+      });
+    });
+
+    test('creates API routes for all endpoints', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Count routes - should have multiple API routes for user-config endpoints
+      // Routes: MCP (GET, PUT), MCP/servers (POST), MCP/servers/{id} (DELETE, PUT),
+      //         secrets (GET), secrets/{id} (PUT, DELETE), integrations (GET),
+      //         integrations/{provider} (PUT, DELETE), merged (GET)
+      // Total: 12 routes
+      const routeCount = Object.values(template.toJSON().Resources || {}).filter(
+        (r: any) => r?.Type === 'AWS::ApiGatewayV2::Route'
+      ).length;
+
+      expect(routeCount).toBeGreaterThanOrEqual(10);
+    });
+
+    test('lambda has correct environment variables', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: {
+            LOG_LEVEL: 'INFO',
+          },
+        },
+      });
+    });
+
+    test('lambda has proper IAM permissions for S3 and KMS', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify IAM policy exists for Lambda function with S3 permissions
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith(['s3:GetObject*']),
+              Effect: 'Allow',
+            }),
+          ]),
+        },
+      });
+    });
+
+    test('outputs are correctly defined', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      expect(stack.output).toBeDefined();
+      expect(stack.output.apiEndpoint).toBeDefined();
+      expect(stack.output.kmsKeyArn).toBeDefined();
+      expect(stack.output.kmsKeyId).toBeDefined();
+    });
+
+    test('matches snapshot', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+      expect(template.toJSON()).toMatchSnapshot();
+    });
+  });
+
   describe('Stack Integration', () => {
     test('all stacks can be synthesized together', () => {
       const networkStack = new NetworkStack(app, 'TestNetworkStack', {
@@ -609,6 +756,40 @@ describe('OpenHands Infrastructure Stacks', () => {
       expect(securityStack.output).toBeDefined();
       expect(monitoringStack.output).toBeDefined();
       expect(computeStack.output).toBeDefined();
+    });
+
+    test('UserConfigStack integrates with SecurityStack KMS key', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      const monitoringStack = new MonitoringStack(app, 'TestMonitoringStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      const securityStack = new SecurityStack(app, 'TestSecurityStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        dataBucket: monitoringStack.output.dataBucket,
+      });
+
+      // Verify SecurityStack outputs KMS key ARN
+      expect(securityStack.output.userSecretsKmsKeyArn).toBeDefined();
+      expect(securityStack.output.userSecretsKmsKeyId).toBeDefined();
+
+      // Verify UserConfigStack can be created with the KMS key
+      const userConfigStack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      expect(userConfigStack.stackName).toBeDefined();
+      expect(userConfigStack.output).toBeDefined();
     });
   });
 });

@@ -390,6 +390,14 @@ export class ComputeStack extends cdk.Stack {
       `      - AWS_S3_BUCKET=${dataBucket.bucketName}`,
       '      - FILE_STORE=s3',
       `      - FILE_STORE_PATH=${dataBucket.bucketName}`,
+      // User Config feature flag and KMS key for secrets encryption
+      // When USER_CONFIG_ENABLED=true, user-specific MCP configs are loaded from S3
+      ...(securityOutput.userSecretsKmsKeyId ? [
+        '      - USER_CONFIG_ENABLED=true',
+        `      - USER_SECRETS_KMS_KEY_ID=${securityOutput.userSecretsKmsKeyId}`,
+      ] : [
+        '      - USER_CONFIG_ENABLED=false',
+      ]),
       // Note: network_mode should NOT be set here as OpenHands sets it internally
       // Only set extra_hosts for MCP connection support (PR #12236)
       // When sandboxAwsAccess is enabled, also set environment variables for AWS credentials

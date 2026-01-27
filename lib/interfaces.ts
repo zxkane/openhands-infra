@@ -59,6 +59,10 @@ export interface SecurityStackOutput {
   ec2InstanceProfile: iam.CfnInstanceProfile;
   /** IAM role ARN for sandbox containers (optional, only when sandboxAwsAccess is enabled) */
   sandboxRoleArn?: string;
+  /** KMS key ARN for user secrets encryption (optional, only when user config enabled) */
+  userSecretsKmsKeyArn?: string;
+  /** KMS key ID for user secrets encryption (optional, only when user config enabled) */
+  userSecretsKmsKeyId?: string;
 }
 
 /**
@@ -93,4 +97,16 @@ export interface DatabaseStackOutput {
   securityGroupId: string;
   /** RDS Proxy endpoint for connection pooling and IAM auth management */
   proxyEndpoint: string;
+}
+
+/**
+ * Output from UserConfigStack (User Configuration API)
+ */
+export interface UserConfigStackOutput {
+  /** API Gateway endpoint URL */
+  apiEndpoint: string;
+  /** KMS key ARN for user secrets encryption */
+  kmsKeyArn: string;
+  /** KMS key ID for user secrets encryption */
+  kmsKeyId: string;
 }

@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
@@ -317,6 +318,38 @@ export class SecurityStack extends cdk.Stack {
       });
     }
 
+    // ========================================
+    // KMS Key for User Secrets Encryption
+    // ========================================
+    // Creates a KMS key for encrypting user-specific secrets (API keys, tokens)
+    // stored in S3. Uses envelope encryption: KMS encrypts data keys, data keys encrypt secrets.
+
+    const userSecretsKmsKey = new kms.Key(this, 'UserSecretsKmsKey', {
+      alias: 'alias/openhands-user-secrets',
+      description: 'KMS key for encrypting OpenHands user secrets (API keys, tokens)',
+      enableKeyRotation: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      // Restrict key usage to encrypt/decrypt only (no sign/verify)
+      keySpec: kms.KeySpec.SYMMETRIC_DEFAULT,
+      keyUsage: kms.KeyUsage.ENCRYPT_DECRYPT,
+    });
+
+    // Grant EC2 role permission to use the KMS key for decrypt and generate data keys
+    // Required for the OpenHands app to decrypt user secrets during conversation creation
+    userSecretsKmsKey.grantDecrypt(ec2Role);
+    userSecretsKmsKey.grant(ec2Role, 'kms:GenerateDataKey', 'kms:GenerateDataKeyWithoutPlaintext');
+
+    // CloudFormation output for KMS key
+    new cdk.CfnOutput(this, 'UserSecretsKmsKeyArn', {
+      value: userSecretsKmsKey.keyArn,
+      description: 'KMS Key ARN for user secrets encryption',
+    });
+
+    new cdk.CfnOutput(this, 'UserSecretsKmsKeyId', {
+      value: userSecretsKmsKey.keyId,
+      description: 'KMS Key ID for user secrets encryption',
+    });
+
     // Store outputs
     this.output = {
       albSecurityGroup,
@@ -327,6 +360,8 @@ export class SecurityStack extends cdk.Stack {
       ec2Role,
       ec2InstanceProfile,
       sandboxRoleArn,
+      userSecretsKmsKeyArn: userSecretsKmsKey.keyArn,
+      userSecretsKmsKeyId: userSecretsKmsKey.keyId,
     };
 
     // CloudFormation outputs

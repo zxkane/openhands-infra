@@ -8,6 +8,7 @@ import { DatabaseStack } from '../lib/database-stack.js';
 import { ComputeStack } from '../lib/compute-stack.js';
 import { AuthStack } from '../lib/auth-stack.js';
 import { EdgeStack } from '../lib/edge-stack.js';
+import { UserConfigStack } from '../lib/user-config-stack.js';
 import { OpenHandsConfig } from '../lib/interfaces.js';
 
 const app = new cdk.App();
@@ -199,6 +200,19 @@ const databaseStack = new DatabaseStack(app, `${prefix}-Database`, {
 databaseStack.addDependency(networkStack);
 databaseStack.addDependency(securityStack);
 
+// 4.5. User Config Stack - User Configuration API (MCP, Secrets, Integrations)
+//      Provides per-user configuration management with KMS-encrypted secrets
+const userConfigStack = new UserConfigStack(app, `${prefix}-UserConfig`, {
+  env: mainEnv,
+  config,
+  dataBucket: monitoringStack.output.dataBucket,
+  kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+  description: 'OpenHands User Configuration API - MCP, Secrets, Integrations',
+  crossRegionReferences: true,
+});
+userConfigStack.addDependency(monitoringStack);
+userConfigStack.addDependency(securityStack);
+
 // 5. Compute Stack - ASG, Launch Template, ALB (Internal)
 const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   env: mainEnv,
@@ -226,11 +240,13 @@ const edgeStack = new EdgeStack(app, edgeStackId, {
   alb: computeStack.alb,
   computeOutput: computeStack.output,
   authOutput: authStack.output,
+  userConfigApiEndpoint: userConfigStack.output.apiEndpoint,
   description: 'OpenHands Edge Infrastructure - Lambda@Edge, CloudFront, WAF, Route 53',
   crossRegionReferences: true,
 });
 edgeStack.addDependency(computeStack);
 edgeStack.addDependency(authStack);
+edgeStack.addDependency(userConfigStack);
 
 // Add tags to all stacks
 cdk.Tags.of(app).add('Project', 'OpenHands');

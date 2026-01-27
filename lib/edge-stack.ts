@@ -19,6 +19,8 @@ export interface EdgeStackProps extends cdk.StackProps {
   alb: elbv2.IApplicationLoadBalancer;
   /** Required - provides Cognito configuration from AuthStack */
   authOutput: AuthStackOutput;
+  /** Optional - User Config API endpoint for CloudFront routing */
+  userConfigApiEndpoint?: string;
 }
 
 /**
@@ -38,7 +40,7 @@ export class EdgeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EdgeStackProps) {
     super(scope, id, props);
 
-    const { config, alb, computeOutput } = props;
+    const { config, alb, computeOutput, userConfigApiEndpoint } = props;
     const fullDomain = `${config.subDomain}.${config.domainName}`;
     const runtimeDomain = `runtime.${fullDomain}`; // e.g., runtime.{subdomain}.{domain}
 
@@ -387,6 +389,38 @@ exports.handler = async (event) => {
         },
       },
     });
+
+    // ========================================
+    // User Config API Behavior (Optional)
+    // ========================================
+    // Add CloudFront behavior for User Config API if endpoint is provided
+    // This routes /api/v1/user-config/* requests to the API Gateway
+    if (userConfigApiEndpoint) {
+      // Parse API Gateway URL to get the host
+      // Format: https://{api-id}.execute-api.{region}.amazonaws.com
+      const apiUrl = new URL(userConfigApiEndpoint);
+      const apiOrigin = new origins.HttpOrigin(apiUrl.hostname, {
+        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+      });
+
+      // Add behavior for User Config API
+      // Lambda@Edge handles authentication and injects user headers
+      distribution.addBehavior('/api/v1/user-config/*', apiOrigin, {
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        // Forward all headers to API Gateway (including X-Cognito-User-Id)
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        edgeLambdas: [
+          {
+            eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+            functionVersion: authFunctionVersion,
+            includeBody: true,  // Include body for PUT/POST requests
+          },
+        ],
+      });
+    }
 
     // ========================================
     // Route 53 DNS Records

@@ -37,7 +37,7 @@ exports[`OpenHands Infrastructure Stacks AuthStack matches snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
-          "S3Key": "bc8ef58951f4c88e641dd23090e9d2e2e61c7530a07960e767522941e959b625.zip",
+          "S3Key": "a38f8a5114ae969de815d5c66b3ddbd646445697a789f7b16424b4ea541d4ff9.zip",
         },
         "Handler": "index.handler",
         "Role": {
@@ -851,7 +851,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-west-2",
-          "S3Key": "bc8ef58951f4c88e641dd23090e9d2e2e61c7530a07960e767522941e959b625.zip",
+          "S3Key": "a38f8a5114ae969de815d5c66b3ddbd646445697a789f7b16424b4ea541d4ff9.zip",
         },
         "Handler": "index.handler",
         "Role": {
@@ -1276,7 +1276,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:8ce6e1d46a57cc259652b898c0b43d184ac8a27067846c1312b0bd841b84a5c4",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:102e77c500911cdcb1f4af605ba1f2d2609642adeb405d25f35052744411bacc",
                   },
                   "
     container_name: openhands-app
@@ -1307,6 +1307,12 @@ services:
       - FILE_STORE_PATH=",
                   {
                     "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+                  },
+                  "
+      - USER_CONFIG_ENABLED=true
+      - USER_SECRETS_KMS_KEY_ID=",
+                  {
+                    "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefUserSecretsKmsKey2BAFA35EBEB4D071",
                   },
                   "
       - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"}}
@@ -1430,7 +1436,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:8ce6e1d46a57cc259652b898c0b43d184ac8a27067846c1312b0bd841b84a5c4",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:102e77c500911cdcb1f4af605ba1f2d2609642adeb405d25f35052744411bacc",
                   },
                   ""
 pull_with_retry "",
@@ -3576,6 +3582,21 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
         ],
       },
     },
+    "UserSecretsKmsKeyArn": {
+      "Description": "KMS Key ARN for user secrets encryption",
+      "Value": {
+        "Fn::GetAtt": [
+          "UserSecretsKmsKey2BAFA35E",
+          "Arn",
+        ],
+      },
+    },
+    "UserSecretsKmsKeyId": {
+      "Description": "KMS Key ID for user secrets encryption",
+      "Value": {
+        "Ref": "UserSecretsKmsKey2BAFA35E",
+      },
+    },
   },
   "Parameters": {
     "BootstrapVersion": {
@@ -3895,6 +3916,29 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
               ],
               "Sid": "S3DataBucketAccess",
             },
+            {
+              "Action": "kms:Decrypt",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "UserSecretsKmsKey2BAFA35E",
+                  "Arn",
+                ],
+              },
+            },
+            {
+              "Action": [
+                "kms:GenerateDataKey",
+                "kms:GenerateDataKeyWithoutPlaintext",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "UserSecretsKmsKey2BAFA35E",
+                  "Arn",
+                ],
+              },
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -3916,6 +3960,923 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
         ],
       },
       "Type": "AWS::IAM::InstanceProfile",
+    },
+    "UserSecretsKmsKey2BAFA35E": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Description": "KMS key for encrypting OpenHands user secrets (API keys, tokens)",
+        "EnableKeyRotation": true,
+        "KeyPolicy": {
+          "Statement": [
+            {
+              "Action": "kms:*",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition",
+                      },
+                      ":iam::123456789012:root",
+                    ],
+                  ],
+                },
+              },
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "KeySpec": "SYMMETRIC_DEFAULT",
+        "KeyUsage": "ENCRYPT_DECRYPT",
+      },
+      "Type": "AWS::KMS::Key",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "UserSecretsKmsKeyAlias9E804B77": {
+      "Properties": {
+        "AliasName": "alias/openhands-user-secrets",
+        "TargetKeyId": {
+          "Fn::GetAtt": [
+            "UserSecretsKmsKey2BAFA35E",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::KMS::Alias",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`OpenHands Infrastructure Stacks UserConfigStack matches snapshot 1`] = `
+{
+  "Outputs": {
+    "ApiEndpoint": {
+      "Description": "User Config API Endpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "UserConfigApiBA46BB03",
+          "ApiEndpoint",
+        ],
+      },
+    },
+    "ApiId": {
+      "Description": "User Config API ID",
+      "Value": {
+        "Ref": "UserConfigApiBA46BB03",
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "UserConfigApiBA46BB03": {
+      "Properties": {
+        "CorsConfiguration": {
+          "AllowHeaders": [
+            "Content-Type",
+            "Authorization",
+            "X-Cognito-User-Id",
+            "X-Cognito-Email",
+          ],
+          "AllowMethods": [
+            "GET",
+            "PUT",
+            "POST",
+            "DELETE",
+            "OPTIONS",
+          ],
+          "AllowOrigins": [
+            "*",
+          ],
+          "MaxAge": 86400,
+        },
+        "Description": "OpenHands User Configuration API",
+        "Name": "openhands-user-config",
+        "ProtocolType": "HTTP",
+      },
+      "Type": "AWS::ApiGatewayV2::Api",
+    },
+    "UserConfigApiDELETEapiv1userconfigintegrationsproviderD2718329": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "DELETE /api/v1/user-config/integrations/{provider}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiDELETEapiv1userconfigintegrationsproviderUserConfigIntegrationPermissionE072CE3A": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/integrations/{provider}",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiDELETEapiv1userconfigmcpserversserverId07650D85": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "DELETE /api/v1/user-config/mcp/servers/{serverId}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiDELETEapiv1userconfigmcpserversserverIdUserConfigIntegrationPermission8ABFCD5C": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/mcp/servers/{serverId}",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiDELETEapiv1userconfigsecretssecretId853F1C38": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "DELETE /api/v1/user-config/secrets/{secretId}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiDELETEapiv1userconfigsecretssecretIdUserConfigIntegrationPermission8E7E0AD7": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/secrets/{secretId}",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiDefaultStage4D3191FA": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AutoDeploy": true,
+        "StageName": "$default",
+      },
+      "Type": "AWS::ApiGatewayV2::Stage",
+    },
+    "UserConfigApiGETapiv1userconfigintegrationsDAE50458": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "GET /api/v1/user-config/integrations",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiGETapiv1userconfigintegrationsUserConfigIntegrationPermissionFEA4257F": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/integrations",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiGETapiv1userconfigmcpB548DE6B": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "GET /api/v1/user-config/mcp",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "PayloadFormatVersion": "2.0",
+      },
+      "Type": "AWS::ApiGatewayV2::Integration",
+    },
+    "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationPermission6D6A0768": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/mcp",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiGETapiv1userconfigmerged381F135D": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "GET /api/v1/user-config/merged",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiGETapiv1userconfigmergedUserConfigIntegrationPermissionE177F88F": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/merged",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiGETapiv1userconfigsecretsB108BF84": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "GET /api/v1/user-config/secrets",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiGETapiv1userconfigsecretsUserConfigIntegrationPermission9A38646B": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/secrets",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiPOSTapiv1userconfigmcpserversFEA661A2": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "POST /api/v1/user-config/mcp/servers",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiPOSTapiv1userconfigmcpserversUserConfigIntegrationPermissionF1A952B6": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/mcp/servers",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiPUTapiv1userconfigintegrationsprovider76E0CF62": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "PUT /api/v1/user-config/integrations/{provider}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiPUTapiv1userconfigintegrationsproviderUserConfigIntegrationPermission4BC38EC1": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/integrations/{provider}",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiPUTapiv1userconfigmcp291FEC56": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "PUT /api/v1/user-config/mcp",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiPUTapiv1userconfigmcpUserConfigIntegrationPermission3E02DFA3": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/mcp",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiPUTapiv1userconfigmcpserversserverId8A77E0D9": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "PUT /api/v1/user-config/mcp/servers/{serverId}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiPUTapiv1userconfigmcpserversserverIdUserConfigIntegrationPermission9ADCF1FB": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/mcp/servers/{serverId}",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigApiPUTapiv1userconfigsecretssecretId9A0A650D": {
+      "Properties": {
+        "ApiId": {
+          "Ref": "UserConfigApiBA46BB03",
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "PUT /api/v1/user-config/secrets/{secretId}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "UserConfigApiGETapiv1userconfigmcpUserConfigIntegrationFF596FA9",
+              },
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::ApiGatewayV2::Route",
+    },
+    "UserConfigApiPUTapiv1userconfigsecretssecretIdUserConfigIntegrationPermissionBFE7875C": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionEA402079",
+            "Arn",
+          ],
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":execute-api:us-west-2:123456789012:",
+              {
+                "Ref": "UserConfigApiBA46BB03",
+              },
+              "/*/*/api/v1/user-config/secrets/{secretId}",
+            ],
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "UserConfigFunctionEA402079": {
+      "DependsOn": [
+        "UserConfigFunctionServiceRoleDefaultPolicy2B19F76C",
+        "UserConfigFunctionServiceRole69793396",
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-west-2",
+          "S3Key": "94730fdd796080173519d753e630a40ec40de91dc5380b515428e88c09708133.zip",
+        },
+        "Description": "Handles user configuration management for OpenHands (MCP, secrets, integrations)",
+        "Environment": {
+          "Variables": {
+            "DATA_BUCKET": {
+              "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+            },
+            "KMS_KEY_ID": {
+              "Fn::Select": [
+                1,
+                {
+                  "Fn::Split": [
+                    "/",
+                    {
+                      "Fn::Select": [
+                        5,
+                        {
+                          "Fn::Split": [
+                            ":",
+                            {
+                              "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttUserSecretsKmsKey2BAFA35EArnA5414E75",
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            "LOG_LEVEL": "INFO",
+          },
+        },
+        "FunctionName": "openhands-user-config-api",
+        "Handler": "handler.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionServiceRole69793396",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Timeout": 30,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "UserConfigFunctionServiceRole69793396": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "UserConfigFunctionServiceRoleDefaultPolicy2B19F76C": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging",
+                "s3:Abort*",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::ImportValue": "TestMonitoringStack:ExportsOutputFnGetAttDataBucketE3889A50Arn98F8399F",
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::ImportValue": "TestMonitoringStack:ExportsOutputFnGetAttDataBucketE3889A50Arn98F8399F",
+                      },
+                      "/users/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "kms:Decrypt",
+                "kms:Encrypt",
+                "kms:ReEncrypt*",
+                "kms:GenerateDataKey*",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttUserSecretsKmsKey2BAFA35EArnA5414E75",
+              },
+            },
+            {
+              "Action": [
+                "kms:GenerateDataKey",
+                "kms:GenerateDataKeyWithoutPlaintext",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttUserSecretsKmsKey2BAFA35EArnA5414E75",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "UserConfigFunctionServiceRoleDefaultPolicy2B19F76C",
+        "Roles": [
+          {
+            "Ref": "UserConfigFunctionServiceRole69793396",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
   },
   "Rules": {

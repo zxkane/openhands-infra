@@ -219,22 +219,24 @@ All CDK commands require these context parameters:
 
 ## Architecture
 
-### Stack Dependency Graph (7 Stacks)
+### Stack Dependency Graph (8 Stacks)
 
 ```
 AuthStack (us-east-1) ← Cognito User Pool (shared across domains)
     ↓
 NetworkStack (main region)
     ↓
-SecurityStack (main region) ← depends on NetworkStack.output
+SecurityStack (main region) ← depends on NetworkStack.output, creates KMS key for user secrets
     ↓
-MonitoringStack (main region) ← independent
+MonitoringStack (main region) ← independent, creates S3 data bucket
     ↓
 DatabaseStack (main region) ← depends on Network + Security outputs
     ↓
 ComputeStack (main region) ← depends on Network + Security + Monitoring + Database outputs
     ↓
-EdgeStack (us-east-1) ← depends on ComputeStack outputs + AuthStack
+UserConfigStack (main region) ← depends on Security (KMS key) + Monitoring (S3 bucket)
+    ↓
+EdgeStack (us-east-1) ← depends on ComputeStack + AuthStack + UserConfigStack (optional)
 ```
 
 ### Self-Healing Architecture
@@ -264,10 +266,11 @@ The infrastructure uses CloudFront VPC Origin to connect directly to the interna
 
 Each stack exposes an `output` property (typed in `lib/interfaces.ts`) consumed by dependent stacks:
 - `NetworkStack.output` → SecurityStack, DatabaseStack, ComputeStack
-- `SecurityStack.output` → DatabaseStack, ComputeStack
-- `MonitoringStack.output` → ComputeStack
+- `SecurityStack.output` → DatabaseStack, ComputeStack, UserConfigStack
+- `MonitoringStack.output` → ComputeStack, UserConfigStack
 - `DatabaseStack.output` → ComputeStack
 - `ComputeStack.output` + `alb` → EdgeStack
+- `UserConfigStack.output` → EdgeStack (optional, for API Gateway routing)
 
 ### Key Files
 
@@ -276,16 +279,72 @@ Each stack exposes an `output` property (typed in `lib/interfaces.ts`) consumed 
 | `bin/openhands-infra.ts` | CDK entry point, context validation, stack orchestration |
 | `lib/interfaces.ts` | Shared TypeScript interfaces for stack I/O |
 | `lib/network-stack.ts` | VPC import, VPC Endpoints |
-| `lib/security-stack.ts` | IAM Roles, Security Groups |
+| `lib/security-stack.ts` | IAM Roles, Security Groups, KMS key for user secrets |
 | `lib/monitoring-stack.ts` | CloudWatch Logs, Alarms, Dashboard, Backup, S3 Data Bucket |
 | `lib/database-stack.ts` | Aurora Serverless v2 PostgreSQL with IAM Authentication |
 | `lib/compute-stack.ts` | EC2 ASG, Launch Template, Internal ALB, OpenResty container |
+| `lib/user-config-stack.ts` | User Configuration API (Lambda + API Gateway) |
 | `lib/edge-stack.ts` | Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 |
 | `config/config.toml` | OpenHands application configuration (LLM, sandbox, security) |
 | `config/sandbox-aws-policy.json` | **Customizable** IAM policy for sandbox AWS access (see below) |
 | `docker/patch-fix.js` | Frontend JavaScript patches (URL rewriting, settings auto-config, runtime subdomain routing) |
+| `docker/cognito_user_auth.py` | Cognito user auth class with user config loading |
+| `docker/user_config_loader.py` | User config loader for S3/KMS (container use) |
 | `docker/openresty/` | OpenResty proxy container (Dockerfile, nginx.conf, docker_discovery.lua) |
+| `lambda/user-config/` | User Configuration API Lambda function |
 | `test/E2E_TEST_CASES.md` | Comprehensive E2E test cases with acceptance criteria |
+
+### User Configuration (Multi-Tenant)
+
+The infrastructure supports per-user configuration allowing each user to customize:
+- **MCP Servers**: Custom shttp/stdio servers that extend or override global config
+- **Encrypted Secrets**: API keys, tokens stored with KMS envelope encryption
+- **Integrations**: Third-party integrations (GitHub, Slack) with auto-MCP support
+
+**Storage Structure**:
+```
+s3://{bucket}/users/{user_id}/
+├── config/
+│   ├── mcp-config.json         # Custom MCP servers, disabled global servers
+│   └── integrations.json       # Third-party integration settings
+└── secrets/
+    └── credentials.json.enc    # KMS-encrypted secrets
+```
+
+**API Endpoints** (via Lambda + API Gateway):
+| Endpoint | Methods | Purpose |
+|----------|---------|---------|
+| `/api/v1/user-config/mcp` | GET, PUT | Complete MCP configuration |
+| `/api/v1/user-config/mcp/servers` | POST | Add new MCP server |
+| `/api/v1/user-config/mcp/servers/{id}` | PUT, DELETE | Update/remove MCP server |
+| `/api/v1/user-config/secrets` | GET | List secret metadata (not values) |
+| `/api/v1/user-config/secrets/{id}` | PUT, DELETE | Manage encrypted secrets |
+| `/api/v1/user-config/integrations` | GET | List all integrations |
+| `/api/v1/user-config/integrations/{provider}` | PUT, DELETE | Configure integration |
+| `/api/v1/user-config/merged` | GET | Get merged config (user + global) |
+
+**Security**:
+- KMS envelope encryption for secrets (AWS KMS + AES-256-GCM)
+- Secrets values never returned via API (metadata only)
+- User isolation via Cognito user ID in Lambda@Edge headers
+- EC2 has `kms:Decrypt`, `kms:GenerateDataKey` permissions
+
+**Configuration Loading Flow**:
+```
+Conversation Creation
+    ↓
+CognitoUserAuth.get_user_settings()
+    ↓
+Load user MCP config from S3
+    ↓
+Merge with global config.toml
+    ↓
+Resolve secret references (GITHUB_TOKEN_REF → secrets/github-token)
+    ↓
+Inject into sandbox environment variables
+```
+
+**Feature Flag**: User config loading is controlled by `USER_CONFIG_ENABLED` environment variable on EC2. Set to `true` to enable, `false` to use only global config.
 
 ### Runtime Subdomain Routing
 
