@@ -6,6 +6,7 @@ import { MonitoringStack } from '../lib/monitoring-stack';
 import { ComputeStack } from '../lib/compute-stack';
 import { EdgeStack } from '../lib/edge-stack';
 import { DatabaseStack } from '../lib/database-stack';
+import { AuthStack } from '../lib/auth-stack';
 import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput } from '../lib/interfaces';
 
 // Test configuration
@@ -447,6 +448,121 @@ describe('OpenHands Infrastructure Stacks', () => {
         alb: computeStack.alb,
         authOutput: mockAuthOutput,
         crossRegionReferences: true,
+      });
+
+      const template = Template.fromStack(stack);
+      expect(template.toJSON()).toMatchSnapshot();
+    });
+  });
+
+  describe('AuthStack', () => {
+    const authEnv = { account: '123456789012', region: 'us-east-1' };
+
+    // Helper to extract UserPool properties from template
+    function getUserPoolProperties(template: Template): Record<string, unknown> {
+      const templateJson = template.toJSON() as Record<string, unknown>;
+      const resources = templateJson.Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
+      const userPoolResource = Object.values(resources).find(
+        r => r?.Type === 'AWS::Cognito::UserPool'
+      );
+      expect(userPoolResource).toBeDefined();
+      return userPoolResource!.Properties;
+    }
+
+    test('synthesizes correctly', () => {
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: authEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com', 'openhands.test.example.com'],
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify User Pool is created
+      template.hasResourceProperties('AWS::Cognito::UserPool', {
+        UserPoolName: Match.anyValue(),
+        AutoVerifiedAttributes: ['email'],
+        MfaConfiguration: 'OPTIONAL',
+      });
+
+      // Verify User Pool Client is created
+      template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+        AllowedOAuthFlows: ['code'],
+        AllowedOAuthScopes: Match.arrayWith(['openid', 'email', 'profile']),
+      });
+
+      // Verify Cognito Domain is created
+      template.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
+
+      // Verify Secret is created for client secret
+      template.hasResourceProperties('AWS::SecretsManager::Secret', {
+        Description: 'Cognito User Pool Client Secret for OpenHands',
+      });
+    });
+
+    test('includes custom email templates with userInvitation', () => {
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: authEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com'],
+      });
+
+      const template = Template.fromStack(stack);
+      const userPoolProps = getUserPoolProperties(template);
+      const adminConfig = userPoolProps.AdminCreateUserConfig as Record<string, unknown>;
+      const inviteTemplate = adminConfig.InviteMessageTemplate as Record<string, string>;
+
+      expect(inviteTemplate).toBeDefined();
+      expect(inviteTemplate.EmailSubject).toContain('Welcome to');
+      expect(inviteTemplate.EmailMessage).toContain('OpenHands');
+      expect(inviteTemplate.EmailMessage).toContain('{username}');
+      expect(inviteTemplate.EmailMessage).toContain('{####}');
+    });
+
+    test('includes custom email templates with userVerification', () => {
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: authEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com'],
+      });
+
+      const template = Template.fromStack(stack);
+      const userPoolProps = getUserPoolProperties(template);
+      const verificationTemplate = userPoolProps.VerificationMessageTemplate as Record<string, string>;
+
+      expect(verificationTemplate).toBeDefined();
+      expect(verificationTemplate.EmailSubject).toContain('Verification Code');
+      expect(verificationTemplate.EmailMessage).toContain('OpenHands');
+      expect(verificationTemplate.EmailMessage).toContain('{####}');
+    });
+
+    test('replaces portal URL placeholders correctly', () => {
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: authEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com', 'openhands.test.example.com'],
+      });
+
+      const template = Template.fromStack(stack);
+      const userPoolProps = getUserPoolProperties(template);
+      const adminConfig = userPoolProps.AdminCreateUserConfig as Record<string, unknown>;
+      const inviteTemplate = adminConfig.InviteMessageTemplate as Record<string, string>;
+      const invitationEmail = inviteTemplate.EmailMessage;
+
+      // Verify invitation email contains both portal URLs
+      expect(invitationEmail).toContain('https://openhands.example.com');
+      expect(invitationEmail).toContain('https://openhands.test.example.com');
+
+      // Verify placeholders are replaced (no {{...}} remaining)
+      expect(invitationEmail).not.toContain('{{PORTAL_URLS}}');
+      expect(invitationEmail).not.toContain('{{PRIMARY_PORTAL_URL}}');
+    });
+
+    test('matches snapshot', () => {
+      const stack = new AuthStack(app, 'TestAuthStack', {
+        env: authEnv,
+        config: testConfig,
+        callbackDomains: ['openhands.example.com'],
       });
 
       const template = Template.fromStack(stack);

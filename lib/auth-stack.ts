@@ -44,6 +44,23 @@ export class AuthStack extends cdk.Stack {
     // Cognito User Pool
     // ========================================
 
+    // Build portal URLs for email templates (supports multi-domain)
+    const portalUrls = callbackDomains.map(d => `https://${d}`);
+    const portalUrlsHtml = portalUrls.map(url =>
+      `<a href="${url}" style="color: #c9b974;">${url}</a>`
+    ).join(' or ');
+
+    // Read and process email templates with placeholder replacement
+    const processEmailTemplate = (filename: string): string => {
+      const templatePath = path.join(__dirname, '..', 'assets/cognito-email-templates', filename);
+      return fs.readFileSync(templatePath, 'utf-8')
+        .replace(/\{\{PORTAL_URLS\}\}/g, portalUrlsHtml)
+        .replace(/\{\{PRIMARY_PORTAL_URL\}\}/g, portalUrls[0]);
+    };
+
+    const invitationEmailTemplate = processEmailTemplate('invitation-email.html');
+    const verificationEmailTemplate = processEmailTemplate('verification-email.html');
+
     const userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: cognitoSiteName,
       selfSignUpEnabled: false,
@@ -63,6 +80,18 @@ export class AuthStack extends cdk.Stack {
       mfaSecondFactor: { sms: false, otp: true },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
+      // Custom email templates for user invitation and verification
+      userInvitation: {
+        emailSubject: `Welcome to ${cognitoSiteName}`,
+        emailBody: invitationEmailTemplate,
+        smsMessage: 'Your username is {username} and temporary password is {####}',
+      },
+      userVerification: {
+        emailSubject: `Your ${cognitoSiteName} Verification Code`,
+        emailBody: verificationEmailTemplate,
+        emailStyle: cognito.VerificationEmailStyle.CODE,
+        smsMessage: 'Your verification code is {####}',
+      },
     });
 
     // Cognito Domain
