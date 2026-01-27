@@ -124,6 +124,12 @@ const edgeStackId = edgeStackSuffix
 const skipS3Endpoint = app.node.tryGetContext('skipS3Endpoint') === 'true' ||
   app.node.tryGetContext('skipS3Endpoint') === true;
 
+// Sandbox AWS access configuration
+// When enabled, sandbox containers receive scoped AWS credentials
+const sandboxAwsAccess = app.node.tryGetContext('sandboxAwsAccess') === 'true' ||
+  app.node.tryGetContext('sandboxAwsAccess') === true;
+const sandboxAwsPolicyFile = getContextString('sandboxAwsPolicyFile', undefined);
+
 // Environment configuration
 const mainEnv = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
@@ -171,6 +177,8 @@ const securityStack = new SecurityStack(app, `${prefix}-Security`, {
   config,
   networkOutput: networkStack.output,
   dataBucket: monitoringStack.output.dataBucket,
+  sandboxAwsAccess,
+  sandboxAwsPolicyFile,
   description: 'OpenHands Security Infrastructure - IAM and Security Groups',
   crossRegionReferences: true,
 });
@@ -199,6 +207,7 @@ const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   securityOutput: securityStack.output,
   monitoringOutput: monitoringStack.output,
   databaseOutput: databaseStack.output,
+  sandboxAwsAccess,
   description: 'OpenHands Compute Infrastructure - EC2 ASG and Internal ALB',
   crossRegionReferences: true,
 });

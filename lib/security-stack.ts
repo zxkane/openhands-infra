@@ -3,12 +3,18 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
+import * as fs from 'fs';
+import * as path from 'path';
 import { OpenHandsConfig, NetworkStackOutput, SecurityStackOutput } from './interfaces.js';
 
 export interface SecurityStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   networkOutput: NetworkStackOutput;
   dataBucket: s3.IBucket;
+  /** Enable sandbox AWS access (default: false) */
+  sandboxAwsAccess?: boolean;
+  /** Path to custom policy JSON file (default: config/sandbox-aws-policy.json) */
+  sandboxAwsPolicyFile?: string;
 }
 
 /**
@@ -23,7 +29,7 @@ export class SecurityStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: SecurityStackProps) {
     super(scope, id, props);
 
-    const { config, networkOutput, dataBucket } = props;
+    const { config, networkOutput, dataBucket, sandboxAwsAccess, sandboxAwsPolicyFile } = props;
     const { vpc, vpcEndpointSecurityGroup } = networkOutput;
 
     // Security Group for ALB
@@ -229,6 +235,88 @@ export class SecurityStack extends cdk.Stack {
       roles: [ec2Role.roleName],
     });
 
+    // Optional: Sandbox IAM Role for container AWS access
+    // This role is assumed by sandbox containers to access AWS services
+    // with explicit deny on sensitive operations
+    let sandboxRoleArn: string | undefined;
+
+    if (sandboxAwsAccess) {
+      // Load user-defined policy from file
+      const policyFilePath = sandboxAwsPolicyFile || path.join(process.cwd(), 'config', 'sandbox-aws-policy.json');
+      if (!fs.existsSync(policyFilePath)) {
+        throw new Error(`Sandbox AWS policy file not found: ${policyFilePath}`);
+      }
+      const policyDocument = JSON.parse(fs.readFileSync(policyFilePath, 'utf-8'));
+
+      // Create sandbox role with trust policy allowing EC2 role to assume it
+      const sandboxRole = new iam.Role(this, 'OpenHandsSandboxRole', {
+        assumedBy: new iam.ArnPrincipal(ec2Role.roleArn),
+        externalIds: ['openhands-sandbox'],
+        description: 'IAM role for OpenHands sandbox containers with scoped AWS access',
+      });
+
+      // Attach user-defined policy statements
+      for (const statement of policyDocument.Statement) {
+        sandboxRole.addToPolicy(iam.PolicyStatement.fromJson(statement));
+      }
+
+      // Attach explicit deny policy (ALWAYS applied, cannot be overridden)
+      // These actions are denied regardless of the user-defined policy
+      sandboxRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'DenySensitiveOperations',
+        effect: iam.Effect.DENY,
+        actions: [
+          // IAM User Management
+          'iam:CreateUser',
+          'iam:DeleteUser',
+          'iam:CreateAccessKey',
+          'iam:DeleteAccessKey',
+          'iam:UpdateAccessKey',
+          // IAM Policy Management
+          'iam:AttachUserPolicy',
+          'iam:DetachUserPolicy',
+          'iam:PutUserPolicy',
+          'iam:DeleteUserPolicy',
+          'iam:AttachRolePolicy',
+          'iam:DetachRolePolicy',
+          'iam:PutRolePolicy',
+          'iam:DeleteRolePolicy',
+          // IAM Role Management
+          'iam:CreateRole',
+          'iam:DeleteRole',
+          'iam:UpdateAssumeRolePolicy',
+          // Account-level Operations
+          'organizations:*',
+          'account:*',
+          'billing:*',
+          // Prevent lateral movement
+          'sts:AssumeRole',
+        ],
+        resources: ['*'],
+      }));
+
+      // Grant EC2 role permission to assume sandbox role with external ID
+      ec2Role.addToPolicy(new iam.PolicyStatement({
+        sid: 'AssumeSandboxRole',
+        effect: iam.Effect.ALLOW,
+        actions: ['sts:AssumeRole'],
+        resources: [sandboxRole.roleArn],
+        conditions: {
+          StringEquals: {
+            'sts:ExternalId': 'openhands-sandbox',
+          },
+        },
+      }));
+
+      sandboxRoleArn = sandboxRole.roleArn;
+
+      // CloudFormation output for sandbox role
+      new cdk.CfnOutput(this, 'SandboxRoleArn', {
+        value: sandboxRole.roleArn,
+        description: 'Sandbox IAM Role ARN for container AWS access',
+      });
+    }
+
     // Store outputs
     this.output = {
       albSecurityGroup,
@@ -238,6 +326,7 @@ export class SecurityStack extends cdk.Stack {
       efsSecurityGroupId: efsSecurityGroup.securityGroupId,
       ec2Role,
       ec2InstanceProfile,
+      sandboxRoleArn,
     };
 
     // CloudFormation outputs

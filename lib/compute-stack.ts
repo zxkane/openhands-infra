@@ -108,6 +108,11 @@ export interface ComputeStackProps extends cdk.StackProps {
    * The EC2 instance uses IAM role authentication (no passwords).
    */
   databaseOutput?: DatabaseStackOutput;
+  /**
+   * Enable sandbox AWS access (default: false).
+   * When enabled, sandbox containers receive scoped AWS credentials.
+   */
+  sandboxAwsAccess?: boolean;
 }
 
 /**
@@ -126,9 +131,9 @@ export class ComputeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
 
-    const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput } = props;
+    const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxAwsAccess } = props;
     const { vpc } = networkOutput;
-    const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile } = securityOutput;
+    const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile, sandboxRoleArn } = securityOutput;
     const { alertTopic, dataBucket } = monitoringOutput;
 
     // Full domain for runtime URL pattern
@@ -366,7 +371,10 @@ export class ComputeStack extends cdk.Stack {
       `      - SANDBOX_RUNTIME_CONTAINER_IMAGE=${customRuntimeImage.imageUri}`,
       // Ensure agent-server containers bind-mount the host workspace into /workspace.
       // The host path (/data/openhands/workspace) is backed by EFS so it persists across EC2 replacement.
-      '      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw',
+      // When sandboxAwsAccess is enabled, also mount the credentials file (read-only).
+      sandboxAwsAccess && sandboxRoleArn
+        ? '      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw,/data/openhands/config/sandbox-credentials:/data/sandbox-credentials:ro'
+        : '      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw',
       '      - WORKSPACE_MOUNT_PATH=/data/openhands/workspace',
       // OpenHands config uses WORKSPACE_BASE for workspace root (and derives legacy mounts from it).
       // This must be a host path understood by the Docker daemon to ensure nested runtimes get a real bind mount.
@@ -384,12 +392,19 @@ export class ComputeStack extends cdk.Stack {
       `      - FILE_STORE_PATH=${dataBucket.bucketName}`,
       // Note: network_mode should NOT be set here as OpenHands sets it internally
       // Only set extra_hosts for MCP connection support (PR #12236)
-      '      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"}}',
+      // When sandboxAwsAccess is enabled, also set environment variables for AWS credentials
+      sandboxAwsAccess && sandboxRoleArn
+        ? `      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"${config.region}"}}`
+        : '      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"}}',
       `      - AGENT_SERVER_IMAGE_REPOSITORY=${agentServerRepo}`,
       `      - AGENT_SERVER_IMAGE_TAG=${agentServerTag}`,
       '      - AGENT_ENABLE_BROWSING=false',
       '      - AGENT_ENABLE_MCP=true',
-      '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}',
+      // Environment variables injected into sandbox containers at startup
+      // When sandboxAwsAccess is enabled, include AWS_SHARED_CREDENTIALS_FILE to use scoped credentials
+      sandboxAwsAccess && sandboxRoleArn
+        ? `      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"${config.region}"}`
+        : '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}',
       // DB_* env vars enable PostgreSQL mode in OpenHands V1 (DbSessionInjector checks DB_HOST)
       // DB_SSL=require is essential for Aurora IAM auth (asyncpg requires explicit SSL)
       // Use RDS Proxy endpoint for automatic IAM token management and connection pooling
@@ -412,6 +427,9 @@ export class ComputeStack extends cdk.Stack {
       '      - /data/openhands/workspace:/data/openhands/workspace',
       '      - /data/openhands/config/config.toml:/app/config.toml:ro',
       ...(databaseOutput ? ['      - /data/openhands/config/database.env:/app/database.env:ro'] : []),
+      // Mount sandbox credentials file (read-only) when sandboxAwsAccess is enabled
+      // OpenHands container needs this to pass credentials to sandbox containers via SANDBOX_VOLUMES
+      ...(sandboxAwsAccess && sandboxRoleArn ? ['      - /data/openhands/config/sandbox-credentials:/data/openhands/config/sandbox-credentials:ro'] : []),
       '    ports:',
       '      - "3000:3000"',  // OpenHands app port (direct access from ALB for main app)
       ...(databaseOutput ? [
@@ -443,6 +461,18 @@ export class ComputeStack extends cdk.Stack {
         `cat > /usr/local/bin/setup-db-credentials.sh << 'DBSCRIPT'\n#!/bin/bash\nset -e\nDB_HOST="${databaseOutput.proxyEndpoint}"\nDB_PORT="${databaseOutput.clusterPort}"\nDB_USER="${databaseOutput.databaseUser}"\nDB_NAME="${databaseOutput.databaseName}"\nTOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")\nREGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)\n# Get password from Secrets Manager\nSECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id openhands/database/proxy-user --region "$REGION" --query SecretString --output text 2>/dev/null || echo "")\nif [ -z "$SECRET_VALUE" ]; then echo "ERROR: Failed to retrieve database secret"; exit 1; fi\nDB_PASS=$(echo "$SECRET_VALUE" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")\nENCODED_PASS=$(python3 -c "import urllib.parse; print(urllib.parse.quote(\\"$DB_PASS\\", safe=\\"\\"))")\nmkdir -p /data/openhands/config\necho "DB_HOST=$DB_HOST" > /data/openhands/config/database.env\necho "DB_PORT=$DB_PORT" >> /data/openhands/config/database.env\necho "DB_NAME=$DB_NAME" >> /data/openhands/config/database.env\necho "DB_USER=$DB_USER" >> /data/openhands/config/database.env\necho "DB_PASS=$DB_PASS" >> /data/openhands/config/database.env\necho "DB_SSL=require" >> /data/openhands/config/database.env\necho "DATABASE_URL=postgresql://\${DB_USER}:\${ENCODED_PASS}@\${DB_HOST}:\${DB_PORT}/\${DB_NAME}?sslmode=require" >> /data/openhands/config/database.env\nchmod 600 /data/openhands/config/database.env\necho "Database credentials configured successfully"\nDBSCRIPT`,
         'chmod +x /usr/local/bin/setup-db-credentials.sh',
         '/usr/local/bin/setup-db-credentials.sh',
+      ] : []),
+      // Sandbox AWS credentials refresh - assumes sandboxRole and writes credentials file
+      // Credentials have 15-minute lifetime, refreshed every 10 minutes via systemd timer
+      ...(sandboxAwsAccess && sandboxRoleArn ? [
+        `cat > /usr/local/bin/refresh-sandbox-creds.sh << 'SANDBOXSCRIPT'\n#!/bin/bash\nset -e\nROLE_ARN="${sandboxRoleArn}"\nCREDS_FILE="/data/openhands/config/sandbox-credentials"\nTOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")\nREGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)\nif [ -z "$ROLE_ARN" ]; then echo "ROLE_ARN not set, skipping credential refresh"; exit 0; fi\nCREDENTIALS=$(aws sts assume-role --role-arn "$ROLE_ARN" --role-session-name "sandbox-$(date +%s)" --external-id "openhands-sandbox" --duration-seconds 900 --output json 2>/dev/null)\nif [ $? -ne 0 ]; then echo "Failed to assume role $ROLE_ARN"; exit 1; fi\nmkdir -p "$(dirname $CREDS_FILE)"\ncat > "$CREDS_FILE" << EOF\n[default]\naws_access_key_id=$(echo $CREDENTIALS | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['AccessKeyId'])")\naws_secret_access_key=$(echo $CREDENTIALS | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SecretAccessKey'])")\naws_session_token=$(echo $CREDENTIALS | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SessionToken'])")\nregion=$REGION\nEOF\nchmod 600 "$CREDS_FILE"\necho "Sandbox credentials refreshed at $(date)"\nSANDBOXSCRIPT`,
+        'chmod +x /usr/local/bin/refresh-sandbox-creds.sh',
+        // Create systemd service and timer for credential refresh
+        `cat > /etc/systemd/system/refresh-sandbox-credentials.service << 'SVCFILE'\n[Unit]\nDescription=Refresh Sandbox AWS Credentials\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/refresh-sandbox-creds.sh\nSVCFILE`,
+        `cat > /etc/systemd/system/refresh-sandbox-credentials.timer << 'TIMERFILE'\n[Unit]\nDescription=Refresh Sandbox AWS Credentials Timer\n[Timer]\nOnBootSec=30sec\nOnUnitActiveSec=10min\n[Install]\nWantedBy=timers.target\nTIMERFILE`,
+        // Initial credential refresh and enable timer
+        '/usr/local/bin/refresh-sandbox-creds.sh',
+        'systemctl daemon-reload && systemctl enable refresh-sandbox-credentials.timer && systemctl start refresh-sandbox-credentials.timer',
       ] : []),
       `cat > /etc/systemd/system/openhands.service << SERVICE\n[Unit]\nDescription=OpenHands\nAfter=docker.service\nRequires=docker.service\n[Service]\nType=simple\nWorkingDirectory=/data/openhands\nExecStart=/usr/local/bin/docker-compose up\nExecStop=/usr/local/bin/docker-compose down\nRestart=always\nUser=root\n[Install]\nWantedBy=multi-user.target\nSERVICE`,
       `aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${cdk.Aws.ACCOUNT_ID}.dkr.ecr.$REGION.amazonaws.com`,

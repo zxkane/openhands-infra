@@ -282,6 +282,7 @@ Each stack exposes an `output` property (typed in `lib/interfaces.ts`) consumed 
 | `lib/compute-stack.ts` | EC2 ASG, Launch Template, Internal ALB, OpenResty container |
 | `lib/edge-stack.ts` | Cognito, Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 |
 | `config/config.toml` | OpenHands application configuration (LLM, sandbox, security) |
+| `config/sandbox-aws-policy.json` | **Customizable** IAM policy for sandbox AWS access (see below) |
 | `docker/patch-fix.js` | Frontend JavaScript patches (URL rewriting, settings auto-config, runtime subdomain routing) |
 | `docker/openresty/` | OpenResty proxy container (Dockerfile, nginx.conf, docker_discovery.lua) |
 | `test/E2E_TEST_CASES.md` | Comprehensive E2E test cases with acceptance criteria |
@@ -370,6 +371,75 @@ The ComputeStack generates inline user data that:
 7. Starts OpenHands via systemd service
 
 **Configuration**: Edit `config/config.toml` to change LLM model, sandbox settings, or security options. The config is embedded into user data during `cdk synth`.
+
+## Sandbox AWS Access
+
+Optional feature enabling sandbox containers to access AWS services via scoped IAM credentials.
+
+### Context Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `sandboxAwsAccess` | `false` | Enable sandbox AWS access |
+| `sandboxAwsPolicyFile` | `config/sandbox-aws-policy.json` | Path to custom IAM policy |
+
+### ⚠️ CRITICAL: Customize the Policy File
+
+The default `config/sandbox-aws-policy.json` grants **overly broad permissions** (`Action: "*"`). This is intentional to allow flexibility, but **you MUST customize this file for your specific use case**.
+
+**Best practices:**
+1. Follow least privilege - only grant actions the agent actually needs
+2. Scope resources to specific ARNs where possible
+3. Test with the minimum permissions first
+
+**Example purpose-built policy (S3 only):**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowS3BucketAccess",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-data-bucket", "arn:aws:s3:::my-data-bucket/*"]
+    }
+  ]
+}
+```
+
+### Hardcoded Explicit Denies
+
+Regardless of custom policy, these actions are **always denied**:
+- IAM user/role/policy manipulation (`iam:Create*`, `iam:Delete*`, `iam:Attach*`, `iam:Put*Policy`)
+- Account/organization/billing operations (`organizations:*`, `account:*`, `billing:*`)
+- Role assumption (`sts:AssumeRole`) - prevents lateral movement
+
+### Deploy with Sandbox AWS Access
+
+```bash
+npx cdk deploy --all --exclusively \
+  OpenHands-Network OpenHands-Monitoring OpenHands-Security \
+  OpenHands-Database OpenHands-Compute OpenHands-Edge \
+  --context sandboxAwsAccess=true \
+  --context sandboxAwsPolicyFile=config/sandbox-aws-policy.json \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<hosted-zone-id> \
+  --context domainName=<domain-name> \
+  --context subDomain=<subdomain> \
+  --context region=<region> \
+  --require-approval never
+```
+
+### Verification
+
+After deployment, test in a conversation:
+```bash
+# Should work (if S3 access granted)
+aws s3 ls
+
+# Should fail with AccessDenied (explicit deny)
+aws iam create-user --user-name test-user
+```
 
 ## Cognito User Management
 

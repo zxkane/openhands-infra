@@ -475,7 +475,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3fd51045d859e498f3dda2d1cc66071ae3d2248c620a1b11c9e092c55f9d3c52",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:e221c548527fea3a07cd420d5441f7ded93c1e7506a14dbe11b8ff977b5798f4",
                   },
                   "
     container_name: openhands-app
@@ -484,7 +484,7 @@ services:
       - SANDBOX_USER_ID=0
       - SANDBOX_RUNTIME_CONTAINER_IMAGE=",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1888ccd2b40d7658b451b124eb6424c9ddbf01b77d1434cb6bf29c27134249dd",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c72d27bdebcc62321647ac698a4a3af8ec4ba6623163686f59bd33103f32bf84",
                   },
                   "
       - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw
@@ -514,7 +514,7 @@ services:
                     "Ref": "AWS::URLSuffix",
                   },
                   "/cdk-hnb659fds-container-assets-123456789012-us-west-2
-      - AGENT_SERVER_IMAGE_TAG=3a6444823da5ec080bdbc8786ec89ff48dbdd5c7af437ca401211f4b13ecc72c
+      - AGENT_SERVER_IMAGE_TAG=b31696d74d2f501f92974e5f67e27a386ebc6968508c8154a7a193cb509ae960
       - AGENT_ENABLE_BROWSING=false
       - AGENT_ENABLE_MCP=true
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}
@@ -629,7 +629,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3fd51045d859e498f3dda2d1cc66071ae3d2248c620a1b11c9e092c55f9d3c52",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:e221c548527fea3a07cd420d5441f7ded93c1e7506a14dbe11b8ff977b5798f4",
                   },
                   ""
 pull_with_retry "",
@@ -639,12 +639,12 @@ pull_with_retry "",
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:1888ccd2b40d7658b451b124eb6424c9ddbf01b77d1434cb6bf29c27134249dd",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c72d27bdebcc62321647ac698a4a3af8ec4ba6623163686f59bd33103f32bf84",
                   },
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:3a6444823da5ec080bdbc8786ec89ff48dbdd5c7af437ca401211f4b13ecc72c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:b31696d74d2f501f92974e5f67e27a386ebc6968508c8154a7a193cb509ae960",
                   },
                   ""
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR

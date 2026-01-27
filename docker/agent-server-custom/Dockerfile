@@ -140,6 +140,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     git \
     curl \
+    unzip \
     chromium \
     fonts-liberation \
     libnss3 \
@@ -149,10 +150,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
+# Install AWS CLI v2 for sandbox AWS access
+# Detect architecture and install appropriate version
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ]; then \
+        curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"; \
+    else \
+        curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; \
+    fi && \
+    unzip -q awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws
+
 # Set environment variables for Chromium location (used by browser tools)
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Set AWS credentials file path for sandbox AWS access
+# The credentials file is mounted at /data/sandbox-credentials when sandboxAwsAccess is enabled
+# The file includes the region, so AWS_DEFAULT_REGION is not needed
+# If the file doesn't exist, AWS CLI falls back to instance metadata service
+ENV AWS_SHARED_CREDENTIALS_FILE=/data/sandbox-credentials
 
 # Create openhands user (or use existing UID 1000 user)
 # nikolaik/python-nodejs base image already has user 'pn' with UID 1000
