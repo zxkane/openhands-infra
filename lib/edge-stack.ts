@@ -396,10 +396,11 @@ exports.handler = async (event) => {
     // Add CloudFront behavior for User Config API if endpoint is provided
     // This routes /api/v1/user-config/* requests to the API Gateway
     if (userConfigApiEndpoint) {
-      // Parse API Gateway URL to get the host
+      // Extract hostname from API Gateway URL using CDK intrinsic functions
       // Format: https://{api-id}.execute-api.{region}.amazonaws.com
-      const apiUrl = new URL(userConfigApiEndpoint);
-      const apiOrigin = new origins.HttpOrigin(apiUrl.hostname, {
+      // We need to strip the "https://" prefix to get the hostname
+      const apiHostname = cdk.Fn.select(2, cdk.Fn.split('/', userConfigApiEndpoint));
+      const apiOrigin = new origins.HttpOrigin(apiHostname, {
         protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
       });
 
