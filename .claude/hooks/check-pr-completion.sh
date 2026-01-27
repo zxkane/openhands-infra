@@ -48,18 +48,18 @@ REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
 #########################################
 echo "=== CI Checks Status ==="
 
-# Get all check runs for the PR
-CHECKS=$(gh pr checks "$PR_NUMBER" --json name,state,conclusion 2>/dev/null || echo "[]")
+# Get all check runs for the PR using statusCheckRollup
+CHECKS=$(gh pr view "$PR_NUMBER" --json statusCheckRollup -q '.statusCheckRollup' 2>/dev/null || echo "[]")
 
-if [ "$CHECKS" = "[]" ] || [ -z "$CHECKS" ]; then
+if [ "$CHECKS" = "[]" ] || [ -z "$CHECKS" ] || [ "$CHECKS" = "null" ]; then
     echo "⏳ No CI checks found yet. Waiting for checks to start..."
     CI_READY=false
 else
     # Count check statuses
     TOTAL=$(echo "$CHECKS" | jq 'length')
-    PENDING=$(echo "$CHECKS" | jq '[.[] | select(.state == "pending" or .state == "queued" or .state == "in_progress")] | length')
-    PASSED=$(echo "$CHECKS" | jq '[.[] | select(.conclusion == "success" or .conclusion == "skipped")] | length')
-    FAILED=$(echo "$CHECKS" | jq '[.[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")] | length')
+    PENDING=$(echo "$CHECKS" | jq '[.[] | select(.status == "PENDING" or .status == "QUEUED" or .status == "IN_PROGRESS")] | length')
+    PASSED=$(echo "$CHECKS" | jq '[.[] | select(.conclusion == "SUCCESS" or .conclusion == "SKIPPED")] | length')
+    FAILED=$(echo "$CHECKS" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT")] | length')
 
     echo "Total checks: $TOTAL"
     echo "  ✅ Passed/Skipped: $PASSED"
@@ -70,14 +70,14 @@ else
     # List failed checks
     if [ "$FAILED" -gt 0 ]; then
         echo "Failed checks:"
-        echo "$CHECKS" | jq -r '.[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | "  - \(.name): \(.conclusion)"'
+        echo "$CHECKS" | jq -r '.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT") | "  - \(.name): \(.conclusion)"'
         echo ""
     fi
 
     # List pending checks
     if [ "$PENDING" -gt 0 ]; then
         echo "Pending checks:"
-        echo "$CHECKS" | jq -r '.[] | select(.state == "pending" or .state == "queued" or .state == "in_progress") | "  - \(.name): \(.state)"'
+        echo "$CHECKS" | jq -r '.[] | select(.status == "PENDING" or .status == "QUEUED" or .status == "IN_PROGRESS") | "  - \(.name): \(.status)"'
         echo ""
     fi
 
