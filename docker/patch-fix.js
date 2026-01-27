@@ -729,15 +729,22 @@
 
   // Watch for new buttons added to DOM
   var observer = new MutationObserver(function(mutations) {
-    var needsScan = false;
     mutations.forEach(function(mutation) {
-      if (mutation.addedNodes.length > 0) {
-        needsScan = true;
-      }
+      mutation.addedNodes.forEach(function(node) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (node.tagName === 'BUTTON' && isLogoutButton(node)) {
+            patchLogoutButton(node);
+          }
+          // Check child buttons in added subtrees
+          var buttons = node.querySelectorAll ? node.querySelectorAll('button') : [];
+          buttons.forEach(function(button) {
+            if (isLogoutButton(button)) {
+              patchLogoutButton(button);
+            }
+          });
+        }
+      });
     });
-    if (needsScan) {
-      scanForLogoutButtons();
-    }
   });
 
   observer.observe(document.body || document.documentElement, {
@@ -751,7 +758,7 @@
     var button = target.closest ? target.closest('button') : null;
     if (!button) {
       var el = target;
-      while (el && el !== document.body) {
+      while (el && el !== document.body && el.parentElement) {
         if (el.tagName === 'BUTTON') {
           button = el;
           break;
