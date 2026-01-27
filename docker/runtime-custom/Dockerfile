@@ -23,7 +23,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxdamage1 \
     libxrandr2 \
     libgbm1 \
+    unzip \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI v2 for sandbox AWS access
+# Detect architecture and install appropriate version
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ]; then \
+        curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"; \
+    else \
+        curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; \
+    fi && \
+    unzip -q awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws
 
 # Set environment variables for Chromium location
 # Used by chrome-devtools-mcp, Playwright, Puppeteer

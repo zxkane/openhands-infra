@@ -57,6 +57,8 @@ export interface SecurityStackOutput {
   efsSecurityGroupId: string;
   ec2Role: iam.IRole;
   ec2InstanceProfile: iam.CfnInstanceProfile;
+  /** IAM role ARN for sandbox containers (optional, only when sandboxAwsAccess is enabled) */
+  sandboxRoleArn?: string;
 }
 
 /**

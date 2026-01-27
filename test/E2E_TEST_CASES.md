@@ -1157,6 +1157,7 @@ Use this checklist to track test execution:
 | TC-014 | Resume After EC2 Replacement | [ ] | Conversation + workspace persistence |
 | TC-015 | AWS Docs MCP Server | [ ] | Verify awsdocs shttp server |
 | TC-016 | Chrome DevTools MCP Server | [ ] | Verify chrome-devtools stdio server |
+| TC-017 | Sandbox AWS Access | [ ] | Verify sandbox can access AWS (S3) and deny IAM |
 
 ---
 
@@ -1469,6 +1470,216 @@ docker run --rm <custom-runtime-image-uri> chromium --version
 # Verify required environment variables
 docker run --rm <custom-runtime-image-uri> env | grep -E "CHROME|CHROMIUM|PLAYWRIGHT|PUPPETEER"
 ```
+
+---
+
+## TC-017: Verify Sandbox AWS Access
+
+### Description
+Verify that sandbox containers can access AWS services using scoped IAM credentials when `sandboxAwsAccess=true` is configured. The agent should be able to perform AWS operations (like listing S3 buckets) while sensitive operations (like creating IAM users) are denied.
+
+### Prerequisites
+- Infrastructure deployed with `--context sandboxAwsAccess=true`
+- TC-003 completed (logged in)
+- TC-005 completed (new conversation ready with "Waiting for task" status)
+- Sandbox credentials refresh timer active on EC2 instance
+
+### Configuration Requirements
+
+The following must be configured for sandbox AWS access:
+
+1. **CDK Context**: `sandboxAwsAccess=true`
+2. **Sandbox Role**: `OpenHandsSandboxRole` created with allow-all policy + explicit deny
+3. **Credentials File**: `/data/openhands/config/sandbox-credentials` mounted to containers
+4. **Environment Variables**:
+   - `AWS_SHARED_CREDENTIALS_FILE=/data/sandbox-credentials`
+   - `AWS_DEFAULT_REGION=us-west-2`
+5. **Docker Runtime Kwargs**: Environment variables passed via `SANDBOX_DOCKER_RUNTIME_KWARGS`
+
+### Deployment Command
+
+```bash
+npx cdk deploy \
+  OpenHands-Network OpenHands-Monitoring OpenHands-Security \
+  OpenHands-Database OpenHands-Compute OpenHands-Edge \
+  --context vpcId=$VPC_ID \
+  --context hostedZoneId=$HOSTED_ZONE_ID \
+  --context domainName=$DOMAIN_NAME \
+  --context subDomain=$SUB_DOMAIN \
+  --context region=$DEPLOY_REGION \
+  --context sandboxAwsAccess=true \
+  --require-approval never
+```
+
+### Steps
+
+1. Verify infrastructure is deployed with sandbox AWS access
+   ```bash
+   # Check sandbox role exists
+   aws iam get-role --role-name $(aws iam list-roles \
+     --query 'Roles[?contains(RoleName, `SandboxRole`)].RoleName' \
+     --output text | head -1) --region $DEPLOY_REGION
+
+   # Check EC2 has credentials refresh timer
+   INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+     --auto-scaling-group-names <asg-name> \
+     --region $DEPLOY_REGION \
+     --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+
+   aws ssm send-command \
+     --instance-ids "$INSTANCE_ID" \
+     --document-name "AWS-RunShellScript" \
+     --parameters 'commands=["systemctl status refresh-sandbox-credentials.timer"]' \
+     --region $DEPLOY_REGION
+   ```
+
+2. Start a new conversation
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Click "Start new conversation"
+   ```
+
+3. Wait for agent to be ready
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 180000
+   })
+   ```
+
+4. Submit a prompt to list S3 buckets
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Use boto3 to list all S3 buckets in this AWS account and show me the bucket names"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+5. Wait for agent to start processing
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Running",
+     timeout: 60000
+   })
+   ```
+
+6. Wait for S3 bucket list response
+   ```javascript
+   // The response should contain bucket names
+   mcp__chrome-devtools__wait_for({
+     text: "bucket",  // or specific bucket name if known
+     timeout: 120000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   mcp__chrome-devtools__take_screenshot({})
+   ```
+
+7. Verify agent successfully listed buckets
+   ```javascript
+   // Look for AWS S3 bucket names in the response
+   // Example: "openhands-monitoring-databucket...", "cdk-hnb659fds-..."
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+8. Test explicit deny by attempting IAM user creation
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Try to create an IAM user named 'test-sandbox-user' using boto3 and report the result"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+9. Verify IAM operation is denied
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "AccessDenied",  // or "denied" or "not authorized"
+     timeout: 120000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Sandbox credentials file exists | `/data/openhands/config/sandbox-credentials` present |
+| 2 | Credentials are refreshed | systemd timer running every 10 minutes |
+| 3 | Agent can list S3 buckets | Agent returns bucket names without errors |
+| 4 | Agent cannot create IAM users | Returns AccessDenied error |
+| 5 | Credentials have correct region | `AWS_DEFAULT_REGION` set to deployment region |
+| 6 | Agent-server has environment vars | `SANDBOX_DOCKER_RUNTIME_KWARGS` includes `environment` |
+
+### Expected Allowed Operations
+
+| Service | Operation | Expected Result |
+|---------|-----------|-----------------|
+| S3 | ListBuckets | ✅ Allowed |
+| S3 | GetObject | ✅ Allowed |
+| S3 | PutObject | ✅ Allowed |
+| EC2 | DescribeInstances | ✅ Allowed |
+| Lambda | ListFunctions | ✅ Allowed |
+| Bedrock | InvokeModel | ✅ Allowed |
+
+### Expected Denied Operations (Explicit Deny)
+
+| Service | Operation | Expected Result |
+|---------|-----------|-----------------|
+| IAM | CreateUser | ❌ AccessDenied |
+| IAM | CreateRole | ❌ AccessDenied |
+| IAM | CreateAccessKey | ❌ AccessDenied |
+| IAM | AttachRolePolicy | ❌ AccessDenied |
+| STS | AssumeRole | ❌ AccessDenied |
+| Organizations | * | ❌ AccessDenied |
+| Billing | * | ❌ AccessDenied |
+
+### Verification via EC2 Logs
+
+```bash
+# SSH to EC2
+aws ssm start-session --target $INSTANCE_ID --region $DEPLOY_REGION
+
+# Check credentials file exists and has valid content
+cat /data/openhands/config/sandbox-credentials
+# Should show: [default], aws_access_key_id, aws_secret_access_key, aws_session_token
+
+# Check credentials refresh timer status
+systemctl status refresh-sandbox-credentials.timer
+
+# Check docker-compose has correct environment
+grep SANDBOX_DOCKER_RUNTIME_KWARGS /data/openhands/docker-compose.yml
+# Should show: "environment":{"AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials"...}
+
+# Check openhands-app container has the env var
+docker inspect openhands-app | grep -A5 SANDBOX_DOCKER_RUNTIME_KWARGS
+```
+
+### Troubleshooting
+
+| Issue | Possible Cause | Resolution |
+|-------|----------------|------------|
+| "No credentials" | Credentials file not mounted | Verify `SANDBOX_VOLUMES` includes credentials mount |
+| "AccessDenied" on S3 | Sandbox role policy issue | Check role policy in IAM console |
+| "Region not configured" | `AWS_DEFAULT_REGION` missing | Verify `SANDBOX_DOCKER_RUNTIME_KWARGS` has environment |
+| Credentials expired | Timer not running | Check `refresh-sandbox-credentials.timer` status |
+| Agent can't find AWS CLI | AWS CLI not in runtime image | Verify custom runtime image has `awscli` installed |
+
+### AWS CLI Verification
+
+If the custom runtime image includes AWS CLI, the agent can also use CLI commands:
+
+```javascript
+mcp__chrome-devtools__fill({
+  uid: "<chat-input-uid>",
+  value: "Run 'aws s3 ls' command and show me the output"
+})
+```
+
+Expected: List of S3 buckets from the AWS CLI.
 
 ---
 
