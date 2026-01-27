@@ -675,4 +675,108 @@
     init();
   }
 })();
+
+// Logout button fix - intercepts logout button clicks and redirects to /_logout
+// The OpenHands frontend's native logout doesn't work with Cognito authentication.
+// This patch uses MutationObserver to find and override logout button behavior.
+(function() {
+  var patchedButtons = new WeakSet();
+
+  function isLogoutButton(button) {
+    var text = (button.textContent || button.innerText || '').toLowerCase();
+    var cleanText = text.replace(/\s+/g, ' ').trim();
+    return cleanText === 'logout';
+  }
+
+  function patchLogoutButton(button) {
+    if (patchedButtons.has(button)) return;
+    patchedButtons.add(button);
+
+    // Override click at the element level using capture
+    button.addEventListener('click', function(e) {
+      console.log('Logout button click intercepted, redirecting to /_logout');
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      window.location.href = '/_logout';
+      return false;
+    }, true);
+
+    // Also intercept mousedown to catch before React's synthetic events
+    button.addEventListener('mousedown', function(e) {
+      console.log('Logout button mousedown intercepted, redirecting to /_logout');
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      window.location.href = '/_logout';
+      return false;
+    }, true);
+
+    console.log('Patched logout button');
+  }
+
+  function scanForLogoutButtons() {
+    var buttons = document.querySelectorAll('button');
+    buttons.forEach(function(button) {
+      if (isLogoutButton(button)) {
+        patchLogoutButton(button);
+      }
+    });
+  }
+
+  // Scan initially
+  scanForLogoutButtons();
+
+  // Watch for new buttons added to DOM
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+      mutation.addedNodes.forEach(function(node) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (node.tagName === 'BUTTON' && isLogoutButton(node)) {
+            patchLogoutButton(node);
+          }
+          // Check child buttons in added subtrees
+          var buttons = node.querySelectorAll ? node.querySelectorAll('button') : [];
+          buttons.forEach(function(button) {
+            if (isLogoutButton(button)) {
+              patchLogoutButton(button);
+            }
+          });
+        }
+      });
+    });
+  });
+
+  observer.observe(document.body || document.documentElement, {
+    childList: true,
+    subtree: true
+  });
+
+  // Also add document-level backup handler on mousedown (fires before React click)
+  document.addEventListener('mousedown', function(event) {
+    var target = event.target;
+    var button = target.closest ? target.closest('button') : null;
+    if (!button) {
+      var el = target;
+      while (el && el !== document.body && el.parentElement) {
+        if (el.tagName === 'BUTTON') {
+          button = el;
+          break;
+        }
+        el = el.parentElement;
+      }
+    }
+
+    if (button && isLogoutButton(button)) {
+      console.log('Logout mousedown via document handler, redirecting to /_logout');
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      window.location.href = '/_logout';
+      return false;
+    }
+  }, true);
+
+  console.log('OpenHands logout button patch loaded');
+})();
 </script>
