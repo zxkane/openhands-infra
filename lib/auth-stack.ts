@@ -52,6 +52,10 @@ export class AuthStack extends cdk.Stack {
 
     // Read and process email templates with placeholder replacement
     const processEmailTemplate = (filename: string): string => {
+      // Validate filename to prevent path traversal
+      if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        throw new Error(`Invalid email template filename: ${filename}`);
+      }
       const templatePath = path.join(__dirname, '..', 'assets/cognito-email-templates', filename);
       return fs.readFileSync(templatePath, 'utf-8')
         .replace(/\{\{PORTAL_URLS\}\}/g, portalUrlsHtml)
