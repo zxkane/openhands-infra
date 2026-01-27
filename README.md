@@ -36,6 +36,7 @@ Key features:
 - **Monitoring**: CloudWatch Logs, Alarms, Dashboard
 - **Backup**: AWS Backup with 14-day retention, Aurora automatic backups (35 days)
 - **Runtime Subdomain**: Apps run at domain root with proper internal routing and cookie isolation
+- **Sandbox AWS Access**: Optional feature enabling sandbox containers to access AWS services with scoped IAM credentials
 
 ## Prerequisites
 
@@ -67,6 +68,8 @@ Required context parameters:
 | `authCallbackDomains` | Extra OAuth callback domains for shared Cognito client (optional; JSON array or comma-separated) | `["openhands.example.com","openhands.test.example.com"]` |
 | `authDomainPrefixSuffix` | Suffix for Cognito domain prefix (optional; avoids collisions) | `shared` |
 | `edgeStackSuffix` | Suffix for Edge stack name in us-east-1 (optional; enables multiple Edge stacks) | `my-project` |
+| `sandboxAwsAccess` | Enable sandbox AWS access (optional, defaults to false) | `true` |
+| `sandboxAwsPolicyFile` | Path to custom IAM policy JSON for sandbox (optional) | `config/sandbox-aws-policy.json` |
 
 ### 3. Bootstrap CDK (First Time Only)
 
@@ -432,6 +435,83 @@ User App (Flask/Node.js/etc. inside sandbox container)
 - **No Domain Attribute**: Cookies don't leak to parent domain or other subdomains
 - **SameSite=Strict**: Cross-site requests don't carry cookies
 - **Security Headers**: Lambda@Edge origin-response adds protective headers
+
+## Sandbox AWS Access
+
+This optional feature enables AI agents running in sandbox containers to access AWS services (e.g., S3, DynamoDB, Lambda) using scoped IAM credentials.
+
+### Enabling Sandbox AWS Access
+
+```bash
+npx cdk deploy --all \
+  --context sandboxAwsAccess=true \
+  --context sandboxAwsPolicyFile=config/sandbox-aws-policy.json \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<hosted-zone-id> \
+  --context domainName=<domain-name> \
+  --context subDomain=<subdomain> \
+  --context region=<region> \
+  --require-approval never
+```
+
+### ⚠️ IMPORTANT: Customize the Policy File
+
+The default `config/sandbox-aws-policy.json` grants broad permissions (`Action: "*"`). **You MUST customize this file for your specific use case** to follow the principle of least privilege.
+
+**Default policy (overly permissive - customize this!):**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowAllExceptDenied",
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+**Example: Purpose-built policy for S3 and DynamoDB only:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowS3Access",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::my-bucket", "arn:aws:s3:::my-bucket/*"]
+    },
+    {
+      "Sid": "AllowDynamoDB",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"],
+      "Resource": "arn:aws:dynamodb:*:*:table/my-table"
+    }
+  ]
+}
+```
+
+### Hardcoded Explicit Denies
+
+Regardless of what you configure in the policy file, the following actions are **always denied** to prevent privilege escalation:
+
+| Category | Denied Actions |
+|----------|----------------|
+| IAM Users | `iam:CreateUser`, `iam:DeleteUser`, `iam:CreateAccessKey` |
+| IAM Policies | `iam:AttachUserPolicy`, `iam:PutUserPolicy`, `iam:PutRolePolicy` |
+| IAM Roles | `iam:CreateRole`, `iam:DeleteRole`, `iam:AttachRolePolicy` |
+| Account | `organizations:*`, `account:*`, `billing:*` |
+| Role Assumption | `sts:AssumeRole` (prevents lateral movement) |
+
+### How It Works
+
+1. **IAM Role**: SecurityStack creates `OpenHandsSandboxRole` with your custom policy + explicit denies
+2. **Credential Refresh**: A systemd timer on EC2 refreshes temporary credentials every 10 minutes (15-minute token lifetime)
+3. **Credential Mount**: The credentials file is mounted read-only into sandbox containers at `/data/sandbox-credentials`
+4. **AWS CLI**: The agent-server container includes AWS CLI v2, configured to use the mounted credentials
 
 ## Security
 
