@@ -1135,6 +1135,127 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
 
 ---
 
+## TC-018: Verify Logout Functionality
+
+### Description
+Verify that the Logout button in the OpenHands UI correctly logs the user out by clearing the session cookie and redirecting to the Cognito logout endpoint.
+
+### Prerequisites
+- TC-003 completed (logged in)
+- User is on the OpenHands home page or any authenticated page
+
+### Steps
+
+1. Verify user is logged in
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__wait_for({
+     text: "Start new conversation",
+     timeout: 30000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+2. Find and click the Logout button
+   ```javascript
+   // Look for "Logout" button in the navigation
+   mcp__chrome-devtools__click({ uid: "<logout-button-uid>" })
+   ```
+
+3. Wait for redirect to Cognito logout page or back to login
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Sign in",
+     timeout: 15000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+4. Verify the cookie is cleared by navigating back to the app
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Should redirect to login page since cookie is cleared
+   mcp__chrome-devtools__wait_for({
+     text: "Sign in",
+     timeout: 15000
+   })
+   ```
+
+5. Verify the logout was complete (cookie inspection)
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: "() => document.cookie.includes('id_token')"
+   })
+   // Should return false (cookie cleared)
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Logout button visible in UI | "Logout" button present in navigation |
+| 2 | Click triggers navigation | Button click navigates to `/_logout` endpoint |
+| 3 | Cookie is cleared | `id_token` cookie is removed |
+| 4 | Cognito session ends | Redirected through Cognito logout endpoint |
+| 5 | Subsequent access requires login | Navigating to app redirects to Cognito login |
+
+### Expected Logout Flow
+
+```
+User clicks "Logout" button
+    ↓
+Frontend patch intercepts click (patch-fix.js)
+    ↓
+Navigate to /_logout
+    ↓
+Lambda@Edge clears id_token cookie and redirects to:
+  https://{cognito-domain}/logout?client_id={id}&logout_uri=https://{host}/
+    ↓
+Cognito clears its session and redirects to logout_uri
+    ↓
+Lambda@Edge sees no cookie, redirects to Cognito login
+    ↓
+User sees Cognito login page (logout complete)
+```
+
+### Technical Details
+
+The OpenHands frontend's native logout button may call `/api/logout` or perform client-side logout, which doesn't work with Cognito authentication. The `patch-fix.js` intercepts the logout button click and redirects to our `/_logout` endpoint which:
+
+1. Clears the `id_token` cookie (sets expired)
+2. Redirects to Cognito's `/logout` endpoint
+3. Cognito clears its session and redirects back
+
+### Verification via Network Requests
+
+```javascript
+// After clicking logout, check network requests
+mcp__chrome-devtools__list_network_requests({
+  resourceTypes: ["document"]
+})
+// Should show:
+// 1. GET /_logout → 302 redirect to Cognito logout
+// 2. GET {cognito-domain}/logout → 302 redirect to app
+// 3. GET / → 302 redirect to Cognito login
+```
+
+### Troubleshooting
+
+| Issue | Possible Cause | Resolution |
+|-------|----------------|------------|
+| Logout button doesn't respond | patch-fix.js not applied | Check container logs for patch errors |
+| Cookie not cleared | Cookie domain mismatch | Verify cookie domain in Lambda@Edge |
+| Redirect loop after logout | logout_uri not in allowed list | Check Cognito app client settings |
+| Still logged in after logout | Multiple id_token cookies | Clear all cookies with matching domain |
+
+---
+
 ## Test Summary Checklist
 
 Use this checklist to track test execution:
@@ -1158,6 +1279,7 @@ Use this checklist to track test execution:
 | TC-015 | AWS Docs MCP Server | [ ] | Verify awsdocs shttp server |
 | TC-016 | Chrome DevTools MCP Server | [ ] | Verify chrome-devtools stdio server |
 | TC-017 | Sandbox AWS Access | [ ] | Verify sandbox can access AWS (S3) and deny IAM |
+| TC-018 | Logout Functionality | [ ] | Logout button clears session |
 
 ---
 
