@@ -2,7 +2,7 @@
 
 This document provides implementation details for the CDK stack files in this directory.
 
-## Stack Architecture (7 Stacks)
+## Stack Architecture (8 Stacks)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -33,9 +33,16 @@ This document provides implementation details for the CDK stack files in this di
 │  └─────────────────────────────────────┘           │                    │
 │                      │                              │                    │
 │                      ▼                              ▼                    │
+│  ┌───────────────────┐                                                  │
+│  │  UserConfigStack  │ (Lambda for /api/v1/user-config/*)              │
+│  │  depends on S3,   │                                                  │
+│  │  KMS key          │                                                  │
+│  └────────┬──────────┘                                                  │
+│           │                                                             │
+│           ▼                                                             │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │                      ComputeStack                                │    │
-│  │   EC2 ASG (Graviton), Internal ALB, nginx runtime proxy         │    │
+│  │   EC2 ASG (Graviton), Internal ALB, Lambda Target Group         │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -46,10 +53,11 @@ This document provides implementation details for the CDK stack files in this di
 |------|---------|---------------|
 | `interfaces.ts` | TypeScript interfaces for stack I/O | OpenHandsConfig, *StackOutput |
 | `network-stack.ts` | VPC import, VPC Endpoints | SSM, ECR, S3, Logs endpoints |
-| `security-stack.ts` | IAM roles, Security Groups | EC2 role, ALB SG, EC2 SG |
+| `security-stack.ts` | IAM roles, Security Groups, KMS | EC2 role, ALB SG, EC2 SG, User Secrets KMS key |
 | `monitoring-stack.ts` | Observability & data store | CloudWatch, S3 data bucket |
 | `database-stack.ts` | Persistent storage | Aurora Serverless v2, IAM auth |
 | `compute-stack.ts` | Application runtime | EC2 ASG, Internal ALB, User Data |
+| `user-config-stack.ts` | User Configuration API | Lambda (ALB target group) |
 | `auth-stack.ts` | Shared authentication | Cognito User Pool, managed login |
 | `edge-stack.ts` | Edge & CDN | Lambda@Edge, CloudFront, WAF, Route 53 |
 
@@ -65,8 +73,11 @@ computeStack.addDependency(networkStack);
 computeStack.addDependency(securityStack);
 computeStack.addDependency(monitoringStack);
 computeStack.addDependency(databaseStack);
+userConfigStack.addDependency(monitoringStack); // Uses S3 bucket
+userConfigStack.addDependency(securityStack);   // Uses KMS key
+computeStack.addDependency(userConfigStack);    // ALB routes to Lambda
 edgeStack.addDependency(computeStack);
-edgeStack.addDependency(authStack);  // Uses Cognito from AuthStack
+edgeStack.addDependency(authStack);             // Uses Cognito from AuthStack
 ```
 
 ## interfaces.ts
@@ -91,6 +102,75 @@ interface DatabaseStackOutput {
   securityGroupId: string;    // Aurora SG
 }
 ```
+
+## user-config-stack.ts
+
+### User Configuration API
+
+Provides per-user configuration management via Lambda integrated with ALB.
+
+**Architecture:**
+- Lambda function (`openhands-user-config-api`) - Python 3.12 on ARM64
+- Exported to ComputeStack for ALB target group integration
+- Routes via ALB listener rule for `/api/v1/user-config/*`
+
+**Key Change (v2):** Replaced HTTP API Gateway with ALB Lambda target group for:
+- Architecture consistency (single entry point via ALB)
+- Cost optimization (no API Gateway fees)
+- Simplified security (no additional execute-api endpoint)
+
+**Environment Variables:**
+```typescript
+DATA_BUCKET: dataBucket.bucketName,  // S3 bucket for user data
+KMS_KEY_ID: kmsKey.keyId,             // KMS key for secrets encryption
+LOG_LEVEL: 'INFO',
+```
+
+**IAM Permissions:**
+- S3 `grantReadWrite` on `users/*` prefix
+- KMS `grantEncryptDecrypt` + `kms:GenerateDataKey`
+
+**API Routes (via ALB):**
+| Path | Methods |
+|------|---------|
+| `/api/v1/user-config/mcp` | GET, PUT |
+| `/api/v1/user-config/mcp/servers` | POST |
+| `/api/v1/user-config/mcp/servers/{serverId}` | PUT, DELETE |
+| `/api/v1/user-config/secrets` | GET |
+| `/api/v1/user-config/secrets/{secretId}` | PUT, DELETE |
+| `/api/v1/user-config/integrations` | GET |
+| `/api/v1/user-config/integrations/{provider}` | PUT, DELETE |
+| `/api/v1/user-config/merged` | GET |
+
+**ALB Integration (compute-stack.ts):**
+```typescript
+// Lambda target group with priority 5 listener rule
+const userConfigTargetGroup = new elbv2.ApplicationTargetGroup(this, 'UserConfigTargetGroup', {
+  targetType: elbv2.TargetType.LAMBDA,
+  targets: [new targets.LambdaTarget(props.userConfigFunction)],
+});
+
+listener.addTargetGroups('VerifiedUserConfigRule', {
+  priority: 5,
+  conditions: [
+    elbv2.ListenerCondition.pathPatterns(['/api/v1/user-config/*']),
+    elbv2.ListenerCondition.httpHeader('X-Origin-Verify', [originVerifySecret]),
+  ],
+  targetGroups: [userConfigTargetGroup],
+});
+```
+
+### KMS Envelope Encryption
+
+Secrets are encrypted using envelope encryption:
+1. Generate data key (DEK) using KMS `GenerateDataKey`
+2. Encrypt secrets JSON with DEK using AES-256-GCM
+3. Store encrypted DEK + nonce + ciphertext in S3
+
+**Decryption:**
+1. Read encrypted envelope from S3
+2. Decrypt DEK using KMS `Decrypt`
+3. Decrypt secrets using DEK + AES-256-GCM
 
 ## database-stack.ts
 

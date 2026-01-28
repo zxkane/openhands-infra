@@ -2,7 +2,9 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as sns from 'aws-cdk-lib/aws-sns';
@@ -113,6 +115,12 @@ export interface ComputeStackProps extends cdk.StackProps {
    * When enabled, sandbox containers receive scoped AWS credentials.
    */
   sandboxAwsAccess?: boolean;
+  /**
+   * User Config API Lambda function (optional).
+   * When provided, creates ALB target group and listener rule for /api/v1/user-config/*
+   * to route requests to this Lambda function.
+   */
+  userConfigFunction?: lambda.IFunction;
 }
 
 /**
@@ -390,6 +398,14 @@ export class ComputeStack extends cdk.Stack {
       `      - AWS_S3_BUCKET=${dataBucket.bucketName}`,
       '      - FILE_STORE=s3',
       `      - FILE_STORE_PATH=${dataBucket.bucketName}`,
+      // User Config feature flag and KMS key for secrets encryption
+      // When USER_CONFIG_ENABLED=true, user-specific MCP configs are loaded from S3
+      ...(securityOutput.userSecretsKmsKeyId ? [
+        '      - USER_CONFIG_ENABLED=true',
+        `      - USER_SECRETS_KMS_KEY_ID=${securityOutput.userSecretsKmsKeyId}`,
+      ] : [
+        '      - USER_CONFIG_ENABLED=false',
+      ]),
       // Note: network_mode should NOT be set here as OpenHands sets it internally
       // Only set extra_hosts for MCP connection support (PR #12236)
       // When sandboxAwsAccess is enabled, also set environment variables for AWS credentials
@@ -628,6 +644,33 @@ export class ComputeStack extends cdk.Stack {
       ],
       targetGroups: [runtimeTargetGroup],
     });
+
+    // ========================================
+    // User Config API Lambda Target Group (optional)
+    // ========================================
+    // When userConfigFunction is provided, route /api/v1/user-config/* to Lambda
+    // This eliminates the need for a separate API Gateway, reducing latency and cost
+    if (props.userConfigFunction) {
+      // Create Lambda target group
+      const userConfigTargetGroup = new elbv2.ApplicationTargetGroup(this, 'UserConfigTargetGroup', {
+        targetType: elbv2.TargetType.LAMBDA,
+        targets: [new targets.LambdaTarget(props.userConfigFunction)],
+        healthCheck: {
+          enabled: false,  // Lambda targets don't support health checks in the traditional sense
+        },
+      });
+
+      // Rule: Forward /api/v1/user-config/* requests with valid origin verification header
+      // Priority 5 (highest priority - most specific path match)
+      listener.addTargetGroups('VerifiedUserConfigRule', {
+        priority: 5,
+        conditions: [
+          elbv2.ListenerCondition.pathPatterns(['/api/v1/user-config/*']),
+          elbv2.ListenerCondition.httpHeader('X-Origin-Verify', [originVerifySecret]),
+        ],
+        targetGroups: [userConfigTargetGroup],
+      });
+    }
 
     // Store outputs
     this.output = {

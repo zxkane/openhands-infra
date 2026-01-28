@@ -1074,6 +1074,190 @@ PYEOF
   fi
 fi
 
+# Patch 18: Copy user_config_loader.py to the app directory
+# This module handles loading user MCP configurations from S3
+USER_CONFIG_LOADER_SRC="/opt/user_config_loader.py"
+USER_CONFIG_LOADER_DST="/app/openhands/server/user_config_loader.py"
+if [ -f "$USER_CONFIG_LOADER_SRC" ]; then
+  if [ -f "$USER_CONFIG_LOADER_DST" ]; then
+    echo "Patch 18: user_config_loader.py already installed"
+  else
+    cp "$USER_CONFIG_LOADER_SRC" "$USER_CONFIG_LOADER_DST"
+    echo "Patch 18: user_config_loader.py installed successfully"
+  fi
+fi
+
+# Patch 19: Add user secrets injection to sandbox creation
+# This patch modifies the sandbox creation to resolve secret references
+# from user configuration and inject them as environment variables
+CONV_SERVICE_FILE="/app/openhands/app_server/listen/live_status_app_conversation_service.py"
+if [ -f "$CONV_SERVICE_FILE" ]; then
+  if grep -q "Patch 19: User secrets injection" "$CONV_SERVICE_FILE"; then
+    echo "Patch 19: User secrets injection already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+import os
+
+try:
+    conv_file = "/app/openhands/app_server/listen/live_status_app_conversation_service.py"
+
+    with open(conv_file, 'r') as f:
+        content = f.read()
+
+    # Check if USER_CONFIG_ENABLED feature flag is set
+    user_config_enabled = os.environ.get('USER_CONFIG_ENABLED', 'false').lower() == 'true'
+    if not user_config_enabled:
+        print("Patch 19: USER_CONFIG_ENABLED is false, skipping secrets injection patch")
+        sys.exit(0)
+
+    # Find the start_sandbox call and add user_env_vars parameter
+    # Look for the pattern where we call start_sandbox with user_id parameter (from Patch 16)
+    old_pattern = """sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str,
+                user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
+            )"""
+
+    new_pattern = """# Patch 19: User secrets injection - resolve secrets for sandbox env vars
+            user_env_vars = {}
+            if task.created_by_user_id:
+                try:
+                    from user_config_loader import UserConfigLoader
+                    loader = UserConfigLoader(task.created_by_user_id)
+                    user_mcp = loader.get_mcp_config()
+                    if user_mcp:
+                        for server in user_mcp.get('stdio_servers', []):
+                            if server.get('enabled', True):
+                                env = server.get('env', {})
+                                # Resolve secret references (e.g., GITHUB_TOKEN_REF -> GITHUB_TOKEN)
+                                resolved = loader.resolve_secret_refs(env)
+                                user_env_vars.update(resolved)
+                except ImportError:
+                    logger.debug("user_config_loader not available, skipping secrets injection")
+                except Exception as e:
+                    logger.warning(f"Failed to load user secrets: {e}")
+
+            sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str,
+                user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
+                user_env_vars=user_env_vars,  # Patch 19: User secrets for MCP servers
+            )"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_pattern)
+        with open(conv_file, 'w') as f:
+            f.write(content)
+        print("Patch 19: User secrets injection added to sandbox creation")
+    elif "user_env_vars=user_env_vars" in content:
+        print("Patch 19: User secrets injection already present")
+    else:
+        print("Patch 19: start_sandbox pattern not found (Patch 16 may need to be applied first)")
+
+except Exception as e:
+    print(f"ERROR: Failed to apply Patch 19: {e}", file=sys.stderr)
+PYEOF
+  fi
+fi
+
+# Patch 20: Update docker_sandbox_service.py to accept user_env_vars parameter
+# This adds support for injecting user-specific environment variables into sandbox containers
+SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+if [ -f "$SANDBOX_SERVICE_FILE" ]; then
+  if grep -q "user_env_vars: dict" "$SANDBOX_SERVICE_FILE"; then
+    echo "Patch 20: user_env_vars parameter already added to start_sandbox"
+  else
+    python3 << 'PYEOF'
+import sys
+import os
+
+try:
+    sandbox_file = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+
+    # Check if USER_CONFIG_ENABLED feature flag is set
+    user_config_enabled = os.environ.get('USER_CONFIG_ENABLED', 'false').lower() == 'true'
+    if not user_config_enabled:
+        print("Patch 20: USER_CONFIG_ENABLED is false, skipping user_env_vars patch")
+        sys.exit(0)
+
+    with open(sandbox_file, 'r') as f:
+        content = f.read()
+
+    # Find the start_sandbox method signature with user_id parameter (from Patch 3a)
+    # and add user_env_vars parameter
+    old_signature = """async def start_sandbox(
+        self,
+        sandbox_spec_id: str | None = None,
+        sandbox_id: str | None = None,
+        user_id: str | None = None,
+    )"""
+
+    new_signature = """async def start_sandbox(
+        self,
+        sandbox_spec_id: str | None = None,
+        sandbox_id: str | None = None,
+        user_id: str | None = None,
+        user_env_vars: dict | None = None,  # Patch 20: User-specific env vars for MCP servers
+    )"""
+
+    if old_signature in content:
+        content = content.replace(old_signature, new_signature)
+
+        # Also update the env_vars construction to include user_env_vars
+        # Look for where env_vars is constructed for the container
+        old_env_block = "if env_vars_from_config else {}"
+        new_env_block = """if env_vars_from_config else {}
+            # Patch 20: Inject user-specific environment variables
+            if user_env_vars:
+                env_vars.update(user_env_vars)
+                logger.info(f"Injected {len(user_env_vars)} user environment variables")"""
+
+        if old_env_block in content and "Patch 20: Inject user-specific" not in content:
+            content = content.replace(old_env_block, new_env_block)
+
+        with open(sandbox_file, 'w') as f:
+            f.write(content)
+        print("Patch 20: user_env_vars parameter added to start_sandbox")
+    elif "user_env_vars: dict" in content:
+        print("Patch 20: user_env_vars parameter already present")
+    else:
+        print("Patch 20: start_sandbox signature not found (Patch 3a may need to be applied first)")
+
+except Exception as e:
+    print(f"ERROR: Failed to apply Patch 20: {e}", file=sys.stderr)
+PYEOF
+  fi
+fi
+
+# Patch 21: Verify S3SettingsStore and S3SecretsStore are properly configured
+# This is a CRITICAL security patch - settings/secrets must be user-scoped
+# Without this patch, all users share the same settings.json and secrets.json
+SERVER_CONFIG_FILE="/app/openhands/server/config/server_config.py"
+if [ -f "$SERVER_CONFIG_FILE" ]; then
+  S3_SETTINGS_OK=false
+  S3_SECRETS_OK=false
+
+  if grep -q "s3_settings_store.S3SettingsStore" "$SERVER_CONFIG_FILE"; then
+    echo "Patch 21: S3SettingsStore configured correctly"
+    S3_SETTINGS_OK=true
+  else
+    echo "WARNING: S3SettingsStore not configured - settings may not be user-scoped" >&2
+  fi
+
+  if grep -q "s3_secrets_store.S3SecretsStore" "$SERVER_CONFIG_FILE"; then
+    echo "Patch 21: S3SecretsStore configured correctly"
+    S3_SECRETS_OK=true
+  else
+    echo "WARNING: S3SecretsStore not configured - secrets may not be user-scoped" >&2
+  fi
+
+  if [ "$S3_SETTINGS_OK" = true ] && [ "$S3_SECRETS_OK" = true ]; then
+    echo "Patch 21: Multi-tenant isolation ENABLED - settings/secrets stored at users/{user_id}/"
+  else
+    # Mark as critical failure - user data isolation is mandatory
+    mark_critical_failure "Patch21-multi-tenant-isolation"
+  fi
+fi
+
 # Final security check: fail startup if any critical patches failed
 if [ -n "$CRITICAL_PATCH_FAILURES" ]; then
   echo "" >&2

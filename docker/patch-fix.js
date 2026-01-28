@@ -263,6 +263,160 @@
   console.log("OpenHands runtime subdomain URL fix loaded");
 })();
 
+// Intercept settings updates to:
+// 1. Ensure Bedrock model prefix (model name may not include "bedrock/" prefix)
+// 2. Filter out global MCP servers to prevent duplicates (user settings should only contain user-added servers)
+(function() {
+  var originalFetch = window.fetch;
+
+  // Global MCP servers from config.toml - these should NOT be saved in user settings
+  // When the frontend saves settings, it includes all MCP servers (global + user).
+  // We filter these out so only user-added servers are saved, preventing duplicates.
+  var globalMcpServers = {
+    stdio: [
+      { name: 'chrome-devtools' }  // Match by name
+    ],
+    shttp: [
+      { url: 'https://knowledge-mcp.global.api.aws' }  // Match by URL
+    ],
+    sse: []
+  };
+
+  // Known Bedrock model patterns that need the bedrock/ prefix
+  var bedrockModelPatterns = [
+    /^global\.anthropic\./i,
+    /^anthropic\./i,
+    /^amazon\./i,
+    /^ai21\./i,
+    /^cohere\./i,
+    /^meta\./i,
+    /^mistral\./i,
+    /^stability\./i
+  ];
+
+  function needsBedrockPrefix(model) {
+    if (!model || typeof model !== 'string') return false;
+    if (model.startsWith('bedrock/')) return false;  // Already has prefix
+    for (var i = 0; i < bedrockModelPatterns.length; i++) {
+      if (bedrockModelPatterns[i].test(model)) return true;
+    }
+    return false;
+  }
+
+  function isGlobalStdioServer(server) {
+    if (!server || !server.name) return false;
+    for (var i = 0; i < globalMcpServers.stdio.length; i++) {
+      if (globalMcpServers.stdio[i].name === server.name) return true;
+    }
+    return false;
+  }
+
+  function isGlobalShttpServer(server) {
+    if (!server || !server.url) return false;
+    for (var i = 0; i < globalMcpServers.shttp.length; i++) {
+      if (globalMcpServers.shttp[i].url === server.url) return true;
+    }
+    return false;
+  }
+
+  function isGlobalSseServer(server) {
+    if (!server || !server.url) return false;
+    for (var i = 0; i < globalMcpServers.sse.length; i++) {
+      if (globalMcpServers.sse[i].url === server.url) return true;
+    }
+    return false;
+  }
+
+  function filterGlobalMcpServers(mcpConfig) {
+    if (!mcpConfig) return mcpConfig;
+
+    var filtered = {};
+    var removedCount = 0;
+
+    // Filter stdio_servers
+    if (Array.isArray(mcpConfig.stdio_servers)) {
+      filtered.stdio_servers = mcpConfig.stdio_servers.filter(function(s) {
+        var isGlobal = isGlobalStdioServer(s);
+        if (isGlobal) removedCount++;
+        return !isGlobal;
+      });
+    }
+
+    // Filter shttp_servers
+    if (Array.isArray(mcpConfig.shttp_servers)) {
+      filtered.shttp_servers = mcpConfig.shttp_servers.filter(function(s) {
+        var isGlobal = isGlobalShttpServer(s);
+        if (isGlobal) removedCount++;
+        return !isGlobal;
+      });
+    }
+
+    // Filter sse_servers
+    if (Array.isArray(mcpConfig.sse_servers)) {
+      filtered.sse_servers = mcpConfig.sse_servers.filter(function(s) {
+        var isGlobal = isGlobalSseServer(s);
+        if (isGlobal) removedCount++;
+        return !isGlobal;
+      });
+    }
+
+    if (removedCount > 0) {
+      console.log("Settings patch: Filtered out", removedCount, "global MCP server(s) to prevent duplicates");
+    }
+
+    return filtered;
+  }
+
+  window.fetch = function(url, options) {
+    // Only intercept POST/PUT to /api/settings
+    if (typeof url === 'string' && url.indexOf('/api/settings') !== -1 &&
+        options && (options.method === 'POST' || options.method === 'PUT') && options.body) {
+      try {
+        var body = JSON.parse(options.body);
+        var modified = false;
+
+        // 1. Add Bedrock prefix if needed
+        if (body && body.llm_model && needsBedrockPrefix(body.llm_model)) {
+          console.log("Settings patch: Adding bedrock/ prefix to model:", body.llm_model);
+          body.llm_model = 'bedrock/' + body.llm_model;
+          modified = true;
+        }
+
+        // 2. Convert empty llm_base_url to null (Bedrock fails with empty string)
+        if (body && body.hasOwnProperty('llm_base_url') && body.llm_base_url === '') {
+          console.log("Settings patch: Converting empty llm_base_url to null");
+          body.llm_base_url = null;
+          modified = true;
+        }
+
+        // 3. For Bedrock models, convert llm_api_key to null (IAM auth doesn't use API keys)
+        // Bedrock fails with "Invalid API Key format" if a placeholder key is provided
+        var isBedrockModel = body && body.llm_model && body.llm_model.startsWith('bedrock/');
+        if (isBedrockModel && body.llm_api_key) {
+          console.log("Settings patch: Removing llm_api_key for Bedrock IAM auth");
+          body.llm_api_key = null;
+          modified = true;
+        }
+
+        // 4. Filter out global MCP servers to prevent duplicates
+        if (body && body.mcp_config) {
+          body.mcp_config = filterGlobalMcpServers(body.mcp_config);
+          modified = true;
+        }
+
+        if (modified) {
+          options = Object.assign({}, options, { body: JSON.stringify(body) });
+        }
+      } catch (e) {
+        // Ignore JSON parse errors
+      }
+    }
+    return originalFetch.apply(this, arguments);
+  };
+
+  console.log("OpenHands settings patch loaded (Bedrock prefix + MCP deduplication)");
+})();
+
 // Auto-create default settings when LLM is already configured via config.toml.
 // NOTE: Some deployments hide the settings UI (HIDE_LLM_SETTINGS=true), which prevents
 // the settings modal from opening and can break conversation creation with:

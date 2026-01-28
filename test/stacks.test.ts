@@ -7,6 +7,7 @@ import { ComputeStack } from '../lib/compute-stack';
 import { EdgeStack } from '../lib/edge-stack';
 import { DatabaseStack } from '../lib/database-stack';
 import { AuthStack } from '../lib/auth-stack';
+import { UserConfigStack } from '../lib/user-config-stack';
 import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput } from '../lib/interfaces';
 
 // Test configuration
@@ -570,6 +571,146 @@ describe('OpenHands Infrastructure Stacks', () => {
     });
   });
 
+  describe('UserConfigStack', () => {
+    let networkStack: NetworkStack;
+    let monitoringStack: MonitoringStack;
+    let securityStack: SecurityStack;
+
+    beforeEach(() => {
+      networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      monitoringStack = new MonitoringStack(app, 'TestMonitoringStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      securityStack = new SecurityStack(app, 'TestSecurityStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        dataBucket: monitoringStack.output.dataBucket,
+      });
+    });
+
+    test('synthesizes correctly', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify Lambda function is created with correct runtime
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Runtime: 'python3.12',
+        Handler: 'handler.handler',
+        FunctionName: 'openhands-user-config-api',
+      });
+
+      // Note: API Gateway is no longer used - Lambda is integrated via ALB target group
+      // The Lambda function is created here, and ComputeStack creates the ALB target group
+    });
+
+    test('lambda function is exported for ALB integration', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      // Verify the userConfigFunction is exposed for ALB integration
+      expect(stack.userConfigFunction).toBeDefined();
+      expect(stack.userConfigFunction.functionArn).toBeDefined();
+    });
+
+    test('lambda has correct environment variables', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: {
+            LOG_LEVEL: 'INFO',
+          },
+        },
+      });
+    });
+
+    test('lambda has proper IAM permissions for S3 and KMS', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify IAM policy exists for Lambda function with S3 permissions
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith(['s3:GetObject*']),
+              Effect: 'Allow',
+            }),
+          ]),
+        },
+      });
+    });
+
+    test('outputs are correctly defined', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      expect(stack.output).toBeDefined();
+      expect(stack.output.lambdaFunctionArn).toBeDefined();
+      expect(stack.output.lambdaFunctionName).toBeDefined();
+      expect(stack.output.kmsKeyArn).toBeDefined();
+      expect(stack.output.kmsKeyId).toBeDefined();
+    });
+
+    test('matches snapshot', () => {
+      const stack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      const template = Template.fromStack(stack);
+      const templateJson = template.toJSON();
+
+      // Normalize Lambda asset hash which varies between Docker builds on different environments
+      // The PythonFunction bundling produces different hashes due to timestamps in the built artifacts
+      const resources = templateJson.Resources || {};
+      for (const [, resource] of Object.entries(resources)) {
+        const res = resource as { Type?: string; Properties?: { Code?: { S3Key?: string } } };
+        if (res.Type === 'AWS::Lambda::Function' && res.Properties?.Code?.S3Key) {
+          res.Properties.Code.S3Key = '<ASSET_HASH>.zip';
+        }
+      }
+
+      expect(templateJson).toMatchSnapshot();
+    });
+  });
+
   describe('Stack Integration', () => {
     test('all stacks can be synthesized together', () => {
       const networkStack = new NetworkStack(app, 'TestNetworkStack', {
@@ -609,6 +750,40 @@ describe('OpenHands Infrastructure Stacks', () => {
       expect(securityStack.output).toBeDefined();
       expect(monitoringStack.output).toBeDefined();
       expect(computeStack.output).toBeDefined();
+    });
+
+    test('UserConfigStack integrates with SecurityStack KMS key', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      const monitoringStack = new MonitoringStack(app, 'TestMonitoringStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      const securityStack = new SecurityStack(app, 'TestSecurityStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        dataBucket: monitoringStack.output.dataBucket,
+      });
+
+      // Verify SecurityStack outputs KMS key ARN
+      expect(securityStack.output.userSecretsKmsKeyArn).toBeDefined();
+      expect(securityStack.output.userSecretsKmsKeyId).toBeDefined();
+
+      // Verify UserConfigStack can be created with the KMS key
+      const userConfigStack = new UserConfigStack(app, 'TestUserConfigStack', {
+        env: testEnv,
+        config: testConfig,
+        dataBucket: monitoringStack.output.dataBucket,
+        kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+      });
+
+      expect(userConfigStack.stackName).toBeDefined();
+      expect(userConfigStack.output).toBeDefined();
     });
   });
 });

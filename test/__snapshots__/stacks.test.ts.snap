@@ -37,7 +37,7 @@ exports[`OpenHands Infrastructure Stacks AuthStack matches snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
-          "S3Key": "bc8ef58951f4c88e641dd23090e9d2e2e61c7530a07960e767522941e959b625.zip",
+          "S3Key": "a38f8a5114ae969de815d5c66b3ddbd646445697a789f7b16424b4ea541d4ff9.zip",
         },
         "Handler": "index.handler",
         "Role": {
@@ -851,7 +851,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-west-2",
-          "S3Key": "bc8ef58951f4c88e641dd23090e9d2e2e61c7530a07960e767522941e959b625.zip",
+          "S3Key": "a38f8a5114ae969de815d5c66b3ddbd646445697a789f7b16424b4ea541d4ff9.zip",
         },
         "Handler": "index.handler",
         "Role": {
@@ -1276,7 +1276,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:8ce6e1d46a57cc259652b898c0b43d184ac8a27067846c1312b0bd841b84a5c4",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:90b51b5620c3e2d842271565d3e1c4a694484daf363cf6eea2af8a453bd5f3c9",
                   },
                   "
     container_name: openhands-app
@@ -1307,6 +1307,12 @@ services:
       - FILE_STORE_PATH=",
                   {
                     "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+                  },
+                  "
+      - USER_CONFIG_ENABLED=true
+      - USER_SECRETS_KMS_KEY_ID=",
+                  {
+                    "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefUserSecretsKmsKey2BAFA35EBEB4D071",
                   },
                   "
       - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"}}
@@ -1430,7 +1436,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:8ce6e1d46a57cc259652b898c0b43d184ac8a27067846c1312b0bd841b84a5c4",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:90b51b5620c3e2d842271565d3e1c4a694484daf363cf6eea2af8a453bd5f3c9",
                   },
                   ""
 pull_with_retry "",
@@ -3576,6 +3582,21 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
         ],
       },
     },
+    "UserSecretsKmsKeyArn": {
+      "Description": "KMS Key ARN for user secrets encryption",
+      "Value": {
+        "Fn::GetAtt": [
+          "UserSecretsKmsKey2BAFA35E",
+          "Arn",
+        ],
+      },
+    },
+    "UserSecretsKmsKeyId": {
+      "Description": "KMS Key ID for user secrets encryption",
+      "Value": {
+        "Ref": "UserSecretsKmsKey2BAFA35E",
+      },
+    },
   },
   "Parameters": {
     "BootstrapVersion": {
@@ -3895,6 +3916,29 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
               ],
               "Sid": "S3DataBucketAccess",
             },
+            {
+              "Action": "kms:Decrypt",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "UserSecretsKmsKey2BAFA35E",
+                  "Arn",
+                ],
+              },
+            },
+            {
+              "Action": [
+                "kms:GenerateDataKey",
+                "kms:GenerateDataKeyWithoutPlaintext",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "UserSecretsKmsKey2BAFA35E",
+                  "Arn",
+                ],
+              },
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -3916,6 +3960,291 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
         ],
       },
       "Type": "AWS::IAM::InstanceProfile",
+    },
+    "UserSecretsKmsKey2BAFA35E": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Description": "KMS key for encrypting OpenHands user secrets (API keys, tokens)",
+        "EnableKeyRotation": true,
+        "KeyPolicy": {
+          "Statement": [
+            {
+              "Action": "kms:*",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition",
+                      },
+                      ":iam::123456789012:root",
+                    ],
+                  ],
+                },
+              },
+              "Resource": "*",
+              "Sid": "EnableRootAccess",
+            },
+            {
+              "Action": [
+                "kms:CreateGrant",
+                "kms:RetireGrant",
+                "kms:RevokeGrant",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion",
+              ],
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:PrincipalType": "Root",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": "*",
+              "Sid": "DenySensitiveOperations",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "KeySpec": "SYMMETRIC_DEFAULT",
+        "KeyUsage": "ENCRYPT_DECRYPT",
+      },
+      "Type": "AWS::KMS::Key",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "UserSecretsKmsKeyAlias9E804B77": {
+      "Properties": {
+        "AliasName": "alias/openhands-user-secrets",
+        "TargetKeyId": {
+          "Fn::GetAtt": [
+            "UserSecretsKmsKey2BAFA35E",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::KMS::Alias",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`OpenHands Infrastructure Stacks UserConfigStack matches snapshot 1`] = `
+{
+  "Outputs": {
+    "LambdaFunctionArn": {
+      "Description": "User Config Lambda Function ARN",
+      "Value": {
+        "Fn::GetAtt": [
+          "UserConfigFunctionEA402079",
+          "Arn",
+        ],
+      },
+    },
+    "LambdaFunctionName": {
+      "Description": "User Config Lambda Function Name",
+      "Value": {
+        "Ref": "UserConfigFunctionEA402079",
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "UserConfigFunctionEA402079": {
+      "DependsOn": [
+        "UserConfigFunctionServiceRoleDefaultPolicy2B19F76C",
+        "UserConfigFunctionServiceRole69793396",
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64",
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-west-2",
+          "S3Key": "<ASSET_HASH>.zip",
+        },
+        "Description": "Handles user configuration management for OpenHands (MCP, secrets, integrations)",
+        "Environment": {
+          "Variables": {
+            "DATA_BUCKET": {
+              "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+            },
+            "KMS_KEY_ID": {
+              "Fn::Select": [
+                1,
+                {
+                  "Fn::Split": [
+                    "/",
+                    {
+                      "Fn::Select": [
+                        5,
+                        {
+                          "Fn::Split": [
+                            ":",
+                            {
+                              "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttUserSecretsKmsKey2BAFA35EArnA5414E75",
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            "LOG_LEVEL": "INFO",
+          },
+        },
+        "FunctionName": "openhands-user-config-api",
+        "Handler": "handler.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "UserConfigFunctionServiceRole69793396",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.12",
+        "Timeout": 30,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "UserConfigFunctionServiceRole69793396": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "UserConfigFunctionServiceRoleDefaultPolicy2B19F76C": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging",
+                "s3:Abort*",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::ImportValue": "TestMonitoringStack:ExportsOutputFnGetAttDataBucketE3889A50Arn98F8399F",
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::ImportValue": "TestMonitoringStack:ExportsOutputFnGetAttDataBucketE3889A50Arn98F8399F",
+                      },
+                      "/users/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "kms:Decrypt",
+                "kms:Encrypt",
+                "kms:ReEncrypt*",
+                "kms:GenerateDataKey*",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttUserSecretsKmsKey2BAFA35EArnA5414E75",
+              },
+            },
+            {
+              "Action": [
+                "kms:GenerateDataKey",
+                "kms:GenerateDataKeyWithoutPlaintext",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttUserSecretsKmsKey2BAFA35EArnA5414E75",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "UserConfigFunctionServiceRoleDefaultPolicy2B19F76C",
+        "Roles": [
+          {
+            "Ref": "UserConfigFunctionServiceRole69793396",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
     },
   },
   "Rules": {

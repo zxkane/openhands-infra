@@ -8,6 +8,7 @@ import { DatabaseStack } from '../lib/database-stack.js';
 import { ComputeStack } from '../lib/compute-stack.js';
 import { AuthStack } from '../lib/auth-stack.js';
 import { EdgeStack } from '../lib/edge-stack.js';
+import { UserConfigStack } from '../lib/user-config-stack.js';
 import { OpenHandsConfig } from '../lib/interfaces.js';
 
 const app = new cdk.App();
@@ -199,7 +200,22 @@ const databaseStack = new DatabaseStack(app, `${prefix}-Database`, {
 databaseStack.addDependency(networkStack);
 databaseStack.addDependency(securityStack);
 
-// 5. Compute Stack - ASG, Launch Template, ALB (Internal)
+// 4.5. User Config Stack - User Configuration API (MCP, Secrets, Integrations)
+//      Provides per-user configuration management with KMS-encrypted secrets
+//      Creates Lambda function that will be integrated with ALB in ComputeStack
+const userConfigStack = new UserConfigStack(app, `${prefix}-UserConfig`, {
+  env: mainEnv,
+  config,
+  dataBucket: monitoringStack.output.dataBucket,
+  kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
+  description: 'OpenHands User Configuration API - MCP, Secrets, Integrations',
+  crossRegionReferences: true,
+});
+userConfigStack.addDependency(monitoringStack);
+userConfigStack.addDependency(securityStack);
+
+// 5. Compute Stack - ASG, Launch Template, ALB
+//    Also integrates User Config API Lambda via ALB target group for /api/v1/user-config/*
 const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   env: mainEnv,
   config,
@@ -208,18 +224,20 @@ const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   monitoringOutput: monitoringStack.output,
   databaseOutput: databaseStack.output,
   sandboxAwsAccess,
-  description: 'OpenHands Compute Infrastructure - EC2 ASG and Internal ALB',
+  userConfigFunction: userConfigStack.userConfigFunction,  // Lambda for /api/v1/user-config/*
+  description: 'OpenHands Compute Infrastructure - EC2 ASG and ALB',
   crossRegionReferences: true,
 });
 computeStack.addDependency(networkStack);
 computeStack.addDependency(securityStack);
 computeStack.addDependency(monitoringStack);
 computeStack.addDependency(databaseStack);
+computeStack.addDependency(userConfigStack);  // Needs Lambda function from UserConfigStack
 
 // 6. Edge Stack (us-east-1) - Cognito, Lambda@Edge, CloudFront, WAF, Route 53
 //    This merged stack combines Auth and CDN to avoid cross-stack reference issues
 //    ALB DNS name and origin secret are read from SSM parameters in us-east-1 (written by ComputeStack)
-//    This enables multiple Edge stacks to share the same Compute stack without cross-region export conflicts.
+//    User Config API is now routed through ALB (no separate API Gateway needed)
 const edgeStack = new EdgeStack(app, edgeStackId, {
   env: usEast1Env,
   config,
