@@ -382,7 +382,14 @@
           modified = true;
         }
 
-        // 2. Filter out global MCP servers to prevent duplicates
+        // 2. Convert empty llm_base_url to null (Bedrock fails with empty string)
+        if (body && body.hasOwnProperty('llm_base_url') && body.llm_base_url === '') {
+          console.log("Settings patch: Converting empty llm_base_url to null");
+          body.llm_base_url = null;
+          modified = true;
+        }
+
+        // 3. Filter out global MCP servers to prevent duplicates
         if (body && body.mcp_config) {
           body.mcp_config = filterGlobalMcpServers(body.mcp_config);
           modified = true;
