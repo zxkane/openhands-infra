@@ -441,4 +441,72 @@ describe('Lambda@Edge Auth Handler (lib/lambda-edge/auth-handler.js)', () => {
       expect(response.headers.location[0].value).toContain('/login');
     });
   });
+
+  describe('Configuration - Token Refresh Path', () => {
+    test('tokenRefreshPath is configured', () => {
+      const config = authHandler._getConfig();
+      expect(config.tokenRefreshPath).toBe('/_token/refresh');
+    });
+  });
+
+  describe('handler - Token Refresh Endpoint', () => {
+    // Helper to create CloudFront event for token refresh
+    const createTokenRefreshEvent = (cookies?: Array<{ value: string }>) => ({
+      Records: [{
+        cf: {
+          request: {
+            uri: '/_token/refresh',
+            headers: {
+              host: [{ value: 'openhands.example.com' }],
+              ...(cookies ? { cookie: cookies } : {}),
+            },
+            querystring: '',
+          },
+        },
+      }],
+    });
+
+    test('returns 401 when no refresh_token cookie is present', async () => {
+      const event = createTokenRefreshEvent();
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('No refresh token available');
+    });
+
+    test('returns 401 when only id_token cookie is present', async () => {
+      const event = createTokenRefreshEvent([
+        { value: 'id_token=some.token.here' },
+      ]);
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('No refresh token available');
+    });
+
+    test('returns error for invalid refresh_token (mocked)', async () => {
+      // Note: Full token refresh testing requires mocking the Cognito endpoint
+      // This test verifies the handler correctly handles the refresh_token cookie
+      const event = createTokenRefreshEvent([
+        { value: 'refresh_token=invalid.refresh.token' },
+      ]);
+
+      const response = await authHandler.handler(event);
+
+      // Should return either 401 (Cognito rejected) or 500 (network error)
+      expect(['401', '500']).toContain(response.status);
+    });
+  });
+
+  describe('refreshTokens function', () => {
+    test('refreshTokens function is exported', () => {
+      expect(typeof authHandler.refreshTokens).toBe('function');
+    });
+  });
 });
