@@ -53,7 +53,16 @@ def get_user_id(event: dict) -> str | None:
 def get_path_parameter(event: dict, name: str) -> str | None:
     """Extract a path parameter from the event."""
     params = event.get('pathParameters', {})
-    return params.get(name) if params else None
+    param_value = params.get(name) if params else None
+
+    # Sanitize path parameters to prevent injection attacks
+    if param_value:
+        # Remove potentially dangerous characters
+        param_value = param_value.replace('/', '_').replace('..', '_').replace('\\', '_')
+        # Limit length to prevent DoS
+        param_value = param_value[:100]
+
+    return param_value
 
 
 def parse_json_body(event: dict) -> dict | None:

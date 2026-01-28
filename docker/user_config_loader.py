@@ -53,9 +53,10 @@ class UserConfigLoader:
         self.s3 = boto3.client('s3', region_name=region)
         self.kms = boto3.client('kms', region_name=region) if self.kms_key_id else None
 
-        # S3 paths
-        self.config_prefix = f'users/{user_id}/config'
-        self.secrets_prefix = f'users/{user_id}/secrets'
+        # S3 paths - sanitize user_id to prevent path traversal
+        sanitized_user_id = user_id.replace('/', '_').replace('..', '_').replace('\\', '_')
+        self.config_prefix = f'users/{sanitized_user_id}/config'
+        self.secrets_prefix = f'users/{sanitized_user_id}/secrets'
 
     def _read_json(self, key: str) -> dict | None:
         """Read and parse JSON from S3.

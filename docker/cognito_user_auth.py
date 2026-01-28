@@ -140,7 +140,12 @@ class CognitoUserAuth(DefaultUserAuth):
 
         try:
             # Import here to avoid circular imports
-            from user_config_loader import UserConfigLoader, INTEGRATION_MCP_MAP
+            from user_config_loader import UserConfigLoader
+            try:
+                from user_config_loader import INTEGRATION_MCP_MAP
+            except ImportError:
+                logger.warning('INTEGRATION_MCP_MAP not available in user_config_loader')
+                INTEGRATION_MCP_MAP = {}
 
             loader = UserConfigLoader(user_id)
 

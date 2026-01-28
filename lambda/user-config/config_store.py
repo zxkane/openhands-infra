@@ -50,9 +50,10 @@ class UserConfigStore:
         self.s3 = boto3.client('s3')
         self.kms = boto3.client('kms') if kms_key_id else None
 
-        # S3 paths for this user
-        self.config_prefix = f'users/{user_id}/config'
-        self.secrets_prefix = f'users/{user_id}/secrets'
+        # S3 paths for this user - sanitize user_id to prevent path traversal
+        sanitized_user_id = user_id.replace('/', '_').replace('..', '_').replace('\\', '_')
+        self.config_prefix = f'users/{sanitized_user_id}/config'
+        self.secrets_prefix = f'users/{sanitized_user_id}/secrets'
 
     def _s3_key(self, *parts: str) -> str:
         """Construct S3 key from path parts."""
