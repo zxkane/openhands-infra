@@ -35,3 +35,7 @@ jobs:
 
       - name: Run all tests
         run: npm run test
+        env:
+          # Skip Docker bundling for PythonFunction in tests
+          # CI doesn't have Docker ARM64 support
+          CDK_DOCKER: 'false'
