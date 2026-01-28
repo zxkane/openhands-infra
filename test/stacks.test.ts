@@ -695,7 +695,19 @@ describe('OpenHands Infrastructure Stacks', () => {
       });
 
       const template = Template.fromStack(stack);
-      expect(template.toJSON()).toMatchSnapshot();
+      const templateJson = template.toJSON();
+
+      // Normalize Lambda asset hash which varies between Docker builds on different environments
+      // The PythonFunction bundling produces different hashes due to timestamps in the built artifacts
+      const resources = templateJson.Resources || {};
+      for (const [, resource] of Object.entries(resources)) {
+        const res = resource as { Type?: string; Properties?: { Code?: { S3Key?: string } } };
+        if (res.Type === 'AWS::Lambda::Function' && res.Properties?.Code?.S3Key) {
+          res.Properties.Code.S3Key = '<ASSET_HASH>.zip';
+        }
+      }
+
+      expect(templateJson).toMatchSnapshot();
     });
   });
 
