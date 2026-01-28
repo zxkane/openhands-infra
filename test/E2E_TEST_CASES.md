@@ -1280,6 +1280,8 @@ Use this checklist to track test execution:
 | TC-016 | Chrome DevTools MCP Server | [ ] | Verify chrome-devtools stdio server |
 | TC-017 | Sandbox AWS Access | [ ] | Verify sandbox can access AWS (S3) and deny IAM |
 | TC-018 | Logout Functionality | [ ] | Logout button clears session |
+| TC-019 | Secrets Page User Isolation | [❌] | **FAILING** - OpenHands uses global storage (see Known Limitations) |
+| TC-020 | Settings Pages User Isolation | [❌] | **FAILING** - OpenHands uses global storage (see Known Limitations) |
 
 ---
 
@@ -1805,6 +1807,374 @@ Expected: List of S3 buckets from the AWS CLI.
 
 ---
 
+## TC-019: Verify User Secrets Page Isolation
+
+### Description
+Verify that the /settings/secrets page correctly displays only the current user's secrets and does not show secrets from other users. This test ensures user data isolation for the secrets management feature.
+
+### Prerequisites
+- Infrastructure deployed with user-config API
+- Two Cognito test users configured:
+  - User A: Primary test user
+  - User B: Secondary test user with different secrets
+- TC-003 completed (login process verified)
+
+### Test Users
+
+| Role | Email | Password | Purpose |
+|------|-------|----------|---------|
+| User A | `e2e+userA-<timestamp>@<domain>` | `E2EPass@123456` | Creates secrets, verifies isolation |
+| User B | `e2e+userB-<timestamp>@<domain>` | `E2EPass@123456` | Creates different secrets |
+
+### Steps
+
+1. **Phase 1: Create User A and add secrets**
+
+   1.1. Create test user A
+   ```bash
+   E2E_USER_A="e2e+userA-$(date +%Y%m%d-%H%M%S)@<domain>"
+   E2E_PASS="E2EPass@123456"
+
+   aws cognito-idp admin-create-user \
+     --user-pool-id <user-pool-id> \
+     --username "$E2E_USER_A" \
+     --user-attributes Name=email,Value="$E2E_USER_A" Name=email_verified,Value=true \
+     --temporary-password "$E2E_PASS" \
+     --message-action SUPPRESS \
+     --region us-east-1
+
+   aws cognito-idp admin-set-user-password \
+     --user-pool-id <user-pool-id> \
+     --username "$E2E_USER_A" \
+     --password "$E2E_PASS" \
+     --permanent \
+     --region us-east-1
+   ```
+
+   1.2. Login as User A
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/_logout",
+     type: "url"
+   })
+   // Wait for redirect to login
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Login with User A credentials
+   mcp__chrome-devtools__fill({ uid: "<email-field>", value: "<user-a-email>" })
+   mcp__chrome-devtools__fill({ uid: "<password-field>", value: "<user-a-password>" })
+   mcp__chrome-devtools__click({ uid: "<signin-button>" })
+   ```
+
+   1.3. Navigate to Secrets page
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/secrets",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   1.4. Verify page loads with empty secrets (new user)
+   ```javascript
+   // Should show "Secrets" heading with no existing secrets
+   // or "Add a new secret" button
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   1.5. Add a secret for User A
+   ```javascript
+   mcp__chrome-devtools__click({ uid: "<add-secret-button>" })
+   mcp__chrome-devtools__fill({ uid: "<secret-name-field>", value: "USER_A_SECRET" })
+   mcp__chrome-devtools__fill({ uid: "<secret-description-field>", value: "User A test secret" })
+   mcp__chrome-devtools__fill({ uid: "<secret-value-field>", value: "user-a-secret-value" })
+   mcp__chrome-devtools__click({ uid: "<save-button>" })
+   ```
+
+   1.6. Verify secret is displayed
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "USER_A_SECRET",
+     timeout: 10000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+2. **Phase 2: Create User B and verify isolation**
+
+   2.1. Create test user B
+   ```bash
+   E2E_USER_B="e2e+userB-$(date +%Y%m%d-%H%M%S)@<domain>"
+
+   aws cognito-idp admin-create-user \
+     --user-pool-id <user-pool-id> \
+     --username "$E2E_USER_B" \
+     --user-attributes Name=email,Value="$E2E_USER_B" Name=email_verified,Value=true \
+     --temporary-password "$E2E_PASS" \
+     --message-action SUPPRESS \
+     --region us-east-1
+
+   aws cognito-idp admin-set-user-password \
+     --user-pool-id <user-pool-id> \
+     --username "$E2E_USER_B" \
+     --password "$E2E_PASS" \
+     --permanent \
+     --region us-east-1
+   ```
+
+   2.2. Logout User A and login as User B
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/_logout",
+     type: "url"
+   })
+   // Wait for redirect to login
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Login with User B credentials
+   mcp__chrome-devtools__fill({ uid: "<email-field>", value: "<user-b-email>" })
+   mcp__chrome-devtools__fill({ uid: "<password-field>", value: "<user-b-password>" })
+   mcp__chrome-devtools__click({ uid: "<signin-button>" })
+   ```
+
+   2.3. Navigate to Secrets page as User B
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/secrets",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   2.4. Verify User A's secret is NOT visible
+   ```javascript
+   // The page should NOT show "USER_A_SECRET"
+   // Should show empty secrets list for new user
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   2.5. Add a different secret for User B
+   ```javascript
+   mcp__chrome-devtools__click({ uid: "<add-secret-button>" })
+   mcp__chrome-devtools__fill({ uid: "<secret-name-field>", value: "USER_B_SECRET" })
+   mcp__chrome-devtools__fill({ uid: "<secret-description-field>", value: "User B test secret" })
+   mcp__chrome-devtools__fill({ uid: "<secret-value-field>", value: "user-b-secret-value" })
+   mcp__chrome-devtools__click({ uid: "<save-button>" })
+   ```
+
+   2.6. Verify only User B's secret is displayed
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "USER_B_SECRET",
+     timeout: 10000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   // Should NOT contain "USER_A_SECRET"
+   ```
+
+3. **Phase 3: Verify User A still sees only their secrets**
+
+   3.1. Logout User B and login as User A again
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/_logout",
+     type: "url"
+   })
+   // Login with User A credentials
+   ```
+
+   3.2. Navigate to Secrets page
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/secrets",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   3.3. Verify only User A's secret is displayed
+   ```javascript
+   // Should show "USER_A_SECRET"
+   // Should NOT show "USER_B_SECRET"
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+4. **Phase 4: Verify API isolation**
+
+   4.1. Check network request to /api/secrets
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/secrets",
+     type: "url"
+   })
+   mcp__chrome-devtools__list_network_requests({
+     resourceTypes: ["xhr", "fetch"]
+   })
+   // Find GET /api/secrets request
+   mcp__chrome-devtools__get_network_request({ reqid: <secrets-request-id> })
+   ```
+
+   4.2. Verify response contains only current user's secrets
+   ```javascript
+   // Response body should contain only USER_A_SECRET (for User A session)
+   // NOT USER_B_SECRET
+   ```
+
+5. **Phase 5: Cleanup**
+
+   ```bash
+   # Delete test users
+   aws cognito-idp admin-delete-user \
+     --user-pool-id <user-pool-id> \
+     --username "$E2E_USER_A" \
+     --region us-east-1
+
+   aws cognito-idp admin-delete-user \
+     --user-pool-id <user-pool-id> \
+     --username "$E2E_USER_B" \
+     --region us-east-1
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Secrets page loads | /settings/secrets renders without errors |
+| 2 | New user sees empty secrets | Fresh user has no secrets |
+| 3 | User can add secret | Secret creation succeeds |
+| 4 | Secret is displayed | User's own secret visible in list |
+| 5 | User isolation works | User A cannot see User B's secrets |
+| 6 | API isolation works | GET /api/secrets returns only current user's data |
+| 7 | Secret values never exposed | Only names/descriptions shown, not values |
+| 8 | Logout clears session | After logout, secrets page requires re-auth |
+
+### Security Verification
+
+| Check | Expected |
+|-------|----------|
+| JWT token in cookie | User ID from token matches secrets returned |
+| X-Cognito-User-Id header | Injected by Lambda@Edge, used for data scoping |
+| No cross-user leakage | User B's request never returns User A's data |
+| Secret values hidden | API returns metadata only, not actual secret values |
+
+### Network Request Verification
+
+| Request | Expected Response |
+|---------|-------------------|
+| `GET /api/secrets` | `{"custom_secrets": [{"name": "...", "description": "..."}]}` |
+| Response body | Must NOT contain secrets from other users |
+| Response headers | `X-Cognito-User-Id` matches current user |
+
+### Troubleshooting
+
+| Issue | Possible Cause | Resolution |
+|-------|----------------|------------|
+| Seeing other user's secrets | Old cookie with different user ID | Clear cookies, re-login |
+| Secrets persist after logout | Cookie not properly cleared | Navigate to /_logout endpoint |
+| Empty secrets for existing user | User ID mismatch | Verify JWT contains correct `sub` claim |
+| API returns 401 | Session expired | Re-authenticate |
+| API returns 403 | User ID spoofing detected | Lambda@Edge blocks spoofed headers |
+
+---
+
+## TC-020: Verify Settings Pages User Isolation (MCP, Integrations, Secrets)
+
+### Description
+Verify that all settings pages (/settings/mcp, /settings/integrations, /settings/secrets) correctly isolate user data and do not leak configurations between users.
+
+### Prerequisites
+- Infrastructure deployed with user-config API
+- Two Cognito test users
+- TC-003 completed (login process verified)
+
+### Steps
+
+1. **Verify MCP Settings Isolation**
+
+   1.1. Login as User A, navigate to MCP settings
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/mcp",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   1.2. Add a custom MCP server for User A
+   ```javascript
+   // Click "Add MCP Server" button
+   // Fill in custom server URL
+   // Save
+   ```
+
+   1.3. Logout and login as User B
+   ```javascript
+   // Verify User B does NOT see User A's custom MCP server
+   ```
+
+2. **Verify Integrations Settings Isolation**
+
+   2.1. Login as User A, navigate to Integrations
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/integrations",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   2.2. Configure GitHub integration for User A
+   ```javascript
+   // Enable GitHub integration
+   // Add token reference
+   ```
+
+   2.3. Verify User B doesn't see User A's integrations
+   ```javascript
+   // Logout User A, login User B
+   // Navigate to integrations
+   // Should NOT show User A's GitHub integration
+   ```
+
+3. **Verify Application Settings Isolation**
+
+   3.1. Login as User A, navigate to Application settings
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/app",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   3.2. Change LLM settings for User A
+   3.3. Verify User B has independent settings
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | MCP settings isolated | Users have independent MCP configurations |
+| 2 | Integrations isolated | Users have independent integration configs |
+| 3 | Application settings isolated | Users have independent app preferences |
+| 4 | Secrets isolated | Verified in TC-019 |
+| 5 | No cross-user data leakage | All settings pages scoped to current user |
+
+### API Endpoints to Verify
+
+| Endpoint | Isolation Check |
+|----------|-----------------|
+| `GET /api/settings` | Returns only current user's settings |
+| `GET /api/secrets` | Returns only current user's secrets |
+| `GET /api/v1/user-config/mcp` | Returns only current user's MCP config |
+| `GET /api/v1/user-config/integrations` | Returns only current user's integrations |
+
+---
+
 ## Troubleshooting Guide
 
 ### Common Issues
@@ -1849,3 +2219,44 @@ aws elbv2 describe-target-health \
 # Test runtime subdomain DNS
 dig +short 5000-test123abc.runtime.$FULL_DOMAIN
 ```
+
+---
+
+## Known Limitations
+
+### OpenHands Core Multi-Tenancy Issue (CRITICAL)
+
+**Status**: ❌ FAILING - OpenHands core does not support user-scoped data isolation
+
+**Issue**: OpenHands stores user data (secrets, settings, integrations) in a **global file** at the S3 bucket root, not in user-scoped paths.
+
+**Impact**: All users share the same secrets and settings. User A can see User B's secrets, which is a critical security vulnerability.
+
+**Root Cause Analysis**:
+
+| Data Type | Expected Path | Actual Path | Status |
+|-----------|---------------|-------------|--------|
+| Secrets | `users/{user_id}/secrets/` | `secrets.json` (bucket root) | ❌ Global |
+| Settings | `users/{user_id}/config/settings.json` | `settings.json` (bucket root) | ❌ Global |
+| Conversations | `users/{user_id}/conversations/` | `users/{user_id}/conversations/` | ✅ Scoped |
+
+**Workaround**: The global `secrets.json` file was manually removed from S3 to prevent cross-user data leakage. This is a temporary fix until OpenHands core implements proper multi-tenancy.
+
+**Fix Required**: OpenHands core needs to be updated to:
+1. Store user data in user-scoped S3 paths: `users/{user_id}/secrets/`, `users/{user_id}/config/`
+2. Use the `user_id` from `X-Cognito-User-Id` header (injected by Lambda@Edge) to scope all data operations
+
+**E2E Test Results (TC-019)**:
+
+| # | Test Step | Result | Notes |
+|---|-----------|--------|-------|
+| 1 | User A creates secret | ✅ PASS | Secret created successfully |
+| 2 | User A sees own secret | ✅ PASS | USER_A_SECRET displayed |
+| 3 | User B logs in | ✅ PASS | Login successful |
+| 4 | User B sees empty secrets | ❌ FAIL | **User B can see USER_A_SECRET** |
+| 5 | Data isolation verified | ❌ FAIL | Cross-user data leakage confirmed |
+
+**Recommendations**:
+1. Do NOT use the OpenHands secrets feature in production until this is fixed
+2. Monitor S3 bucket for new `secrets.json` files at root level
+3. Track upstream OpenHands issue for multi-tenancy support
