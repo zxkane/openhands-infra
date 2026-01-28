@@ -345,14 +345,15 @@ export class SecurityStack extends cdk.Stack {
             actions: ['kms:*'],
             resources: ['*'],
           }),
-          // Explicit deny for sensitive operations to prevent privilege escalation
-          // This applies to all non-root principals
+          // Explicit deny for sensitive grant/deletion operations to prevent privilege escalation
+          // Note: kms:PutKeyPolicy is NOT denied - it requires kms:* on the key which only
+          // the root principal and key administrators have (via IAM policies)
+          // Denying PutKeyPolicy would lock out CDK from future policy updates
           new iam.PolicyStatement({
             sid: 'DenySensitiveOperations',
             effect: iam.Effect.DENY,
             principals: [new iam.AnyPrincipal()],
             actions: [
-              'kms:PutKeyPolicy',
               'kms:CreateGrant',
               'kms:RetireGrant',
               'kms:RevokeGrant',

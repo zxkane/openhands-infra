@@ -50,9 +50,8 @@ export class UserConfigStack extends cdk.Stack {
     // The Lambda layer approach avoids Docker bundling issues in CI
     const lambdaCodePath = path.join(__dirname, '..', 'lambda', 'user-config');
 
-    // Create Lambda function with standard Python runtime
-    // Note: Dependencies (boto3, pydantic, cryptography) are bundled via Lambda layer
-    // or pre-installed in the Lambda runtime
+    // Create Lambda function with Python dependencies bundled
+    // Uses Docker bundling to install requirements.txt dependencies
     this.userConfigFunction = new lambda.Function(this, 'UserConfigFunction', {
       functionName: 'openhands-user-config-api',
       description: 'Handles user configuration management for OpenHands (MCP, secrets, integrations)',
@@ -61,7 +60,16 @@ export class UserConfigStack extends cdk.Stack {
       handler: 'handler.handler',
       code: lambda.Code.fromAsset(lambdaCodePath, {
         // Exclude test files and dev artifacts from Lambda package
-        exclude: ['.venv', '__pycache__', '*.pyc', 'test_*.py', '.pytest_cache', 'uv.lock', 'pyproject.toml'],
+        exclude: ['.venv', '__pycache__', '*.pyc', 'test_*.py', '.pytest_cache', 'uv.lock'],
+        // Bundle Python dependencies using Docker
+        bundling: {
+          image: lambda.Runtime.PYTHON_3_12.bundlingImage,
+          platform: 'linux/arm64',
+          command: [
+            'bash', '-c',
+            'pip install -r requirements.txt -t /asset-output && cp -r . /asset-output/ && rm -rf /asset-output/__pycache__ /asset-output/test_*.py /asset-output/.pytest_cache',
+          ],
+        },
       }),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
