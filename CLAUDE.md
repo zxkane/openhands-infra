@@ -46,11 +46,11 @@ MonitoringStack ← independent, S3 data bucket
     ↓
 DatabaseStack ← depends on Network + Security
     ↓
-ComputeStack ← depends on Network + Security + Monitoring + Database
+UserConfigStack ← depends on Security (KMS) + Monitoring (S3), creates Lambda
     ↓
-UserConfigStack ← depends on Security (KMS) + Monitoring (S3)
-    ↓
-EdgeStack (us-east-1) ← depends on Compute + Auth + UserConfig
+ComputeStack ← depends on Network + Security + Monitoring + Database + UserConfig
+    ↓           (routes /api/v1/user-config/* to Lambda via ALB target group)
+EdgeStack (us-east-1) ← depends on Compute + Auth
 ```
 
 **Self-healing**: Aurora PostgreSQL + S3 + EFS preserve data across EC2 replacements.

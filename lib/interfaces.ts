@@ -103,8 +103,10 @@ export interface DatabaseStackOutput {
  * Output from UserConfigStack (User Configuration API)
  */
 export interface UserConfigStackOutput {
-  /** API Gateway endpoint URL */
-  apiEndpoint: string;
+  /** Lambda function ARN for user config API */
+  lambdaFunctionArn: string;
+  /** Lambda function name for user config API */
+  lambdaFunctionName: string;
   /** KMS key ARN for user secrets encryption */
   kmsKeyArn: string;
   /** KMS key ID for user secrets encryption */

@@ -25,9 +25,12 @@ os.environ['LOG_LEVEL'] = 'DEBUG'
 # Import modules after setting env vars
 from handler import (
     create_response,
-    get_path_parameter,
+    extract_path_parameter,
+    get_method,
+    get_path,
     get_user_id,
     handler,
+    is_alb_event,
     parse_json_body,
     route_request,
 )
@@ -60,13 +63,69 @@ class TestHelperFunctions:
         event = {'headers': {}}
         assert get_user_id(event) is None
 
-    def test_get_path_parameter(self):
-        event = {'pathParameters': {'serverId': 'server-123'}}
-        assert get_path_parameter(event, 'serverId') == 'server-123'
+    def test_is_alb_event_true(self):
+        event = {'requestContext': {'elb': {'targetGroupArn': 'arn:aws:elasticloadbalancing:...'}}}
+        assert is_alb_event(event) is True
 
-    def test_get_path_parameter_missing(self):
-        event = {'pathParameters': None}
-        assert get_path_parameter(event, 'serverId') is None
+    def test_is_alb_event_false(self):
+        event = {'requestContext': {'http': {'method': 'GET'}}}
+        assert is_alb_event(event) is False
+
+    def test_is_alb_event_no_request_context(self):
+        event = {}
+        assert is_alb_event(event) is False
+
+    def test_create_response_alb_format(self):
+        response = create_response(200, {'data': 'test'}, is_alb=True)
+        assert response['statusCode'] == 200
+        assert response['statusDescription'] == '200 OK'
+        assert response['isBase64Encoded'] is False
+        assert response['headers']['Content-Type'] == 'application/json'
+
+    def test_create_response_non_alb_format(self):
+        response = create_response(200, {'data': 'test'}, is_alb=False)
+        assert response['statusCode'] == 200
+        assert 'statusDescription' not in response
+        assert 'isBase64Encoded' not in response
+
+    def test_get_path_alb_format(self):
+        event = {'path': '/api/v1/user-config/mcp'}
+        assert get_path(event) == '/api/v1/user-config/mcp'
+
+    def test_get_path_api_gateway_format(self):
+        event = {'rawPath': '/api/v1/user-config/mcp'}
+        assert get_path(event) == '/api/v1/user-config/mcp'
+
+    def test_get_method_alb_format(self):
+        event = {'httpMethod': 'GET'}
+        assert get_method(event) == 'GET'
+
+    def test_get_method_api_gateway_format(self):
+        event = {'requestContext': {'http': {'method': 'POST'}}}
+        assert get_method(event) == 'POST'
+
+    def test_extract_path_parameter(self):
+        path = '/api/v1/user-config/secrets/github-token'
+        pattern = r'/api/v1/user-config/secrets/([^/]+)'
+        assert extract_path_parameter(path, pattern) == 'github-token'
+
+    def test_extract_path_parameter_with_special_chars(self):
+        path = '/api/v1/user-config/secrets/my-token_123'
+        pattern = r'/api/v1/user-config/secrets/([^/]+)'
+        assert extract_path_parameter(path, pattern) == 'my-token_123'
+
+    def test_extract_path_parameter_sanitizes_path_traversal(self):
+        path = '/api/v1/user-config/secrets/../../../etc/passwd'
+        pattern = r'/api/v1/user-config/secrets/([^/]+)'
+        result = extract_path_parameter(path, pattern)
+        # Should sanitize path traversal attempts
+        assert result is not None
+        assert '..' not in result
+
+    def test_extract_path_parameter_missing(self):
+        path = '/api/v1/user-config/secrets'
+        pattern = r'/api/v1/user-config/secrets/([^/]+)'
+        assert extract_path_parameter(path, pattern) is None
 
     def test_parse_json_body_valid(self):
         event = {'body': '{"key": "value"}'}
@@ -123,8 +182,24 @@ class TestRouting:
             'rawPath': '/api/v1/user-config/mcp',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
+        mock_store.get_mcp_config.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_route_mcp_get_alb_format(self):
+        mock_store = MagicMock()
+        mock_store.get_mcp_config = AsyncMock(return_value=MCPConfig())
+
+        event = {
+            'path': '/api/v1/user-config/mcp',
+            'httpMethod': 'GET',
+            'requestContext': {'elb': {'targetGroupArn': 'arn:...'}},
+        }
+        response = await route_request(event, mock_store, is_alb=True)
+        assert response['statusCode'] == 200
+        assert response['statusDescription'] == '200 OK'
+        assert response['isBase64Encoded'] is False
         mock_store.get_mcp_config.assert_called_once()
 
     @pytest.mark.asyncio
@@ -137,7 +212,7 @@ class TestRouting:
             'requestContext': {'http': {'method': 'PUT'}},
             'body': json.dumps({'version': '1.0', 'shttp_servers': [], 'stdio_servers': []}),
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         mock_store.save_mcp_config.assert_called_once()
 
@@ -150,7 +225,7 @@ class TestRouting:
             'rawPath': '/api/v1/user-config/secrets',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         mock_store.list_secrets.assert_called_once()
 
@@ -162,7 +237,7 @@ class TestRouting:
             'rawPath': '/api/v1/user-config/invalid',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 404
 
 
@@ -178,7 +253,7 @@ class TestMCPConfiguration:
             'rawPath': '/api/v1/user-config/mcp',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         body = json.loads(response['body'])
         assert body['version'] == '1.0'
@@ -200,7 +275,7 @@ class TestMCPConfiguration:
                 'enabled': True,
             }),
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 201
         body = json.loads(response['body'])
         assert body['server_id'] == 'my-server'
@@ -222,7 +297,7 @@ class TestMCPConfiguration:
                 'url': 'https://new.com/mcp',
             }),
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 409
         assert 'already exists' in response['body']
 
@@ -236,11 +311,10 @@ class TestMCPConfiguration:
         mock_store.save_mcp_config = AsyncMock()
 
         event = {
-            'rawPath': '/api/v1/user-config/mcp/servers/to-delete',
-            'requestContext': {'http': {'method': 'DELETE'}},
-            'pathParameters': {'serverId': 'to-delete'},
+            'path': '/api/v1/user-config/mcp/servers/to-delete',
+            'httpMethod': 'DELETE',
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
 
     @pytest.mark.asyncio
@@ -249,11 +323,10 @@ class TestMCPConfiguration:
         mock_store.get_mcp_config = AsyncMock(return_value=MCPConfig())
 
         event = {
-            'rawPath': '/api/v1/user-config/mcp/servers/not-found',
-            'requestContext': {'http': {'method': 'DELETE'}},
-            'pathParameters': {'serverId': 'not-found'},
+            'path': '/api/v1/user-config/mcp/servers/not-found',
+            'httpMethod': 'DELETE',
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 404
 
 
@@ -278,7 +351,7 @@ class TestSecrets:
             'rawPath': '/api/v1/user-config/secrets',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         body = json.loads(response['body'])
 
@@ -295,16 +368,15 @@ class TestSecrets:
         mock_store.save_secret = AsyncMock()
 
         event = {
-            'rawPath': '/api/v1/user-config/secrets/github-token',
-            'requestContext': {'http': {'method': 'PUT'}},
-            'pathParameters': {'secretId': 'github-token'},
+            'path': '/api/v1/user-config/secrets/github-token',
+            'httpMethod': 'PUT',
             'body': json.dumps({
                 'value': 'ghp_secret123',
                 'type': 'api_key',
                 'notes': 'My GitHub token',
             }),
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         mock_store.save_secret.assert_called_once_with(
             'github-token',
@@ -318,12 +390,11 @@ class TestSecrets:
         mock_store = MagicMock()
 
         event = {
-            'rawPath': '/api/v1/user-config/secrets/github-token',
-            'requestContext': {'http': {'method': 'PUT'}},
-            'pathParameters': {'secretId': 'github-token'},
+            'path': '/api/v1/user-config/secrets/github-token',
+            'httpMethod': 'PUT',
             'body': json.dumps({'notes': 'No value provided'}),
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 400
         assert 'Missing required field: value' in response['body']
 
@@ -333,11 +404,10 @@ class TestSecrets:
         mock_store.delete_secret = AsyncMock()
 
         event = {
-            'rawPath': '/api/v1/user-config/secrets/github-token',
-            'requestContext': {'http': {'method': 'DELETE'}},
-            'pathParameters': {'secretId': 'github-token'},
+            'path': '/api/v1/user-config/secrets/github-token',
+            'httpMethod': 'DELETE',
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         mock_store.delete_secret.assert_called_once_with('github-token')
 
@@ -354,7 +424,7 @@ class TestIntegrations:
             'rawPath': '/api/v1/user-config/integrations',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         assert json.loads(response['body']) == {}
 
@@ -374,7 +444,7 @@ class TestIntegrations:
             'rawPath': '/api/v1/user-config/integrations',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         body = json.loads(response['body'])
         assert 'github' in body
@@ -387,16 +457,15 @@ class TestIntegrations:
         mock_store.save_integration = AsyncMock()
 
         event = {
-            'rawPath': '/api/v1/user-config/integrations/github',
-            'requestContext': {'http': {'method': 'PUT'}},
-            'pathParameters': {'provider': 'github'},
+            'path': '/api/v1/user-config/integrations/github',
+            'httpMethod': 'PUT',
             'body': json.dumps({
                 'enabled': True,
                 'token_ref': 'secrets/github-token',
                 'auto_mcp': True,
             }),
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         mock_store.save_integration.assert_called_once()
 
@@ -406,11 +475,10 @@ class TestIntegrations:
         mock_store.delete_integration = AsyncMock()
 
         event = {
-            'rawPath': '/api/v1/user-config/integrations/github',
-            'requestContext': {'http': {'method': 'DELETE'}},
-            'pathParameters': {'provider': 'github'},
+            'path': '/api/v1/user-config/integrations/github',
+            'httpMethod': 'DELETE',
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         mock_store.delete_integration.assert_called_once_with('github')
 
@@ -429,7 +497,7 @@ class TestMergedConfig:
             'rawPath': '/api/v1/user-config/merged',
             'requestContext': {'http': {'method': 'GET'}},
         }
-        response = await route_request(event, mock_store)
+        response = await route_request(event, mock_store, is_alb=False)
         assert response['statusCode'] == 200
         body = json.loads(response['body'])
         assert 'mcp' in body

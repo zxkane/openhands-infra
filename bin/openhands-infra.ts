@@ -202,6 +202,7 @@ databaseStack.addDependency(securityStack);
 
 // 4.5. User Config Stack - User Configuration API (MCP, Secrets, Integrations)
 //      Provides per-user configuration management with KMS-encrypted secrets
+//      Creates Lambda function that will be integrated with ALB in ComputeStack
 const userConfigStack = new UserConfigStack(app, `${prefix}-UserConfig`, {
   env: mainEnv,
   config,
@@ -213,7 +214,8 @@ const userConfigStack = new UserConfigStack(app, `${prefix}-UserConfig`, {
 userConfigStack.addDependency(monitoringStack);
 userConfigStack.addDependency(securityStack);
 
-// 5. Compute Stack - ASG, Launch Template, ALB (Internal)
+// 5. Compute Stack - ASG, Launch Template, ALB
+//    Also integrates User Config API Lambda via ALB target group for /api/v1/user-config/*
 const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   env: mainEnv,
   config,
@@ -222,31 +224,31 @@ const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   monitoringOutput: monitoringStack.output,
   databaseOutput: databaseStack.output,
   sandboxAwsAccess,
-  description: 'OpenHands Compute Infrastructure - EC2 ASG and Internal ALB',
+  userConfigFunction: userConfigStack.userConfigFunction,  // Lambda for /api/v1/user-config/*
+  description: 'OpenHands Compute Infrastructure - EC2 ASG and ALB',
   crossRegionReferences: true,
 });
 computeStack.addDependency(networkStack);
 computeStack.addDependency(securityStack);
 computeStack.addDependency(monitoringStack);
 computeStack.addDependency(databaseStack);
+computeStack.addDependency(userConfigStack);  // Needs Lambda function from UserConfigStack
 
 // 6. Edge Stack (us-east-1) - Cognito, Lambda@Edge, CloudFront, WAF, Route 53
 //    This merged stack combines Auth and CDN to avoid cross-stack reference issues
 //    ALB DNS name and origin secret are read from SSM parameters in us-east-1 (written by ComputeStack)
-//    This enables multiple Edge stacks to share the same Compute stack without cross-region export conflicts.
+//    User Config API is now routed through ALB (no separate API Gateway needed)
 const edgeStack = new EdgeStack(app, edgeStackId, {
   env: usEast1Env,
   config,
   alb: computeStack.alb,
   computeOutput: computeStack.output,
   authOutput: authStack.output,
-  userConfigApiEndpoint: userConfigStack.output.apiEndpoint,
   description: 'OpenHands Edge Infrastructure - Lambda@Edge, CloudFront, WAF, Route 53',
   crossRegionReferences: true,
 });
 edgeStack.addDependency(computeStack);
 edgeStack.addDependency(authStack);
-edgeStack.addDependency(userConfigStack);
 
 // Add tags to all stacks
 cdk.Tags.of(app).add('Project', 'OpenHands');

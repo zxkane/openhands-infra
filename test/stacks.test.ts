@@ -612,21 +612,11 @@ describe('OpenHands Infrastructure Stacks', () => {
         FunctionName: 'openhands-user-config-api',
       });
 
-      // Verify HTTP API Gateway is created
-      template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
-        Name: 'openhands-user-config',
-        ProtocolType: 'HTTP',
-      });
-
-      // Verify CORS configuration exists
-      template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
-        CorsConfiguration: {
-          AllowMethods: Match.arrayWith(['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS']),
-        },
-      });
+      // Note: API Gateway is no longer used - Lambda is integrated via ALB target group
+      // The Lambda function is created here, and ComputeStack creates the ALB target group
     });
 
-    test('creates API routes for all endpoints', () => {
+    test('lambda function is exported for ALB integration', () => {
       const stack = new UserConfigStack(app, 'TestUserConfigStack', {
         env: testEnv,
         config: testConfig,
@@ -634,18 +624,9 @@ describe('OpenHands Infrastructure Stacks', () => {
         kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
       });
 
-      const template = Template.fromStack(stack);
-
-      // Count routes - should have multiple API routes for user-config endpoints
-      // Routes: MCP (GET, PUT), MCP/servers (POST), MCP/servers/{id} (DELETE, PUT),
-      //         secrets (GET), secrets/{id} (PUT, DELETE), integrations (GET),
-      //         integrations/{provider} (PUT, DELETE), merged (GET)
-      // Total: 12 routes
-      const routeCount = Object.values(template.toJSON().Resources || {}).filter(
-        (r: any) => r?.Type === 'AWS::ApiGatewayV2::Route'
-      ).length;
-
-      expect(routeCount).toBeGreaterThanOrEqual(10);
+      // Verify the userConfigFunction is exposed for ALB integration
+      expect(stack.userConfigFunction).toBeDefined();
+      expect(stack.userConfigFunction.functionArn).toBeDefined();
     });
 
     test('lambda has correct environment variables', () => {
@@ -699,7 +680,8 @@ describe('OpenHands Infrastructure Stacks', () => {
       });
 
       expect(stack.output).toBeDefined();
-      expect(stack.output.apiEndpoint).toBeDefined();
+      expect(stack.output.lambdaFunctionArn).toBeDefined();
+      expect(stack.output.lambdaFunctionName).toBeDefined();
       expect(stack.output.kmsKeyArn).toBeDefined();
       expect(stack.output.kmsKeyId).toBeDefined();
     });
