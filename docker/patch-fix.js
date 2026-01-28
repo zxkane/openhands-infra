@@ -389,7 +389,16 @@
           modified = true;
         }
 
-        // 3. Filter out global MCP servers to prevent duplicates
+        // 3. For Bedrock models, convert llm_api_key to null (IAM auth doesn't use API keys)
+        // Bedrock fails with "Invalid API Key format" if a placeholder key is provided
+        var isBedrockModel = body && body.llm_model && body.llm_model.startsWith('bedrock/');
+        if (isBedrockModel && body.llm_api_key) {
+          console.log("Settings patch: Removing llm_api_key for Bedrock IAM auth");
+          body.llm_api_key = null;
+          modified = true;
+        }
+
+        // 4. Filter out global MCP servers to prevent duplicates
         if (body && body.mcp_config) {
           body.mcp_config = filterGlobalMcpServers(body.mcp_config);
           modified = true;
