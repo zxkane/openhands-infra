@@ -1280,8 +1280,8 @@ Use this checklist to track test execution:
 | TC-016 | Chrome DevTools MCP Server | [ ] | Verify chrome-devtools stdio server |
 | TC-017 | Sandbox AWS Access | [ ] | Verify sandbox can access AWS (S3) and deny IAM |
 | TC-018 | Logout Functionality | [ ] | Logout button clears session |
-| TC-019 | Secrets Page User Isolation | [❌] | **FAILING** - OpenHands uses global storage (see Known Limitations) |
-| TC-020 | Settings Pages User Isolation | [❌] | **FAILING** - OpenHands uses global storage (see Known Limitations) |
+| TC-019 | Secrets Page User Isolation | [ ] | User-scoped S3 storage enabled via S3SecretsStore |
+| TC-020 | Settings Pages User Isolation | [ ] | User-scoped S3 storage enabled via S3SettingsStore |
 
 ---
 
@@ -2224,39 +2224,50 @@ dig +short 5000-test123abc.runtime.$FULL_DOMAIN
 
 ## Known Limitations
 
-### OpenHands Core Multi-Tenancy Issue (CRITICAL)
+### OpenHands Core Multi-Tenancy Issue (FIXED)
 
-**Status**: ❌ FAILING - OpenHands core does not support user-scoped data isolation
+**Status**: ✅ FIXED - User-scoped data isolation implemented via custom S3 stores
 
-**Issue**: OpenHands stores user data (secrets, settings, integrations) in a **global file** at the S3 bucket root, not in user-scoped paths.
+**Previous Issue**: OpenHands stored user data (secrets, settings) in **global files** at the S3 bucket root, not in user-scoped paths.
 
-**Impact**: All users share the same secrets and settings. User A can see User B's secrets, which is a critical security vulnerability.
+**Solution Implemented**: Custom `S3SettingsStore` and `S3SecretsStore` classes replace the default `FileSettingsStore` and `FileSecretsStore` to enable user-scoped storage.
 
-**Root Cause Analysis**:
+**Current Data Isolation**:
 
-| Data Type | Expected Path | Actual Path | Status |
-|-----------|---------------|-------------|--------|
-| Secrets | `users/{user_id}/secrets/` | `secrets.json` (bucket root) | ❌ Global |
-| Settings | `users/{user_id}/config/settings.json` | `settings.json` (bucket root) | ❌ Global |
-| Conversations | `users/{user_id}/conversations/` | `users/{user_id}/conversations/` | ✅ Scoped |
+| Data Type | Path | Status |
+|-----------|------|--------|
+| Secrets | `users/{user_id}/secrets.json` | ✅ Scoped |
+| Settings | `users/{user_id}/settings.json` | ✅ Scoped |
+| Conversations | `users/{user_id}/conversations/` | ✅ Scoped |
 
-**Workaround**: The global `secrets.json` file was manually removed from S3 to prevent cross-user data leakage. This is a temporary fix until OpenHands core implements proper multi-tenancy.
+**Implementation Details**:
+- `docker/s3_settings_store.py` - User-scoped settings store
+- `docker/s3_secrets_store.py` - User-scoped secrets store
+- Dockerfile patches `server_config.py` to use custom stores
+- `apply-patch.sh` verifies multi-tenant isolation at startup (critical security check)
 
-**Fix Required**: OpenHands core needs to be updated to:
-1. Store user data in user-scoped S3 paths: `users/{user_id}/secrets/`, `users/{user_id}/config/`
-2. Use the `user_id` from `X-Cognito-User-Id` header (injected by Lambda@Edge) to scope all data operations
+**Technical Verification**:
+```bash
+# Check S3 for user-scoped files
+aws s3 ls s3://<bucket>/users/ --recursive | grep -E "(settings|secrets)\.json"
+# Expected: users/{user_id}/settings.json, users/{user_id}/secrets.json
 
-**E2E Test Results (TC-019)**:
+# Check container logs for isolation verification
+docker logs openhands-app 2>&1 | grep "Patch 21"
+# Expected: "Patch 21: Multi-tenant isolation ENABLED"
+```
 
-| # | Test Step | Result | Notes |
-|---|-----------|--------|-------|
-| 1 | User A creates secret | ✅ PASS | Secret created successfully |
-| 2 | User A sees own secret | ✅ PASS | USER_A_SECRET displayed |
-| 3 | User B logs in | ✅ PASS | Login successful |
-| 4 | User B sees empty secrets | ❌ FAIL | **User B can see USER_A_SECRET** |
-| 5 | Data isolation verified | ❌ FAIL | Cross-user data leakage confirmed |
+**E2E Test Expectations (TC-019)**:
 
-**Recommendations**:
-1. Do NOT use the OpenHands secrets feature in production until this is fixed
-2. Monitor S3 bucket for new `secrets.json` files at root level
-3. Track upstream OpenHands issue for multi-tenancy support
+| # | Test Step | Expected Result |
+|---|-----------|-----------------|
+| 1 | User A creates secret | Stored at `users/{user_a_id}/secrets.json` |
+| 2 | User A sees own secret | USER_A_SECRET displayed |
+| 3 | User B logs in | Different user_id session |
+| 4 | User B sees empty secrets | No USER_A_SECRET visible |
+| 5 | User B creates secret | Stored at `users/{user_b_id}/secrets.json` |
+| 6 | User A re-login | Only sees USER_A_SECRET |
+
+**Residual Risks**:
+1. If Dockerfile build fails, fallback to `FileSettingsStore`/`FileSecretsStore` could expose global storage
+2. `apply-patch.sh` Patch 21 is marked as CRITICAL and will block startup if stores not configured properly

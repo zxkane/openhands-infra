@@ -1228,6 +1228,36 @@ PYEOF
   fi
 fi
 
+# Patch 21: Verify S3SettingsStore and S3SecretsStore are properly configured
+# This is a CRITICAL security patch - settings/secrets must be user-scoped
+# Without this patch, all users share the same settings.json and secrets.json
+SERVER_CONFIG_FILE="/app/openhands/server/config/server_config.py"
+if [ -f "$SERVER_CONFIG_FILE" ]; then
+  S3_SETTINGS_OK=false
+  S3_SECRETS_OK=false
+
+  if grep -q "s3_settings_store.S3SettingsStore" "$SERVER_CONFIG_FILE"; then
+    echo "Patch 21: S3SettingsStore configured correctly"
+    S3_SETTINGS_OK=true
+  else
+    echo "WARNING: S3SettingsStore not configured - settings may not be user-scoped" >&2
+  fi
+
+  if grep -q "s3_secrets_store.S3SecretsStore" "$SERVER_CONFIG_FILE"; then
+    echo "Patch 21: S3SecretsStore configured correctly"
+    S3_SECRETS_OK=true
+  else
+    echo "WARNING: S3SecretsStore not configured - secrets may not be user-scoped" >&2
+  fi
+
+  if [ "$S3_SETTINGS_OK" = true ] && [ "$S3_SECRETS_OK" = true ]; then
+    echo "Patch 21: Multi-tenant isolation ENABLED - settings/secrets stored at users/{user_id}/"
+  else
+    # Mark as critical failure - user data isolation is mandatory
+    mark_critical_failure "Patch21-multi-tenant-isolation"
+  fi
+fi
+
 # Final security check: fail startup if any critical patches failed
 if [ -n "$CRITICAL_PATCH_FAILURES" ]; then
   echo "" >&2
