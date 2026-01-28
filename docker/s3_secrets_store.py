@@ -15,7 +15,7 @@ Path Format:
 Design Decisions:
 - No anonymous users: System requires login, all users must have user_id
 - No global secrets file: User secrets stored only in user-scoped paths
-- Secrets structure follows OpenHands format: {"custom_secrets": {...}}
+- Secrets structure follows OpenHands Secrets Pydantic model
 """
 
 import json
@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from openhands.core.config.openhands_config import OpenHandsConfig
 from openhands.storage import get_file_store
+from openhands.storage.data_models.secrets import Secrets
 from openhands.storage.files import FileStore
 from openhands.storage.secrets.secrets_store import SecretsStore
 from openhands.utils.async_utils import call_sync_from_async
@@ -66,20 +67,21 @@ class S3SecretsStore(SecretsStore):
         """
         return f'users/{self.user_id}/secrets.json'
 
-    async def load(self) -> dict | None:
+    async def load(self) -> Secrets | None:
         """Load secrets from the user-specific path.
 
         Returns:
-            Dict containing secrets if found, None if not found.
-            Format: {"custom_secrets": {...}}
+            Secrets object if found, None if not found.
         """
         path = self._get_path()
         logger.debug(f"S3SecretsStore.load: Loading secrets from {path}")
         try:
             json_str = await call_sync_from_async(self.file_store.read, path)
             data = json.loads(json_str)
+            # Create Secrets model from the loaded data
+            secrets = Secrets(**data)
             logger.info(f"S3SecretsStore: Loaded secrets for user {self.user_id}")
-            return data
+            return secrets
         except FileNotFoundError:
             logger.debug(f"S3SecretsStore: No secrets found at {path}")
             return None
@@ -90,16 +92,17 @@ class S3SecretsStore(SecretsStore):
             logger.warning(f"S3SecretsStore: Failed to load secrets from {path}: {e}")
             return None
 
-    async def store(self, data: dict) -> None:
+    async def store(self, secrets: Secrets) -> None:
         """Store secrets to the user-specific path.
 
         Args:
-            data: Dict containing secrets in OpenHands format.
+            secrets: Secrets Pydantic model to store.
         """
         path = self._get_path()
         logger.debug(f"S3SecretsStore.store: Storing secrets to {path}")
         try:
-            json_str = json.dumps(data)
+            # Use Pydantic's model_dump_json with expose_secrets context
+            json_str = secrets.model_dump_json(context={'expose_secrets': True})
             await call_sync_from_async(self.file_store.write, path, json_str)
             logger.info(f"S3SecretsStore: Stored secrets for user {self.user_id}")
         except Exception as e:
@@ -115,20 +118,15 @@ class S3SecretsStore(SecretsStore):
         Returns:
             The secret value if found, None otherwise.
         """
-        data = await self.load()
-        if data is None:
+        secrets = await self.load()
+        if secrets is None:
             return None
 
-        custom_secrets = data.get('custom_secrets', {})
-        secret_entry = custom_secrets.get(name)
-
-        if secret_entry is None:
+        custom_secret = secrets.custom_secrets.get(name)
+        if custom_secret is None:
             return None
 
-        # Handle both dict format {"secret": "value"} and direct string value
-        if isinstance(secret_entry, dict):
-            return secret_entry.get('secret')
-        return secret_entry
+        return custom_secret.secret.get_secret_value()
 
     async def set_secret(self, name: str, value: str, description: str | None = None) -> None:
         """Set a specific secret.
@@ -138,15 +136,25 @@ class S3SecretsStore(SecretsStore):
             value: The secret value.
             description: Optional description of the secret.
         """
-        data = await self.load() or {'custom_secrets': {}}
-        custom_secrets = data.setdefault('custom_secrets', {})
+        secrets = await self.load()
 
-        secret_entry = {'secret': value}
-        if description:
-            secret_entry['description'] = description
+        # Get current custom_secrets as dict
+        current_secrets = {}
+        if secrets is not None:
+            # Export current secrets to dict
+            for secret_name, secret_value in secrets.custom_secrets.items():
+                current_secrets[secret_name] = {
+                    'secret': secret_value.secret.get_secret_value(),
+                    'description': secret_value.description,
+                }
 
-        custom_secrets[name] = secret_entry
-        await self.store(data)
+        # Add/update the new secret
+        secret_entry = {'secret': value, 'description': description or ''}
+        current_secrets[name] = secret_entry
+
+        # Create new Secrets model
+        new_secrets = Secrets(custom_secrets=current_secrets)
+        await self.store(new_secrets)
 
     async def delete_secret(self, name: str) -> bool:
         """Delete a specific secret.
@@ -157,16 +165,25 @@ class S3SecretsStore(SecretsStore):
         Returns:
             True if the secret was deleted, False if it didn't exist.
         """
-        data = await self.load()
-        if data is None:
+        secrets = await self.load()
+        if secrets is None:
             return False
 
-        custom_secrets = data.get('custom_secrets', {})
-        if name not in custom_secrets:
+        if name not in secrets.custom_secrets:
             return False
 
-        del custom_secrets[name]
-        await self.store(data)
+        # Get current custom_secrets as dict, excluding the one to delete
+        current_secrets = {}
+        for secret_name, secret_value in secrets.custom_secrets.items():
+            if secret_name != name:
+                current_secrets[secret_name] = {
+                    'secret': secret_value.secret.get_secret_value(),
+                    'description': secret_value.description,
+                }
+
+        # Create new Secrets model without the deleted secret
+        new_secrets = Secrets(custom_secrets=current_secrets)
+        await self.store(new_secrets)
         return True
 
     async def list_secrets(self) -> list[str]:
@@ -175,12 +192,11 @@ class S3SecretsStore(SecretsStore):
         Returns:
             List of secret names (values are not exposed).
         """
-        data = await self.load()
-        if data is None:
+        secrets = await self.load()
+        if secrets is None:
             return []
 
-        custom_secrets = data.get('custom_secrets', {})
-        return list(custom_secrets.keys())
+        return list(secrets.custom_secrets.keys())
 
     @classmethod
     async def get_instance(

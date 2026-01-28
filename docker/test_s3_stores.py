@@ -45,6 +45,51 @@ class MockSettings:
         })
 
 
+class MockSecretValue:
+    """Mock SecretStr-like class."""
+    def __init__(self, value: str):
+        self._value = value
+
+    def get_secret_value(self):
+        return self._value
+
+
+class MockCustomSecret:
+    """Mock CustomSecret class."""
+    def __init__(self, secret: str, description: str = ''):
+        self.secret = MockSecretValue(secret)
+        self.description = description
+
+
+class MockSecrets:
+    """Mock Secrets Pydantic model."""
+    def __init__(self, custom_secrets=None, provider_tokens=None):
+        # Convert dict to MockCustomSecret objects
+        self._custom_secrets = {}
+        if custom_secrets:
+            for name, value in custom_secrets.items():
+                if isinstance(value, dict):
+                    self._custom_secrets[name] = MockCustomSecret(
+                        secret=value.get('secret', ''),
+                        description=value.get('description', '')
+                    )
+                else:
+                    self._custom_secrets[name] = value
+
+    @property
+    def custom_secrets(self):
+        return self._custom_secrets
+
+    def model_dump_json(self, context=None):
+        result = {'custom_secrets': {}, 'provider_tokens': {}}
+        for name, secret in self._custom_secrets.items():
+            result['custom_secrets'][name] = {
+                'secret': secret.secret.get_secret_value(),
+                'description': secret.description
+            }
+        return json.dumps(result)
+
+
 # Set up mock modules
 sys.modules['openhands'] = MagicMock()
 sys.modules['openhands.core'] = MagicMock()
@@ -56,6 +101,8 @@ sys.modules['openhands.storage.files'] = MagicMock()
 sys.modules['openhands.storage.data_models'] = MagicMock()
 sys.modules['openhands.storage.data_models.settings'] = MagicMock()
 sys.modules['openhands.storage.data_models.settings'].Settings = MockSettings
+sys.modules['openhands.storage.data_models.secrets'] = MagicMock()
+sys.modules['openhands.storage.data_models.secrets'].Secrets = MockSecrets
 sys.modules['openhands.storage.settings'] = MagicMock()
 sys.modules['openhands.storage.settings.settings_store'] = MagicMock()
 sys.modules['openhands.storage.secrets'] = MagicMock()
@@ -331,10 +378,11 @@ class TestS3SecretsStoreStore:
     async def test_store_writes_to_user_path(self, mock_call_sync):
         """Should write secrets to users/{user_id}/secrets.json."""
         mock_file_store = MagicMock()
-        secrets_data = {"custom_secrets": {"my_key": {"secret": "value"}}}
+        # Create a MockSecrets object instead of dict
+        mock_secrets = MockSecrets(custom_secrets={"my_key": {"secret": "value", "description": ""}})
 
         store = S3SecretsStore(file_store=mock_file_store, user_id="user-456")
-        await store.store(secrets_data)
+        await store.store(mock_secrets)
 
         mock_call_sync.assert_called_once()
         call_args = mock_call_sync.call_args[0]
