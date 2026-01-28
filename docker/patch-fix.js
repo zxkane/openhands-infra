@@ -263,6 +263,54 @@
   console.log("OpenHands runtime subdomain URL fix loaded");
 })();
 
+// Intercept settings updates to ensure Bedrock model prefix
+// When users update settings via UI, the model name may not include "bedrock/" prefix.
+// This patch intercepts POST/PUT requests to /api/settings and adds the prefix if missing.
+(function() {
+  var originalFetch = window.fetch;
+
+  // Known Bedrock model patterns that need the bedrock/ prefix
+  var bedrockModelPatterns = [
+    /^global\.anthropic\./i,
+    /^anthropic\./i,
+    /^amazon\./i,
+    /^ai21\./i,
+    /^cohere\./i,
+    /^meta\./i,
+    /^mistral\./i,
+    /^stability\./i
+  ];
+
+  function needsBedrockPrefix(model) {
+    if (!model || typeof model !== 'string') return false;
+    if (model.startsWith('bedrock/')) return false;  // Already has prefix
+    for (var i = 0; i < bedrockModelPatterns.length; i++) {
+      if (bedrockModelPatterns[i].test(model)) return true;
+    }
+    return false;
+  }
+
+  window.fetch = function(url, options) {
+    // Only intercept POST/PUT to /api/settings
+    if (typeof url === 'string' && url.indexOf('/api/settings') !== -1 &&
+        options && (options.method === 'POST' || options.method === 'PUT') && options.body) {
+      try {
+        var body = JSON.parse(options.body);
+        if (body && body.llm_model && needsBedrockPrefix(body.llm_model)) {
+          console.log("Settings patch: Adding bedrock/ prefix to model:", body.llm_model);
+          body.llm_model = 'bedrock/' + body.llm_model;
+          options = Object.assign({}, options, { body: JSON.stringify(body) });
+        }
+      } catch (e) {
+        // Ignore JSON parse errors
+      }
+    }
+    return originalFetch.apply(this, arguments);
+  };
+
+  console.log("OpenHands settings Bedrock prefix patch loaded");
+})();
+
 // Auto-create default settings when LLM is already configured via config.toml.
 // NOTE: Some deployments hide the settings UI (HIDE_LLM_SETTINGS=true), which prevents
 // the settings modal from opening and can break conversation creation with:
