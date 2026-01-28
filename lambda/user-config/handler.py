@@ -94,18 +94,30 @@ def extract_path_parameter(path: str, pattern: str) -> str | None:
 
     Args:
         path: The request path (e.g., '/api/v1/user-config/secrets/my-secret')
-        pattern: Regex pattern with capture group (e.g., r'/api/v1/user-config/secrets/([^/]+)')
+        pattern: Regex pattern with capture group (e.g., r'/api/v1/user-config/secrets/([^/]+)$')
 
     Returns:
         The extracted parameter value or None (sanitized to prevent path traversal)
+
+    Security:
+        - Uses re.fullmatch to ensure the entire path matches the pattern
+        - Sanitizes extracted value to prevent path traversal attacks
+        - Limits parameter length to prevent DoS
     """
-    match = re.match(pattern, path)
+    # Use fullmatch to ensure the entire path matches (prevents bypass via appended segments)
+    match = re.fullmatch(pattern, path)
     if match:
         param_value = match.group(1)
         # Sanitize path parameters to prevent injection attacks
         if param_value:
+            # Block path traversal characters
             param_value = param_value.replace('/', '_').replace('..', '_').replace('\\', '_')
-            param_value = param_value[:100]  # Limit length to prevent DoS
+            # Limit length to prevent DoS
+            param_value = param_value[:100]
+            # Validate that param contains only safe characters (alphanumeric, dash, underscore)
+            if not re.fullmatch(r'[a-zA-Z0-9_-]+', param_value):
+                logger.warning(f'Invalid path parameter rejected: {param_value[:50]}')
+                return None
         return param_value
     return None
 
@@ -323,7 +335,7 @@ async def route_request(event: dict, store: UserConfigStore, is_alb: bool) -> di
             return response(status, result)
 
     elif path.startswith('/api/v1/user-config/mcp/servers/'):
-        server_id = extract_path_parameter(path, r'/api/v1/user-config/mcp/servers/([^/]+)')
+        server_id = extract_path_parameter(path, r'/api/v1/user-config/mcp/servers/([^/]+)$')
         if not server_id:
             return response(400, {'error': 'Missing server ID'})
 
@@ -344,7 +356,7 @@ async def route_request(event: dict, store: UserConfigStore, is_alb: bool) -> di
             return response(200, result)
 
     elif path.startswith('/api/v1/user-config/secrets/'):
-        secret_id = extract_path_parameter(path, r'/api/v1/user-config/secrets/([^/]+)')
+        secret_id = extract_path_parameter(path, r'/api/v1/user-config/secrets/([^/]+)$')
         if not secret_id:
             return response(400, {'error': 'Missing secret ID'})
 
@@ -365,7 +377,7 @@ async def route_request(event: dict, store: UserConfigStore, is_alb: bool) -> di
             return response(200, result)
 
     elif path.startswith('/api/v1/user-config/integrations/'):
-        provider = extract_path_parameter(path, r'/api/v1/user-config/integrations/([^/]+)')
+        provider = extract_path_parameter(path, r'/api/v1/user-config/integrations/([^/]+)$')
         if not provider:
             return response(400, {'error': 'Missing provider'})
 
@@ -407,6 +419,11 @@ def handler(event: dict, context: Any) -> dict:
     user_id = get_user_id(event)
     if not user_id:
         return response(401, {'error': 'Unauthorized: Missing user ID'})
+
+    # Validate user_id format (Cognito user IDs are UUIDs)
+    if not re.fullmatch(r'[a-f0-9-]{36}', user_id):
+        logger.warning(f'Invalid user_id format rejected: {user_id[:50]}')
+        return response(400, {'error': 'Invalid user ID format'})
 
     # Create user-scoped config store
     bucket = os.environ.get('DATA_BUCKET')
