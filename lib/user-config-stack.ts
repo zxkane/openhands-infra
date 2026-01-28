@@ -71,6 +71,8 @@ export class UserConfigStack extends cdk.Stack {
       bundling: {
         // Use uv for dependency management (reads pyproject.toml + uv.lock)
         assetExcludes: ['.venv', '__pycache__', '*.pyc', 'test_*.py', '.pytest_cache'],
+        // Use SOURCE hash to ensure consistent asset hash across environments
+        assetHashType: cdk.AssetHashType.SOURCE,
       },
     });
 
