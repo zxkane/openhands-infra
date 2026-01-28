@@ -352,46 +352,6 @@ class TestUserConfigLoaderResolveSecretRefs:
             del os.environ['AWS_S3_BUCKET']
 
 
-class TestIntegrationMcpMap:
-    """Tests for INTEGRATION_MCP_MAP constant."""
-
-    def test_github_integration_mapping(self):
-        """Should have correct GitHub MCP mapping."""
-        from user_config_loader import INTEGRATION_MCP_MAP
-
-        assert 'github' in INTEGRATION_MCP_MAP
-        github = INTEGRATION_MCP_MAP['github']
-
-        assert github['name'] == 'github-mcp'
-        assert github['command'] == 'npx'
-        assert '-y' in github['args']
-        assert '@modelcontextprotocol/server-github' in github['args']
-        assert github['env_key'] == 'GITHUB_TOKEN'
-
-    def test_slack_integration_mapping(self):
-        """Should have correct Slack MCP mapping."""
-        from user_config_loader import INTEGRATION_MCP_MAP
-
-        assert 'slack' in INTEGRATION_MCP_MAP
-        slack = INTEGRATION_MCP_MAP['slack']
-
-        assert slack['name'] == 'slack-mcp'
-        assert slack['command'] == 'npx'
-        assert '-y' in slack['args']
-        assert '@modelcontextprotocol/server-slack' in slack['args']
-        assert slack['env_key'] == 'SLACK_BOT_TOKEN'
-
-    def test_integration_map_has_required_keys(self):
-        """All integrations should have required keys."""
-        from user_config_loader import INTEGRATION_MCP_MAP
-
-        required_keys = {'name', 'command', 'args', 'env_key'}
-
-        for provider, config in INTEGRATION_MCP_MAP.items():
-            for key in required_keys:
-                assert key in config, f'{provider} missing required key: {key}'
-
-
 class TestUserConfigLoaderGetSecret:
     """Tests for UserConfigLoader.get_secret method."""
 

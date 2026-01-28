@@ -323,6 +323,8 @@ export class SecurityStack extends cdk.Stack {
     // ========================================
     // Creates a KMS key for encrypting user-specific secrets (API keys, tokens)
     // stored in S3. Uses envelope encryption: KMS encrypts data keys, data keys encrypt secrets.
+    //
+    // Security: Explicit deny for sensitive operations prevents privilege escalation.
 
     const userSecretsKmsKey = new kms.Key(this, 'UserSecretsKmsKey', {
       alias: 'alias/openhands-user-secrets',
@@ -332,6 +334,40 @@ export class SecurityStack extends cdk.Stack {
       // Restrict key usage to encrypt/decrypt only (no sign/verify)
       keySpec: kms.KeySpec.SYMMETRIC_DEFAULT,
       keyUsage: kms.KeyUsage.ENCRYPT_DECRYPT,
+      // Custom key policy with explicit deny for sensitive operations
+      policy: new iam.PolicyDocument({
+        statements: [
+          // Allow root account full access for key management
+          new iam.PolicyStatement({
+            sid: 'EnableRootAccess',
+            effect: iam.Effect.ALLOW,
+            principals: [new iam.AccountRootPrincipal()],
+            actions: ['kms:*'],
+            resources: ['*'],
+          }),
+          // Explicit deny for sensitive operations to prevent privilege escalation
+          // This applies to all non-root principals
+          new iam.PolicyStatement({
+            sid: 'DenySensitiveOperations',
+            effect: iam.Effect.DENY,
+            principals: [new iam.AnyPrincipal()],
+            actions: [
+              'kms:PutKeyPolicy',
+              'kms:CreateGrant',
+              'kms:RetireGrant',
+              'kms:RevokeGrant',
+              'kms:ScheduleKeyDeletion',
+              'kms:CancelKeyDeletion',
+            ],
+            resources: ['*'],
+            conditions: {
+              StringNotEquals: {
+                'aws:PrincipalType': 'Root',
+              },
+            },
+          }),
+        ],
+      }),
     });
 
     // Grant EC2 role permission to use the KMS key for decrypt and generate data keys

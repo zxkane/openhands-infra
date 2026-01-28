@@ -1276,7 +1276,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:102e77c500911cdcb1f4af605ba1f2d2609642adeb405d25f35052744411bacc",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:ae75d4a0a341762e8e14fb4c250c8c809c36425a8af06ac584a52ddc8312fc67",
                   },
                   "
     container_name: openhands-app
@@ -1436,7 +1436,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:102e77c500911cdcb1f4af605ba1f2d2609642adeb405d25f35052744411bacc",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:ae75d4a0a341762e8e14fb4c250c8c809c36425a8af06ac584a52ddc8312fc67",
                   },
                   ""
 pull_with_retry "",
@@ -3986,6 +3986,28 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
                 },
               },
               "Resource": "*",
+              "Sid": "EnableRootAccess",
+            },
+            {
+              "Action": [
+                "kms:PutKeyPolicy",
+                "kms:CreateGrant",
+                "kms:RetireGrant",
+                "kms:RevokeGrant",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion",
+              ],
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:PrincipalType": "Root",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": "*",
+              "Sid": "DenySensitiveOperations",
             },
           ],
           "Version": "2012-10-17",
@@ -4730,7 +4752,7 @@ exports[`OpenHands Infrastructure Stacks UserConfigStack matches snapshot 1`] = 
         ],
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-west-2",
-          "S3Key": "94730fdd796080173519d753e630a40ec40de91dc5380b515428e88c09708133.zip",
+          "S3Key": "6ccfaaa0feb7b4ca81698cbecdc8a46649a90435cc1a446c034134fca253afba.zip",
         },
         "Description": "Handles user configuration management for OpenHands (MCP, secrets, integrations)",
         "Environment": {

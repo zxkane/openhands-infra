@@ -24,7 +24,6 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
@@ -55,8 +54,8 @@ class UserConfigStore:
         self.config_prefix = f'users/{user_id}/config'
         self.secrets_prefix = f'users/{user_id}/secrets'
 
-    def _get_s3_key(self, *parts: str) -> str:
-        """Construct S3 key from parts."""
+    def _s3_key(self, *parts: str) -> str:
+        """Construct S3 key from path parts."""
         return '/'.join(parts)
 
     async def _read_json(self, key: str) -> dict | None:
@@ -93,7 +92,7 @@ class UserConfigStore:
 
     async def get_mcp_config(self) -> MCPConfig | None:
         """Get user MCP configuration."""
-        key = self._get_s3_key(self.config_prefix, 'mcp-config.json')
+        key = self._s3_key(self.config_prefix, 'mcp-config.json')
         data = await self._read_json(key)
         if data:
             return MCPConfig.model_validate(data)
@@ -102,14 +101,14 @@ class UserConfigStore:
     async def save_mcp_config(self, config: MCPConfig) -> None:
         """Save user MCP configuration."""
         config.updated_at = datetime.now(timezone.utc)
-        key = self._get_s3_key(self.config_prefix, 'mcp-config.json')
+        key = self._s3_key(self.config_prefix, 'mcp-config.json')
         await self._write_json(key, config.model_dump())
 
     # ========================================
     # Secrets (KMS Envelope Encryption)
     # ========================================
 
-    async def _encrypt_secrets(self, secrets: dict[str, Any]) -> str:
+    async def _encrypt_secrets(self, secrets: dict) -> str:
         """Encrypt secrets using KMS envelope encryption.
 
         1. Generate a data key using KMS
@@ -129,9 +128,8 @@ class UserConfigStore:
 
         # Encrypt the secrets
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        import os as crypto_os
 
-        nonce = crypto_os.urandom(12)
+        nonce = os.urandom(12)
         aesgcm = AESGCM(plaintext_key)
         ciphertext = aesgcm.encrypt(nonce, json.dumps(secrets).encode('utf-8'), None)
 
@@ -144,31 +142,43 @@ class UserConfigStore:
 
         return json.dumps(envelope)
 
-    async def _decrypt_secrets(self, encrypted_data: str) -> dict[str, Any]:
-        """Decrypt secrets using KMS envelope encryption."""
+    async def _decrypt_secrets(self, encrypted_data: str) -> dict:
+        """Decrypt secrets using KMS envelope encryption.
+
+        Security:
+            Plaintext key is explicitly cleared from memory after use.
+        """
         if not self.kms:
             raise ValueError('KMS key not configured for secrets decryption')
 
-        envelope = json.loads(encrypted_data)
-        encrypted_key = base64.b64decode(envelope['encrypted_key'])
-        nonce = base64.b64decode(envelope['nonce'])
-        ciphertext = base64.b64decode(envelope['ciphertext'])
+        plaintext_key = None
+        try:
+            envelope = json.loads(encrypted_data)
+            encrypted_key = base64.b64decode(envelope['encrypted_key'])
+            nonce = base64.b64decode(envelope['nonce'])
+            ciphertext = base64.b64decode(envelope['ciphertext'])
 
-        # Decrypt the data key using KMS
-        response = self.kms.decrypt(CiphertextBlob=encrypted_key)
-        plaintext_key = response['Plaintext']
+            # Decrypt the data key using KMS
+            response = self.kms.decrypt(CiphertextBlob=encrypted_key)
+            plaintext_key = response['Plaintext']
 
-        # Decrypt the secrets
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            # Decrypt the secrets
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-        aesgcm = AESGCM(plaintext_key)
-        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+            aesgcm = AESGCM(plaintext_key)
+            plaintext = aesgcm.decrypt(nonce, ciphertext, None)
 
-        return json.loads(plaintext.decode('utf-8'))
+            return json.loads(plaintext.decode('utf-8'))
+        finally:
+            # Clear sensitive key material from memory
+            if plaintext_key is not None:
+                key_len = len(plaintext_key)
+                plaintext_key = b'\x00' * key_len
+                del plaintext_key
 
     async def _get_secrets_data(self) -> dict:
         """Get the raw secrets data structure."""
-        key = self._get_s3_key(self.secrets_prefix, 'credentials.json.enc')
+        key = self._s3_key(self.secrets_prefix, 'credentials.json.enc')
         try:
             response = self.s3.get_object(Bucket=self.bucket_name, Key=key)
             encrypted_data = response['Body'].read().decode('utf-8')
@@ -180,7 +190,7 @@ class UserConfigStore:
 
     async def _save_secrets_data(self, data: dict) -> None:
         """Save the secrets data structure."""
-        key = self._get_s3_key(self.secrets_prefix, 'credentials.json.enc')
+        key = self._s3_key(self.secrets_prefix, 'credentials.json.enc')
         encrypted_data = await self._encrypt_secrets(data)
         self.s3.put_object(
             Bucket=self.bucket_name,
@@ -253,7 +263,7 @@ class UserConfigStore:
 
     async def get_integrations(self) -> dict[str, IntegrationConfig]:
         """Get all integration configurations."""
-        key = self._get_s3_key(self.config_prefix, 'integrations.json')
+        key = self._s3_key(self.config_prefix, 'integrations.json')
         data = await self._read_json(key)
         if not data:
             return {}
@@ -265,7 +275,7 @@ class UserConfigStore:
         config.connected_at = datetime.now(timezone.utc)
         integrations[provider] = config
 
-        key = self._get_s3_key(self.config_prefix, 'integrations.json')
+        key = self._s3_key(self.config_prefix, 'integrations.json')
         await self._write_json(key, {k: v.model_dump() for k, v in integrations.items()})
         logger.info(f'Saved integration: {provider}')
 
@@ -274,7 +284,7 @@ class UserConfigStore:
         integrations = await self.get_integrations()
         if provider in integrations:
             del integrations[provider]
-            key = self._get_s3_key(self.config_prefix, 'integrations.json')
+            key = self._s3_key(self.config_prefix, 'integrations.json')
             await self._write_json(key, {k: v.model_dump() for k, v in integrations.items()})
             logger.info(f'Deleted integration: {provider}')
 

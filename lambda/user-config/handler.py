@@ -7,9 +7,14 @@ This Lambda handles all user configuration management:
 - Third-party integrations (GitHub, Slack)
 - Configuration merging (user + global config)
 
-Authentication:
+Authentication & Security:
 - Users are identified by X-Cognito-User-Id header (injected by Lambda@Edge)
 - All operations are scoped to the authenticated user
+- This API is only accessible via CloudFront (not directly via API Gateway execute-api URL)
+  because CloudFront routes /api/v1/user-config/* to this Lambda, and Lambda@Edge validates
+  JWT tokens before forwarding requests. Direct API Gateway access would bypass JWT validation.
+- The API Gateway does NOT have a separate authorizer because authentication is handled
+  by the Lambda@Edge function in CloudFront which validates JWT and injects user headers.
 """
 
 import json
@@ -18,12 +23,7 @@ import os
 from typing import Any
 
 from config_store import UserConfigStore
-from schemas import (
-    IntegrationConfig,
-    MCPConfig,
-    MCPServerConfig,
-    SecretMetadata,
-)
+from schemas import IntegrationConfig, MCPConfig, MCPServerConfig
 
 # Configure logging
 log_level = os.environ.get('LOG_LEVEL', 'INFO')

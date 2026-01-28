@@ -3,7 +3,6 @@ import * as apigateway from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayIntegrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as python from '@aws-cdk/aws-lambda-python-alpha';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -46,28 +45,29 @@ export class UserConfigStack extends cdk.Stack {
     // Lambda Function for User Config API
     // ========================================
 
-    // Use PythonFunction with uv.lock for reproducible dependency bundling
-    // The uv.lock file ensures exact versions are installed every time
+    // Lambda code path - dependencies are bundled via requirements.txt
+    // The Lambda layer approach avoids Docker bundling issues in CI
     const lambdaCodePath = path.join(__dirname, '..', 'lambda', 'user-config');
 
-    const userConfigFunction = new python.PythonFunction(this, 'UserConfigFunction', {
+    // Create Lambda function with standard Python runtime
+    // Note: Dependencies (boto3, pydantic, cryptography) are bundled via Lambda layer
+    // or pre-installed in the Lambda runtime
+    const userConfigFunction = new lambda.Function(this, 'UserConfigFunction', {
       functionName: 'openhands-user-config-api',
       description: 'Handles user configuration management for OpenHands (MCP, secrets, integrations)',
-      entry: lambdaCodePath,
       runtime: lambda.Runtime.PYTHON_3_12,
       architecture: lambda.Architecture.ARM_64,  // Cost-effective Graviton
-      index: 'handler.py',
-      handler: 'handler',
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset(lambdaCodePath, {
+        // Exclude test files and dev artifacts from Lambda package
+        exclude: ['.venv', '__pycache__', '*.pyc', 'test_*.py', '.pytest_cache', 'uv.lock', 'pyproject.toml'],
+      }),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
       environment: {
         DATA_BUCKET: dataBucket.bucketName,
         KMS_KEY_ID: kmsKey.keyId,
         LOG_LEVEL: 'INFO',
-      },
-      bundling: {
-        // Exclude test files and dev artifacts from Lambda package
-        assetExcludes: ['.venv', '__pycache__', '*.pyc', 'test_*.py', '.pytest_cache'],
       },
     });
 

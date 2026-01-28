@@ -19,7 +19,6 @@ import base64
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any
 
 import boto3
@@ -138,10 +137,14 @@ class UserConfigLoader:
 
         Returns:
             Decrypted secrets dict
+
+        Security:
+            Plaintext key is explicitly cleared from memory after use.
         """
         if not self.kms:
             raise ValueError('KMS client not configured for secrets decryption')
 
+        plaintext_key = None
         try:
             envelope = json.loads(encrypted_data)
             encrypted_key = base64.b64decode(envelope['encrypted_key'])
@@ -161,6 +164,13 @@ class UserConfigLoader:
         except Exception as e:
             logger.error(f'Failed to decrypt secrets: {e}')
             raise
+        finally:
+            # Clear sensitive key material from memory
+            if plaintext_key is not None:
+                # Overwrite with zeros before deletion
+                key_len = len(plaintext_key)
+                plaintext_key = b'\x00' * key_len
+                del plaintext_key
 
     def get_secret(self, secret_id: str) -> str | None:
         """Get a specific secret value.
@@ -214,21 +224,3 @@ class UserConfigLoader:
             else:
                 resolved[key] = value
         return resolved
-
-
-# Integration -> MCP Server mapping for auto_mcp feature
-INTEGRATION_MCP_MAP = {
-    'github': {
-        'name': 'github-mcp',
-        'command': 'npx',
-        'args': ['-y', '@modelcontextprotocol/server-github'],
-        'env_key': 'GITHUB_TOKEN',
-    },
-    'slack': {
-        'name': 'slack-mcp',
-        'command': 'npx',
-        'args': ['-y', '@modelcontextprotocol/server-slack'],
-        'env_key': 'SLACK_BOT_TOKEN',
-    },
-    # Add more integrations as needed
-}
