@@ -4098,7 +4098,7 @@ exports[`OpenHands Infrastructure Stacks UserConfigStack matches snapshot 1`] = 
         ],
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-west-2",
-          "S3Key": "0415f22cd55b2df10906a0fdf0afbf72074d04b61c7fce80f44749012ab9ef5c.zip",
+          "S3Key": "306bb591919b0f191fd2284be5c7b6d8d29c13c0e4e84901dda15dace8d988b5.zip",
         },
         "Description": "Handles user configuration management for OpenHands (MCP, secrets, integrations)",
         "Environment": {
