@@ -1280,8 +1280,8 @@ Use this checklist to track test execution:
 | TC-016 | Chrome DevTools MCP Server | [ ] | Verify chrome-devtools stdio server |
 | TC-017 | Sandbox AWS Access | [ ] | Verify sandbox can access AWS (S3) and deny IAM |
 | TC-018 | Logout Functionality | [ ] | Logout button clears session |
-| TC-019 | Secrets Page User Isolation | [ ] | User-scoped S3 storage enabled via S3SecretsStore |
-| TC-020 | Settings Pages User Isolation | [ ] | User-scoped S3 storage enabled via S3SettingsStore |
+| TC-019 | Secrets Page User Isolation | [x] | User-scoped S3 storage enabled via S3SecretsStore |
+| TC-020 | Settings Pages User Isolation | [x] | User-scoped S3 storage enabled via S3SettingsStore |
 
 ---
 
