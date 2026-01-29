@@ -412,7 +412,7 @@
   var originalXhrOpen = XMLHttpRequest.prototype.open;
   var originalXhrSend = XMLHttpRequest.prototype.send;
 
-  XMLHttpRequest.prototype.open = function(method, url) {
+  XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
     this._settingsPatchMethod = method;
     this._settingsPatchUrl = url;
     return originalXhrOpen.apply(this, arguments);
@@ -422,8 +422,13 @@
     // Only intercept POST/PUT to /api/settings
     if (this._settingsPatchUrl && this._settingsPatchUrl.indexOf('/api/settings') !== -1 &&
         (this._settingsPatchMethod === 'POST' || this._settingsPatchMethod === 'PUT') && body) {
-      var processedBody = processSettingsBody(body);
-      return originalXhrSend.call(this, processedBody);
+      try {
+        var processedBody = processSettingsBody(body);
+        return originalXhrSend.call(this, processedBody);
+      } catch (e) {
+        console.warn('Settings patch: Error processing request body, sending original:', e);
+        return originalXhrSend.call(this, body);
+      }
     }
     return originalXhrSend.apply(this, arguments);
   };
