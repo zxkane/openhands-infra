@@ -411,7 +411,8 @@
         // Ignore JSON parse errors
       }
     }
-    return originalFetch.apply(this, arguments);
+    // Use url and options directly instead of arguments, since we may have modified options
+    return originalFetch.call(this, url, options);
   };
 
   console.log("OpenHands settings patch loaded (Bedrock prefix + MCP deduplication)");
