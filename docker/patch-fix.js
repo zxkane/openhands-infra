@@ -266,9 +266,8 @@
 // Intercept settings updates to:
 // 1. Ensure Bedrock model prefix (model name may not include "bedrock/" prefix)
 // 2. Filter out global MCP servers to prevent duplicates (user settings should only contain user-added servers)
+// NOTE: OpenHands frontend uses XMLHttpRequest (via Axios), not fetch. We must intercept XHR.
 (function() {
-  var originalFetch = window.fetch;
-
   // Global MCP servers from config.toml - these should NOT be saved in user settings
   // When the frontend saves settings, it includes all MCP servers (global + user).
   // We filter these out so only user-added servers are saved, preventing duplicates.
@@ -367,54 +366,83 @@
     return filtered;
   }
 
-  window.fetch = function(url, options) {
-    // Only intercept POST/PUT to /api/settings
-    if (typeof url === 'string' && url.indexOf('/api/settings') !== -1 &&
-        options && (options.method === 'POST' || options.method === 'PUT') && options.body) {
-      try {
-        var body = JSON.parse(options.body);
-        var modified = false;
+  function processSettingsBody(bodyStr) {
+    try {
+      var body = JSON.parse(bodyStr);
+      var modified = false;
 
-        // 1. Add Bedrock prefix if needed
-        if (body && body.llm_model && needsBedrockPrefix(body.llm_model)) {
-          console.log("Settings patch: Adding bedrock/ prefix to model:", body.llm_model);
-          body.llm_model = 'bedrock/' + body.llm_model;
-          modified = true;
-        }
-
-        // 2. Convert empty llm_base_url to null (Bedrock fails with empty string)
-        if (body && body.hasOwnProperty('llm_base_url') && body.llm_base_url === '') {
-          console.log("Settings patch: Converting empty llm_base_url to null");
-          body.llm_base_url = null;
-          modified = true;
-        }
-
-        // 3. For Bedrock models, convert llm_api_key to null (IAM auth doesn't use API keys)
-        // Bedrock fails with "Invalid API Key format" if a placeholder key is provided
-        var isBedrockModel = body && body.llm_model && body.llm_model.startsWith('bedrock/');
-        if (isBedrockModel && body.llm_api_key) {
-          console.log("Settings patch: Removing llm_api_key for Bedrock IAM auth");
-          body.llm_api_key = null;
-          modified = true;
-        }
-
-        // 4. Filter out global MCP servers to prevent duplicates
-        if (body && body.mcp_config) {
-          body.mcp_config = filterGlobalMcpServers(body.mcp_config);
-          modified = true;
-        }
-
-        if (modified) {
-          options = Object.assign({}, options, { body: JSON.stringify(body) });
-        }
-      } catch (e) {
-        // Ignore JSON parse errors
+      // 1. Add Bedrock prefix if needed
+      if (body && body.llm_model && needsBedrockPrefix(body.llm_model)) {
+        console.log("Settings patch: Adding bedrock/ prefix to model:", body.llm_model);
+        body.llm_model = 'bedrock/' + body.llm_model;
+        modified = true;
       }
+
+      // 2. Convert empty llm_base_url to null (Bedrock fails with empty string)
+      if (body && body.hasOwnProperty('llm_base_url') && body.llm_base_url === '') {
+        console.log("Settings patch: Converting empty llm_base_url to null");
+        body.llm_base_url = null;
+        modified = true;
+      }
+
+      // 3. For Bedrock models, convert llm_api_key to null (IAM auth doesn't use API keys)
+      var isBedrockModel = body && body.llm_model && body.llm_model.startsWith('bedrock/');
+      if (isBedrockModel && body.llm_api_key) {
+        console.log("Settings patch: Removing llm_api_key for Bedrock IAM auth");
+        body.llm_api_key = null;
+        modified = true;
+      }
+
+      // 4. Filter out global MCP servers to prevent duplicates
+      if (body && body.mcp_config) {
+        body.mcp_config = filterGlobalMcpServers(body.mcp_config);
+        modified = true;
+      }
+
+      if (modified) {
+        return JSON.stringify(body);
+      }
+    } catch (e) {
+      // Ignore JSON parse errors
     }
-    return originalFetch.apply(this, arguments);
+    return bodyStr;
+  }
+
+  // Intercept XMLHttpRequest (used by Axios in OpenHands frontend)
+  var originalXhrOpen = XMLHttpRequest.prototype.open;
+  var originalXhrSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
+    // Use a unique property name to avoid conflicts and store as non-enumerable
+    Object.defineProperty(this, '_ohSettingsPatchData', {
+      value: { method: method, url: url },
+      writable: false,
+      enumerable: false,
+      configurable: true
+    });
+    return originalXhrOpen.apply(this, arguments);
   };
 
-  console.log("OpenHands settings patch loaded (Bedrock prefix + MCP deduplication)");
+  XMLHttpRequest.prototype.send = function(body) {
+    // Safely access the stored data (fallback to empty object if not set)
+    var patchData = this._ohSettingsPatchData || {};
+
+    // Only intercept POST/PUT to /api/settings
+    if (patchData && patchData.url && typeof patchData.url === 'string' &&
+        patchData.url.indexOf('/api/settings') !== -1 &&
+        (patchData.method === 'POST' || patchData.method === 'PUT') && body) {
+      try {
+        var processedBody = processSettingsBody(body);
+        return originalXhrSend.call(this, processedBody);
+      } catch (e) {
+        console.warn('Settings patch: Error processing request body, sending original:', e);
+        return originalXhrSend.call(this, body);
+      }
+    }
+    return originalXhrSend.apply(this, arguments);
+  };
+
+  console.log("OpenHands settings patch loaded (XHR intercept for Bedrock prefix + MCP deduplication)");
 })();
 
 // Auto-create default settings when LLM is already configured via config.toml.
@@ -932,5 +960,102 @@
   }, true);
 
   console.log('OpenHands logout button patch loaded');
+})();
+
+// Protect global MCP servers from modification/deletion
+// Global servers defined in config.toml should be read-only in the UI
+(function() {
+  // List of global MCP server identifiers (names or URLs from config.toml)
+  // These are system-managed and should not be editable by users
+  var GLOBAL_MCP_SERVERS = [
+    'chrome-devtools',
+    'https://knowledge-mcp.global.api.aws'
+  ];
+
+  function isGlobalServer(serverName) {
+    if (!serverName) return false;
+    var normalized = serverName.trim().toLowerCase();
+    for (var i = 0; i < GLOBAL_MCP_SERVERS.length; i++) {
+      if (normalized === GLOBAL_MCP_SERVERS[i].toLowerCase()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function protectGlobalMcpServers() {
+    // Only run on MCP settings page
+    if (window.location.pathname !== '/settings/mcp') {
+      return;
+    }
+
+    // Find all Edit and Delete buttons for MCP servers
+    var editButtons = document.querySelectorAll('button[aria-label^="Edit "]');
+    var deleteButtons = document.querySelectorAll('button[aria-label^="Delete "]');
+
+    var protectedCount = 0;
+
+    // Process Edit buttons
+    editButtons.forEach(function(btn) {
+      var label = btn.getAttribute('aria-label') || '';
+      var serverName = label.replace(/^Edit\s+/, '');
+      if (isGlobalServer(serverName)) {
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.style.cursor = 'not-allowed';
+        btn.title = 'System-managed MCP server (configured in config.toml)';
+        protectedCount++;
+      }
+    });
+
+    // Process Delete buttons
+    deleteButtons.forEach(function(btn) {
+      var label = btn.getAttribute('aria-label') || '';
+      var serverName = label.replace(/^Delete\s+/, '');
+      if (isGlobalServer(serverName)) {
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.style.cursor = 'not-allowed';
+        btn.title = 'System-managed MCP server (configured in config.toml)';
+        protectedCount++;
+      }
+    });
+
+    if (protectedCount > 0) {
+      console.log('MCP protection: Disabled edit/delete for', protectedCount / 2, 'global server(s)');
+    }
+  }
+
+  // Run on page load and when URL changes (SPA navigation)
+  function setupProtection() {
+    // Initial check
+    setTimeout(protectGlobalMcpServers, 500);
+
+    // Watch for DOM changes (for SPA page transitions)
+    var observer = new MutationObserver(function(mutations) {
+      // Debounce - only run once per batch of mutations
+      clearTimeout(observer._timeout);
+      observer._timeout = setTimeout(protectGlobalMcpServers, 200);
+    });
+
+    // Start observing
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    // Also handle URL changes (popstate for back/forward)
+    window.addEventListener('popstate', function() {
+      setTimeout(protectGlobalMcpServers, 500);
+    });
+  }
+
+  if (document.readyState === 'complete') {
+    setupProtection();
+  } else {
+    window.addEventListener('load', setupProtection);
+  }
+
+  console.log('OpenHands MCP protection patch loaded');
 })();
 </script>
