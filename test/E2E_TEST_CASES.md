@@ -1625,7 +1625,7 @@ The following must be configured for sandbox AWS access:
 ```bash
 npx cdk deploy \
   OpenHands-Network OpenHands-Monitoring OpenHands-Security \
-  OpenHands-Database OpenHands-Compute OpenHands-Edge \
+  OpenHands-Database OpenHands-UserConfig OpenHands-Compute OpenHands-Edge \
   --context vpcId=$VPC_ID \
   --context hostedZoneId=$HOSTED_ZONE_ID \
   --context domainName=$DOMAIN_NAME \

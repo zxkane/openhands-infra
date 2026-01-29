@@ -114,7 +114,7 @@ User apps accessible via: `https://{port}-{convId}.runtime.{subdomain}.{domain}/
 ```bash
 npx cdk deploy --all --exclusively \
   OpenHands-Network OpenHands-Monitoring OpenHands-Security \
-  OpenHands-Database OpenHands-Compute OpenHands-Edge \
+  OpenHands-Database OpenHands-UserConfig OpenHands-Compute OpenHands-Edge \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<zone-id> \
   --context domainName=<domain> \

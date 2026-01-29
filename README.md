@@ -191,7 +191,7 @@ npx cdk deploy OpenHands-Auth \
 Deploy the shared backend infrastructure (only once):
 
 ```bash
-npx cdk deploy OpenHands-Network OpenHands-Monitoring OpenHands-Security OpenHands-Database OpenHands-Compute \
+npx cdk deploy OpenHands-Network OpenHands-Monitoring OpenHands-Security OpenHands-Database OpenHands-UserConfig OpenHands-Compute \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<primary-hosted-zone-id> \
   --context domainName=<primary-domain> \
