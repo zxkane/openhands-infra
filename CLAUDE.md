@@ -1,10 +1,25 @@
 # CLAUDE.md
 
+## Development Workflow (MANDATORY)
+
+**CRITICAL**: All feature development and bug fixes MUST strictly follow the `github-workflow` skill.
+
+Before ANY code changes involving functionality:
+1. **Invoke skill**: Use `/github-workflow` or load the skill
+2. **Follow the 10-step workflow** - NO shortcuts allowed
+3. **Do NOT merge** - Report status and wait for user decision
+
+The workflow includes:
+- Step 2: Write new unit tests + update E2E test cases
+- Steps 6-7: Address ALL reviewer bot findings (Q, Codex, etc.) and iterate until no new findings
+- Steps 8-9: Deploy to staging + run full E2E tests
+- Step 10: Report ready status (DO NOT MERGE)
+
 ## Quick Reference
 
 - **Branch naming**: `feat/<name>`, `fix/<name>`, `refactor/<name>`, `docs/<name>`
 - **Commit format**: `type(scope): description`
-- **GitHub workflow**: Use `.claude/skills/github-workflow/` for PR creation, review comments, Amazon Q
+- **GitHub workflow**: Use `.claude/skills/github-workflow/` for PR creation, review comments, reviewer bots
 
 ### Source Control Rules
 

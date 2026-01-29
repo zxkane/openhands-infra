@@ -1,6 +1,6 @@
 ---
 name: github-workflow
-description: This skill should be used when the user asks to "create a PR", "address review comments", "resolve review threads", "retrigger Q review", "/q review", "respond to Amazon Q", "handle reviewer findings", "merge PR", "push changes", "check CI status", or mentions PR workflow, code review, or GitHub Actions checks.
+description: This skill should be used when the user asks to "create a PR", "address review comments", "resolve review threads", "retrigger Q review", "/q review", "respond to Amazon Q", "/codex review", "respond to Codex", "handle reviewer findings", "merge PR", "push changes", "check CI status", or mentions PR workflow, code review, reviewer bots, or GitHub Actions checks.
 ---
 
 # GitHub Development Workflow
@@ -9,7 +9,7 @@ This skill provides standardized guidance for the complete GitHub development wo
 
 ## Development Workflow Overview
 
-Follow this 7-step workflow for all feature development and bug fixes:
+Follow this 10-step workflow for all feature development and bug fixes:
 
 ```
 Step 1: CREATE BRANCH
@@ -17,8 +17,9 @@ Step 1: CREATE BRANCH
        ↓
 Step 2: IMPLEMENT CHANGES
   - Write code
-  - Update unit tests (npm run test)
-  - Update E2E test cases if needed
+  - Write new unit tests for new functionality
+  - Update existing tests if behavior changed
+  - Write/update E2E test cases if needed
        ↓
 Step 3: LOCAL VERIFICATION
   - npm run build
@@ -36,14 +37,35 @@ Step 5: WAIT FOR PR CHECKS
   - If PASS → Proceed to Step 6
        ↓
 Step 6: ADDRESS REVIEWER BOT FINDINGS
-  - Review Amazon Q Developer comments
+  - Review all bot comments (Amazon Q, Codex, etc.)
   - Fix issues or document design decisions
   - Reply DIRECTLY to each comment thread
   - RESOLVE each conversation
+  - Retrigger review: /q review, /codex review
        ↓
-Step 7: READY FOR MERGE
-  - All checks passed
-  - All comments addressed
+Step 7: ITERATE UNTIL NO FINDINGS
+  - Check for new bot findings
+  - If new findings → Return to Step 6
+  - If no findings → Proceed to Step 8
+       ↓
+Step 8: DEPLOY TO STAGING
+  - Deploy changes to test/staging environment
+  - Verify deployment succeeds
+       ↓
+Step 9: EXECUTE E2E TESTS
+  - Run full E2E test suite (see E2E_TEST_CASES.md)
+  - If FAIL → Return to Step 2
+    - Fix bugs or add missing test cases
+    - Push fixes and repeat from Step 5
+  - If PASS → Proceed to merge
+       ↓
+Step 10: READY FOR MERGE (DO NOT MERGE)
+  - All CI checks passed
+  - All reviewer comments addressed
+  - Staging deployment verified
+  - E2E tests passed
+  - STOP HERE: Report status to user
+  - User decides when to merge
 ```
 
 ## PR Check Monitoring
@@ -64,13 +86,21 @@ gh pr checks {pr_number}
 |-------|-------------|------------------|
 | CI / build-and-test | Build + unit tests | Fix code or update snapshots |
 | Security Scan | SAST, npm audit | Fix security issues |
-| Amazon Q Developer | Security review | Address findings or document decisions |
+| Amazon Q Developer | Security review | Address findings, retrigger with `/q review` |
+| Codex | AI code review | Address findings, retrigger with `/codex review` |
+| Other review bots | Various checks | Address findings, retrigger per bot docs |
 
-## Amazon Q Developer Workflow
+## Reviewer Bot Workflow
 
-Amazon Q Developer provides automated security and code review findings on PRs.
+Multiple review bots can provide automated code review findings on PRs:
 
-### Handling Q Review Findings
+| Bot | Trigger Command | Bot Username |
+|-----|-----------------|--------------|
+| Amazon Q Developer | `/q review` | `amazon-q-developer[bot]` |
+| Codex | `/codex review` | `codex[bot]` |
+| Other bots | See bot documentation | Varies |
+
+### Handling Bot Review Findings
 
 1. **Review all comments** - Read each finding carefully
 2. **Determine action**:
@@ -78,28 +108,36 @@ Amazon Q Developer provides automated security and code review findings on PRs.
    - If false positive → Reply explaining the design decision
 3. **Reply to each thread** - Use direct reply, not general PR comment
 4. **Resolve each thread** - Mark conversation as resolved
-5. **Retrigger review** - Comment `/q review` to scan again
+5. **Retrigger review** - Comment with appropriate trigger (e.g., `/q review`, `/codex review`)
 
-### Retrigger Amazon Q Review
+### Retrigger Bot Reviews
 
 After addressing findings, trigger a new scan:
 
 ```bash
+# Amazon Q Developer
 gh pr comment {pr_number} --body "/q review"
+
+# Codex
+gh pr comment {pr_number} --body "/codex review"
 ```
 
 Wait 60-90 seconds for the review to complete, then check for new comments.
 
-### Iteration Loop
+### Iteration Loop (CRITICAL)
 
-Repeat until Q review finds no more issues:
+**Repeat until review bots find no more issues:**
 
 1. Address findings (fix code or explain design)
 2. Reply to each comment thread
 3. Resolve all threads
-4. Trigger `/q review`
-5. Check for new findings
-6. If new findings → repeat from step 1
+4. Trigger review command (`/q review`, `/codex review`, etc.)
+5. Wait 60-90 seconds
+6. Check for new findings
+7. **If new findings → repeat from step 1**
+8. **Only proceed to merge when no new positive findings appear**
+
+This loop is essential - review bots may find new issues in your fixes.
 
 ## Review Thread Management
 
@@ -201,6 +239,7 @@ The referenced file {filename} exists in the repository at {path}. This is a ref
 | Reply to comment | `gh api ... -X POST -F in_reply_to=<id>` |
 | Resolve thread | GraphQL `resolveReviewThread` mutation |
 | Trigger Q review | `gh pr comment {pr} --body "/q review"` |
+| Trigger Codex review | `gh pr comment {pr} --body "/codex review"` |
 | Check thread status | GraphQL query for `reviewThreads` |
 
 ## Additional Resources
