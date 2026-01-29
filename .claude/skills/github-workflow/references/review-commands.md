@@ -56,12 +56,23 @@ gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
   --jq '[.[] | select(.user.login == "amazon-q-developer[bot]")] | .[-1] | {id: .id, submitted_at: .submitted_at}'
 ```
 
-### Trigger Amazon Q Review
-
-Add a comment to trigger Amazon Q Developer to rescan:
+Get the most recent Codex review:
 
 ```bash
+gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
+  --jq '[.[] | select(.user.login == "codex[bot]")] | .[-1] | {id: .id, submitted_at: .submitted_at}'
+```
+
+### Trigger Bot Reviews
+
+Add a comment to trigger bot rescans:
+
+```bash
+# Amazon Q Developer
 gh pr comment {pr} --body "/q review"
+
+# Codex
+gh pr comment {pr} --body "/codex review"
 ```
 
 ### Monitor PR Checks
@@ -224,17 +235,28 @@ gh api repos/{owner}/{repo}/pulls/{pr}/comments \
 # Use the batch resolve script or loop above
 ```
 
-4. **Trigger new review**:
+4. **Trigger new review** (use appropriate bot command):
 ```bash
+# Amazon Q
 gh pr comment {pr} --body "/q review"
+
+# Codex
+gh pr comment {pr} --body "/codex review"
 ```
 
 5. **Wait and check for new comments**:
 ```bash
 sleep 90
+# Check Amazon Q
 gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
   --jq '[.[] | select(.user.login == "amazon-q-developer[bot]")] | .[-1]'
+
+# Check Codex
+gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
+  --jq '[.[] | select(.user.login == "codex[bot]")] | .[-1]'
 ```
+
+6. **Iterate until no new positive findings** - If new findings appear, repeat from step 1
 
 ### Check if All Threads Resolved
 
