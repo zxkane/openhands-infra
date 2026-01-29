@@ -413,15 +413,23 @@
   var originalXhrSend = XMLHttpRequest.prototype.send;
 
   XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
-    this._settingsPatchMethod = method;
-    this._settingsPatchUrl = url;
+    // Use a unique property name to avoid conflicts and store as non-enumerable
+    Object.defineProperty(this, '_ohSettingsPatchData', {
+      value: { method: method, url: url },
+      writable: false,
+      enumerable: false,
+      configurable: true
+    });
     return originalXhrOpen.apply(this, arguments);
   };
 
   XMLHttpRequest.prototype.send = function(body) {
+    // Safely access the stored data
+    var patchData = this._ohSettingsPatchData;
+
     // Only intercept POST/PUT to /api/settings
-    if (this._settingsPatchUrl && this._settingsPatchUrl.indexOf('/api/settings') !== -1 &&
-        (this._settingsPatchMethod === 'POST' || this._settingsPatchMethod === 'PUT') && body) {
+    if (patchData && patchData.url && patchData.url.indexOf('/api/settings') !== -1 &&
+        (patchData.method === 'POST' || patchData.method === 'PUT') && body) {
       try {
         var processedBody = processSettingsBody(body);
         return originalXhrSend.call(this, processedBody);
