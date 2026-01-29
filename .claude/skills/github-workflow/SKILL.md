@@ -30,11 +30,12 @@ Step 4: COMMIT AND CREATE PR
   - git add && git commit -m "type(scope): description"
   - git push -u origin <branch-name>
   - Create PR via GitHub MCP or gh CLI
+  - Include checklist in PR description (see template below)
        ↓
 Step 5: WAIT FOR PR CHECKS
   - Monitor GitHub Actions checks
   - If FAIL → Return to Step 2
-  - If PASS → Proceed to Step 6
+  - If PASS → Update PR checklist, proceed to Step 6
        ↓
 Step 6: ADDRESS REVIEWER BOT FINDINGS
   - Review all bot comments (Amazon Q, Codex, etc.)
@@ -46,27 +47,65 @@ Step 6: ADDRESS REVIEWER BOT FINDINGS
 Step 7: ITERATE UNTIL NO FINDINGS
   - Check for new bot findings
   - If new findings → Return to Step 6
-  - If no findings → Proceed to Step 8
+  - If no findings → Update PR checklist, proceed to Step 8
        ↓
 Step 8: DEPLOY TO STAGING
   - Deploy changes to test/staging environment
   - Verify deployment succeeds
+  - Update PR checklist
        ↓
 Step 9: EXECUTE E2E TESTS
   - Run full E2E test suite (see E2E_TEST_CASES.md)
   - If FAIL → Return to Step 2
     - Fix bugs or add missing test cases
     - Push fixes and repeat from Step 5
-  - If PASS → Proceed to merge
+  - If PASS → Update PR checklist, proceed to Step 10
        ↓
 Step 10: READY FOR MERGE (DO NOT MERGE)
   - All CI checks passed
   - All reviewer comments addressed
   - Staging deployment verified
   - E2E tests passed
+  - Update PR checklist to show all items complete
   - STOP HERE: Report status to user
   - User decides when to merge
 ```
+
+## PR Description Template
+
+When creating a PR, include this checklist in the description. Update it as each step completes:
+
+```markdown
+## Test plan
+
+- [ ] Build passes (`npm run build`)
+- [ ] Unit tests pass (`npm run test`)
+- [ ] CI checks pass
+- [ ] Reviewer bot findings addressed (no new findings)
+- [ ] Deployed to staging
+- [ ] E2E tests pass
+
+## Checklist
+
+- [ ] New unit tests written for new functionality
+- [ ] E2E test cases updated if needed
+- [ ] Documentation updated if needed
+```
+
+### Update PR Checklist Command
+
+After completing each step, update the PR description:
+
+```bash
+# Get current PR body
+gh pr view {pr_number} --json body --jq '.body' > /tmp/pr_body.md
+
+# Edit the checklist (mark items as [x])
+# Then update the PR
+gh pr edit {pr_number} --body "$(cat /tmp/pr_body.md)"
+```
+
+Or use the GitHub MCP tool to update the PR body directly.
 
 ## PR Check Monitoring
 
