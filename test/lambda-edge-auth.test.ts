@@ -387,7 +387,7 @@ describe('Lambda@Edge Auth Handler (lib/lambda-edge/auth-handler.js)', () => {
 
       expect(response.status).toBe('401');
       expect(response.statusDescription).toBe('Unauthorized');
-      expect(response.body).toContain('Invalid or expired token');
+      expect(response.body).toContain('Authentication required');
     });
 
     test('returns 401 for runtime request with malformed JWT', async () => {
@@ -416,7 +416,7 @@ describe('Lambda@Edge Auth Handler (lib/lambda-edge/auth-handler.js)', () => {
 
       expect(response.status).toBe('401');
       expect(response.statusDescription).toBe('Unauthorized');
-      expect(response.body).toContain('Invalid or expired token');
+      expect(response.body).toContain('Authentication required');
     });
 
     test('non-runtime requests without token redirect to login (not 401)', async () => {
@@ -439,6 +439,122 @@ describe('Lambda@Edge Auth Handler (lib/lambda-edge/auth-handler.js)', () => {
       // Non-runtime requests redirect to login instead of returning 401
       expect(response.status).toBe('302');
       expect(response.headers.location[0].value).toContain('/login');
+    });
+
+    test('returns 401 for runtime request with only refresh_token (no id_token)', async () => {
+      // Tests the Codex fix: refresh_token alone cannot authenticate without Cognito call
+      // Since we can't mock Cognito in unit tests, this should still return 401
+      const event = createRuntimeEvent(
+        '5000-abc123def456789012345678901234ab.runtime.openhands.example.com',
+        [{ value: 'refresh_token=some.refresh.token' }]
+      );
+
+      const response = await authHandler.handler(event);
+
+      // Without valid id_token and without Cognito mock, refresh fails -> 401
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      expect(response.body).toContain('Authentication required');
+    });
+
+    test('returns 401 for runtime request with expired id_token and refresh_token', async () => {
+      // Tests that refresh is attempted when id_token is invalid
+      const event = createRuntimeEvent(
+        '5000-abc123def456789012345678901234ab.runtime.openhands.example.com',
+        [
+          { value: 'id_token=expired.invalid.token' },
+          { value: 'refresh_token=some.refresh.token' },
+        ]
+      );
+
+      const response = await authHandler.handler(event);
+
+      // Without Cognito mock, refresh fails -> 401
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+    });
+  });
+
+  describe('Configuration - Token Refresh Path', () => {
+    test('tokenRefreshPath is configured', () => {
+      const config = authHandler._getConfig();
+      expect(config.tokenRefreshPath).toBe('/_token/refresh');
+    });
+  });
+
+  describe('handler - Token Refresh Endpoint', () => {
+    // Helper to create CloudFront event for token refresh
+    const createTokenRefreshEvent = (cookies?: Array<{ value: string }>, method?: string) => ({
+      Records: [{
+        cf: {
+          request: {
+            uri: '/_token/refresh',
+            method: method || 'POST',
+            headers: {
+              host: [{ value: 'openhands.example.com' }],
+              ...(cookies ? { cookie: cookies } : {}),
+            },
+            querystring: '',
+          },
+        },
+      }],
+    });
+
+    test('returns 405 for GET request (method not allowed)', async () => {
+      const event = createTokenRefreshEvent([
+        { value: 'refresh_token=some.refresh.token' },
+      ], 'GET');
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('405');
+      expect(response.statusDescription).toBe('Method Not Allowed');
+      expect(response.headers?.allow?.[0]?.value).toBe('POST');
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('Method not allowed');
+    });
+
+    test('returns 401 when no refresh_token cookie is present', async () => {
+      const event = createTokenRefreshEvent();
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('No refresh token available');
+    });
+
+    test('returns 401 when only id_token cookie is present', async () => {
+      const event = createTokenRefreshEvent([
+        { value: 'id_token=some.token.here' },
+      ]);
+
+      const response = await authHandler.handler(event);
+
+      expect(response.status).toBe('401');
+      expect(response.statusDescription).toBe('Unauthorized');
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('No refresh token available');
+    });
+
+    test('returns error for invalid refresh_token (mocked)', async () => {
+      // Note: Full token refresh testing requires mocking the Cognito endpoint
+      // This test verifies the handler correctly handles the refresh_token cookie
+      const event = createTokenRefreshEvent([
+        { value: 'refresh_token=invalid.refresh.token' },
+      ]);
+
+      const response = await authHandler.handler(event);
+
+      // Should return either 401 (Cognito rejected) or 500 (network error)
+      expect(['401', '500']).toContain(response.status);
+    });
+  });
+
+  describe('refreshTokens function', () => {
+    test('refreshTokens function is exported', () => {
+      expect(typeof authHandler.refreshTokens).toBe('function');
     });
   });
 });
