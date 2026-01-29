@@ -387,7 +387,7 @@ describe('Lambda@Edge Auth Handler (lib/lambda-edge/auth-handler.js)', () => {
 
       expect(response.status).toBe('401');
       expect(response.statusDescription).toBe('Unauthorized');
-      expect(response.body).toContain('Invalid or expired token');
+      expect(response.body).toContain('Authentication required');
     });
 
     test('returns 401 for runtime request with malformed JWT', async () => {
@@ -416,7 +416,7 @@ describe('Lambda@Edge Auth Handler (lib/lambda-edge/auth-handler.js)', () => {
 
       expect(response.status).toBe('401');
       expect(response.statusDescription).toBe('Unauthorized');
-      expect(response.body).toContain('Invalid or expired token');
+      expect(response.body).toContain('Authentication required');
     });
 
     test('non-runtime requests without token redirect to login (not 401)', async () => {
