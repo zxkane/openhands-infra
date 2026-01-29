@@ -961,4 +961,101 @@
 
   console.log('OpenHands logout button patch loaded');
 })();
+
+// Protect global MCP servers from modification/deletion
+// Global servers defined in config.toml should be read-only in the UI
+(function() {
+  // List of global MCP server identifiers (names or URLs from config.toml)
+  // These are system-managed and should not be editable by users
+  var GLOBAL_MCP_SERVERS = [
+    'chrome-devtools',
+    'https://knowledge-mcp.global.api.aws'
+  ];
+
+  function isGlobalServer(serverName) {
+    if (!serverName) return false;
+    var normalized = serverName.trim().toLowerCase();
+    for (var i = 0; i < GLOBAL_MCP_SERVERS.length; i++) {
+      if (normalized === GLOBAL_MCP_SERVERS[i].toLowerCase()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function protectGlobalMcpServers() {
+    // Only run on MCP settings page
+    if (window.location.pathname !== '/settings/mcp') {
+      return;
+    }
+
+    // Find all Edit and Delete buttons for MCP servers
+    var editButtons = document.querySelectorAll('button[aria-label^="Edit "]');
+    var deleteButtons = document.querySelectorAll('button[aria-label^="Delete "]');
+
+    var protectedCount = 0;
+
+    // Process Edit buttons
+    editButtons.forEach(function(btn) {
+      var label = btn.getAttribute('aria-label') || '';
+      var serverName = label.replace(/^Edit\s+/, '');
+      if (isGlobalServer(serverName)) {
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.style.cursor = 'not-allowed';
+        btn.title = 'System-managed MCP server (configured in config.toml)';
+        protectedCount++;
+      }
+    });
+
+    // Process Delete buttons
+    deleteButtons.forEach(function(btn) {
+      var label = btn.getAttribute('aria-label') || '';
+      var serverName = label.replace(/^Delete\s+/, '');
+      if (isGlobalServer(serverName)) {
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.style.cursor = 'not-allowed';
+        btn.title = 'System-managed MCP server (configured in config.toml)';
+        protectedCount++;
+      }
+    });
+
+    if (protectedCount > 0) {
+      console.log('MCP protection: Disabled edit/delete for', protectedCount / 2, 'global server(s)');
+    }
+  }
+
+  // Run on page load and when URL changes (SPA navigation)
+  function setupProtection() {
+    // Initial check
+    setTimeout(protectGlobalMcpServers, 500);
+
+    // Watch for DOM changes (for SPA page transitions)
+    var observer = new MutationObserver(function(mutations) {
+      // Debounce - only run once per batch of mutations
+      clearTimeout(observer._timeout);
+      observer._timeout = setTimeout(protectGlobalMcpServers, 200);
+    });
+
+    // Start observing
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    // Also handle URL changes (popstate for back/forward)
+    window.addEventListener('popstate', function() {
+      setTimeout(protectGlobalMcpServers, 500);
+    });
+  }
+
+  if (document.readyState === 'complete') {
+    setupProtection();
+  } else {
+    window.addEventListener('load', setupProtection);
+  }
+
+  console.log('OpenHands MCP protection patch loaded');
+})();
 </script>
