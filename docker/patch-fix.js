@@ -424,11 +424,12 @@
   };
 
   XMLHttpRequest.prototype.send = function(body) {
-    // Safely access the stored data
-    var patchData = this._ohSettingsPatchData;
+    // Safely access the stored data (fallback to empty object if not set)
+    var patchData = this._ohSettingsPatchData || {};
 
     // Only intercept POST/PUT to /api/settings
-    if (patchData && patchData.url && patchData.url.indexOf('/api/settings') !== -1 &&
+    if (patchData && patchData.url && typeof patchData.url === 'string' &&
+        patchData.url.indexOf('/api/settings') !== -1 &&
         (patchData.method === 'POST' || patchData.method === 'PUT') && body) {
       try {
         var processedBody = processSettingsBody(body);
