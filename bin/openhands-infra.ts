@@ -111,7 +111,7 @@ if (!authCallbackDomainsRaw && authDomainPrefixSuffix === 'shared') {
 
    To deploy without changing Auth stack, exclude it:
    npx cdk deploy --all --exclusively OpenHands-Network OpenHands-Monitoring \\
-     OpenHands-Security OpenHands-Database OpenHands-Compute OpenHands-Edge
+     OpenHands-Security OpenHands-Database OpenHands-UserConfig OpenHands-Compute OpenHands-Edge
 `);
 }
 const edgeStackSuffix = getContextString('edgeStackSuffix', undefined);
@@ -250,9 +250,17 @@ const edgeStack = new EdgeStack(app, edgeStackId, {
 edgeStack.addDependency(computeStack);
 edgeStack.addDependency(authStack);
 
-// Add tags to all stacks
-cdk.Tags.of(app).add('Project', 'OpenHands');
-cdk.Tags.of(app).add('Environment', 'Production');
+// Add tags to all stacks for cost allocation
+// STAGE is auto-detected from domainName: test.* = staging, otherwise production
+// Can be overridden via --context stage=<value>
+const autoStage = config.domainName.startsWith('test.') ? 'staging' : 'production';
+const stage = getContextString('stage', autoStage) as string;
+const project = getContextString('project', 'OpenHands') as string;
+const purpose = getContextString('purpose', 'ai-coding-assistant') as string;
+
+cdk.Tags.of(app).add('Project', project);
+cdk.Tags.of(app).add('STAGE', stage);
+cdk.Tags.of(app).add('Purpose', purpose);
 cdk.Tags.of(app).add('ManagedBy', 'CDK');
 
 app.synth();
