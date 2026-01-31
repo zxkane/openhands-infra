@@ -2287,14 +2287,14 @@ exports.handler = async (event) => {
               // Build new cookies
               const idTokenExpiry = new Date(Date.now() + ID_TOKEN_EXPIRY_MS).toUTCString();
               const setCookies = [
-                { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=Lax\` },
+                { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=None\` },
               ];
 
               if (tokens.refresh_token) {
                 const refreshTokenExpiry = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS).toUTCString();
                 setCookies.push({
                   key: 'Set-Cookie',
-                  value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=Lax\`,
+                  value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=None\`,
                 });
               }
 
@@ -2413,14 +2413,14 @@ exports.handler = async (event) => {
       const refreshTokenExpiry = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS).toUTCString();
 
       const setCookies = [
-        { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=Lax\` },
+        { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=None\` },
       ];
 
       // Store refresh_token if provided (enables silent token refresh)
       if (tokens.refresh_token) {
         setCookies.push({
           key: 'Set-Cookie',
-          value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=Lax\`,
+          value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=None\`,
         });
       }
 
@@ -2527,7 +2527,7 @@ exports.handler = async (event) => {
       // Set new cookies
       const idTokenExpiry = new Date(Date.now() + ID_TOKEN_EXPIRY_MS).toUTCString();
       const setCookies = [
-        { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=Lax\` },
+        { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=None\` },
       ];
 
       // Cognito may return a new refresh_token (token rotation)
@@ -2535,7 +2535,7 @@ exports.handler = async (event) => {
         const refreshTokenExpiry = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS).toUTCString();
         setCookies.push({
           key: 'Set-Cookie',
-          value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=Lax\`,
+          value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=None\`,
         });
       }
 
@@ -2608,7 +2608,7 @@ exports.handler = async (event) => {
           // Build new cookies
           const idTokenExpiry = new Date(Date.now() + ID_TOKEN_EXPIRY_MS).toUTCString();
           const setCookies = [
-            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=Lax\` },
+            { key: 'Set-Cookie', value: \`id_token=\${tokens.id_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${idTokenExpiry}; HttpOnly; Secure; SameSite=None\` },
           ];
 
           // Update refresh_token if rotated
@@ -2616,7 +2616,7 @@ exports.handler = async (event) => {
             const refreshTokenExpiry = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS).toUTCString();
             setCookies.push({
               key: 'Set-Cookie',
-              value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=Lax\`,
+              value: \`refresh_token=\${tokens.refresh_token}; Domain=\${CONFIG.cookieDomain}; Path=/; Expires=\${refreshTokenExpiry}; HttpOnly; Secure; SameSite=None\`,
             });
           }
 
@@ -2706,7 +2706,7 @@ module.exports = {
       },
       "Type": "AWS::Lambda::Function",
     },
-    "AuthFunctionCurrentVersionDB17CE860ae7fc20db587d20a1fc3e9205c50a95": {
+    "AuthFunctionCurrentVersionDB17CE8692427b5d938324a0ac7648d1cc9339b4": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true,
       },
@@ -2935,7 +2935,7 @@ module.exports = {
                   "EventType": "viewer-request",
                   "IncludeBody": false,
                   "LambdaFunctionARN": {
-                    "Ref": "AuthFunctionCurrentVersionDB17CE860ae7fc20db587d20a1fc3e9205c50a95",
+                    "Ref": "AuthFunctionCurrentVersionDB17CE8692427b5d938324a0ac7648d1cc9339b4",
                   },
                 },
               ],
@@ -2970,7 +2970,7 @@ module.exports = {
                 "EventType": "viewer-request",
                 "IncludeBody": false,
                 "LambdaFunctionARN": {
-                  "Ref": "AuthFunctionCurrentVersionDB17CE860ae7fc20db587d20a1fc3e9205c50a95",
+                  "Ref": "AuthFunctionCurrentVersionDB17CE8692427b5d938324a0ac7648d1cc9339b4",
                 },
               },
               {
