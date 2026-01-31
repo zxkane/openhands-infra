@@ -349,7 +349,7 @@ export class ComputeStack extends cdk.Stack {
       'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
       // Generate or retrieve OH_SECRET_KEY from Secrets Manager (persists across EC2 replacement)
       // This key encrypts secrets in conversation state, enabling resume after sandbox restart
-      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text 2>/dev/null || (SK=$(openssl rand -base64 32) && aws secretsmanager create-secret --name openhands/sandbox-secret-key --secret-string "$SK" --region "$REGION" && echo "$SK"))`,
+      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text 2>/dev/null || (SK=$(openssl rand -base64 32) && aws secretsmanager create-secret --name openhands/sandbox-secret-key --secret-string "$SK" --region "$REGION" >/dev/null && echo "$SK"))`,
       'export OH_SECRET_KEY',
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
