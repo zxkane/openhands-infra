@@ -1344,6 +1344,9 @@ try:
         )
         print("Added ValidationError import")
 
+    # Track how many patterns were successfully patched
+    patches_applied = 0
+
     # Pattern 1: Fix ProviderToken.from_value conversion
     # Look for the pattern where we convert provider tokens
     # Original:  converted_tokens[provider_type] = ProviderToken.from_value(value)
@@ -1353,14 +1356,15 @@ try:
 \1except (ValueError, ValidationError, TypeError) as e:
 \1    # Patch 23: Skip invalid secrets (masked with null value during resume)
 \1    import logging
-\1    logging.getLogger(__name__).warning(f"Skipping invalid provider token {key}: {e}")
+\1    logging.getLogger(__name__).warning(f"Skipping invalid provider token {provider_type}: {e}")
 \1    continue'''
 
     if re.search(old_provider_pattern, content):
         content = re.sub(old_provider_pattern, new_provider_code, content)
         print("Patched ProviderToken.from_value with try/except")
+        patches_applied += 1
     else:
-        print("WARNING: ProviderToken.from_value pattern not found")
+        print("WARNING: ProviderToken.from_value pattern not found - check if upstream OpenHands code changed", file=sys.stderr)
 
     # Pattern 2: Fix CustomSecret.from_value conversion
     # Original:  converted_secrets[key] = CustomSecret.from_value(value)
@@ -1376,16 +1380,25 @@ try:
     if re.search(old_secret_pattern, content):
         content = re.sub(old_secret_pattern, new_secret_code, content)
         print("Patched CustomSecret.from_value with try/except")
+        patches_applied += 1
     else:
-        print("WARNING: CustomSecret.from_value pattern not found")
+        print("WARNING: CustomSecret.from_value pattern not found - check if upstream OpenHands code changed", file=sys.stderr)
+
+    # Verify at least one pattern was patched
+    if patches_applied == 0:
+        print("ERROR: Patch 23 found NO patterns to patch - conversation resume may fail with ValidationError", file=sys.stderr)
+        sys.exit(1)
+    elif patches_applied < 2:
+        print(f"WARNING: Patch 23 only applied {patches_applied}/2 patterns", file=sys.stderr)
 
     with open(secrets_file, 'w') as f:
         f.write(content)
 
-    print("Patch 23: Invalid secrets skip applied successfully")
+    print(f"Patch 23: Invalid secrets skip applied successfully ({patches_applied}/2 patterns)")
 
 except Exception as e:
     print(f"ERROR: Failed to apply Patch 23: {e}", file=sys.stderr)
+    sys.exit(1)
 PYEOF
   fi
 fi
