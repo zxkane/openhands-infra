@@ -1282,6 +1282,7 @@ Use this checklist to track test execution:
 | TC-018 | Logout Functionality | [ ] | Logout button clears session |
 | TC-019 | Secrets Page User Isolation | [x] | User-scoped S3 storage enabled via S3SecretsStore |
 | TC-020 | Settings Pages User Isolation | [x] | User-scoped S3 storage enabled via S3SettingsStore |
+| TC-021 | Secrets Persist After EC2 Replace | [ ] | Patch 22 + Patch 23 enable secret access on resume |
 
 ---
 
@@ -2271,3 +2272,266 @@ docker logs openhands-app 2>&1 | grep "Patch 21"
 **Residual Risks**:
 1. If Dockerfile build fails, fallback to `FileSettingsStore`/`FileSecretsStore` could expose global storage
 2. `apply-patch.sh` Patch 21 is marked as CRITICAL and will block startup if stores not configured properly
+
+---
+
+## TC-021: Verify Secrets Persist and Load After EC2 Replacement
+
+### Description
+Verify that user secrets created before EC2 replacement are correctly loaded and usable in resumed conversations. This tests that Patch 22 (OH_SECRET_KEY injection) and Patch 23 (skip invalid secrets on resume) work together to allow conversations to resume with access to secrets.
+
+### Prerequisites
+- Infrastructure deployed with:
+  - Persistent storage (EFS mounted at `/data/openhands`)
+  - User config enabled (`USER_CONFIG_ENABLED=true`)
+  - OH_SECRET_KEY configured in environment
+- TC-003 completed (logged in)
+- At least one custom secret created via /settings/secrets page
+
+### Test Flow
+
+```
+Phase 1: Create secret and use in conversation
+     ↓
+Phase 2: Terminate EC2 (forces ASG replacement)
+     ↓
+Phase 3: Resume conversation and verify secret works
+```
+
+### Steps
+
+1. **Phase 1: Create a test secret**
+
+   1.1. Login and navigate to Secrets page
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/settings/secrets",
+     type: "url"
+   })
+   mcp__chrome-devtools__wait_for({
+     text: "Secrets",
+     timeout: 15000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   1.2. Add a custom secret for testing
+   ```javascript
+   // Click "Add Secret" or similar button
+   mcp__chrome-devtools__click({ uid: "<add-secret-button>" })
+
+   // Fill in secret details
+   mcp__chrome-devtools__fill({ uid: "<secret-name-field>", value: "TEST_API_KEY" })
+   mcp__chrome-devtools__fill({ uid: "<secret-description-field>", value: "Test API key for E2E" })
+   mcp__chrome-devtools__fill({ uid: "<secret-value-field>", value: "test-secret-value-12345" })
+
+   // Save the secret
+   mcp__chrome-devtools__click({ uid: "<save-button>" })
+   mcp__chrome-devtools__wait_for({
+     text: "TEST_API_KEY",
+     timeout: 10000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   1.3. Start a new conversation
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__click({ uid: "<start-conversation-button>" })
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 180000
+   })
+   ```
+
+   1.4. Ask agent to use the secret
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Access the TEST_API_KEY secret and print its first 5 characters to verify you can read it"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   mcp__chrome-devtools__wait_for({
+     text: "test-",  // First 5 chars of "test-secret-value-12345"
+     timeout: 120000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   1.5. Record the conversation ID
+   ```javascript
+   // Extract conversation ID from URL
+   // Format: /conversations/<uuid>
+   ```
+
+2. **Phase 2: Terminate EC2 instance to force replacement**
+
+   2.1. Find and terminate the current ASG instance
+   ```bash
+   ASG_NAME=$(aws cloudformation describe-stacks \
+     --stack-name OpenHands-Compute \
+     --region $DEPLOY_REGION \
+     --query 'Stacks[0].Outputs[?OutputKey==`AsgName`].OutputValue' \
+     --output text)
+
+   INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
+     --auto-scaling-group-names "$ASG_NAME" \
+     --region $DEPLOY_REGION \
+     --query 'AutoScalingGroups[0].Instances[0].InstanceId' \
+     --output text)
+
+   echo "Terminating instance: $INSTANCE_ID"
+   aws autoscaling terminate-instance-in-auto-scaling-group \
+     --instance-id "$INSTANCE_ID" \
+     --no-should-decrement-desired-capacity \
+     --region $DEPLOY_REGION
+   ```
+
+   2.2. Wait for replacement instance to become healthy
+   ```bash
+   echo "Waiting for replacement instance..."
+   aws autoscaling wait group-in-service \
+     --auto-scaling-group-names "$ASG_NAME" \
+     --region $DEPLOY_REGION
+   echo "New instance is healthy"
+
+   # Additional wait for application startup
+   sleep 60
+
+   # Verify patches applied on new instance
+   NEW_INSTANCE=$(aws autoscaling describe-auto-scaling-groups \
+     --auto-scaling-group-names "$ASG_NAME" \
+     --region $DEPLOY_REGION \
+     --query 'AutoScalingGroups[0].Instances[0].InstanceId' \
+     --output text)
+
+   echo "New instance: $NEW_INSTANCE"
+   ```
+
+3. **Phase 3: Resume conversation and verify secrets work**
+
+   3.1. Navigate to the previous conversation
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/conversations/<conversation-id>",
+     type: "url"
+   })
+   ```
+
+   3.2. Wait for conversation to load (tests Patch 23 - skip invalid secrets)
+   ```javascript
+   // The conversation should load without Pydantic validation errors
+   // Patch 23 skips masked secrets in base_state.json
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 180000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   3.3. Verify chat history loaded
+   ```javascript
+   // Previous messages should be visible
+   mcp__chrome-devtools__wait_for({
+     text: "TEST_API_KEY",  // Reference to the secret from earlier
+     timeout: 30000
+   })
+   ```
+
+   3.4. Ask agent to use the secret again
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Read the TEST_API_KEY secret again and print its first 5 characters"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+   3.5. Verify secret is accessible (tests Patch 22 - OH_SECRET_KEY injection)
+   ```javascript
+   // The agent should be able to decrypt and read the secret
+   // Patch 22 ensures OH_SECRET_KEY is injected into sandbox containers
+   mcp__chrome-devtools__wait_for({
+     text: "test-",  // First 5 chars of "test-secret-value-12345"
+     timeout: 120000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   mcp__chrome-devtools__take_screenshot({})
+   ```
+
+4. **Phase 4: Verify via EC2 logs**
+
+   ```bash
+   # SSH to new EC2 instance
+   aws ssm start-session --target $NEW_INSTANCE --region $DEPLOY_REGION
+
+   # Check Patch 22 applied (runtime_startup_env_vars injection)
+   docker logs openhands-app 2>&1 | grep "Patch 22"
+   # Expected: "Patch 22: runtime_startup_env_vars injection applied successfully"
+
+   # Check Patch 23 applied (skip invalid secrets)
+   docker logs openhands-app 2>&1 | grep "Patch 23"
+   # Expected: "Patch 23: Invalid secrets skip applied successfully"
+
+   # Check for any skipped secrets warnings (expected during resume)
+   docker logs openhands-app 2>&1 | grep "Skipping invalid"
+   # May show: "Skipping invalid custom secret ... masked with null value"
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Secret created successfully | Secret visible on /settings/secrets page |
+| 2 | Secret accessible in new conversation | Agent prints first 5 chars: "test-" |
+| 3 | EC2 termination triggers replacement | New instance ID different from original |
+| 4 | Conversation resumes without errors | No Pydantic ValidationError in logs |
+| 5 | Chat history loads correctly | Previous messages visible |
+| 6 | Secret accessible after resume | Agent prints first 5 chars: "test-" |
+| 7 | Patch 22 applied | Log shows runtime_startup_env_vars injection |
+| 8 | Patch 23 applied | Log shows invalid secrets skip |
+
+### Technical Details
+
+**Why This Test Matters**:
+
+1. **base_state.json contains masked secrets**: When a conversation is serialized, secrets are stored with `"value": null` or `"value": "**********"` for security.
+
+2. **Pydantic validation fails on masked values**: The `Secrets` model validator calls `ProviderToken.from_value()` and `CustomSecret.from_value()`, which expect string values, not dict with null.
+
+3. **Patch 23 fixes deserialization**: Wraps the conversion calls in try/except to skip invalid secrets instead of crashing.
+
+4. **Patch 22 provides actual secret values**: Injects `OH_SECRET_KEY` into sandbox containers via `runtime_startup_env_vars`, allowing the agent to decrypt secrets from environment variables.
+
+**Expected Flow After Fix**:
+```
+1. User resumes conversation
+2. base_state.json loaded with masked secrets
+3. Patch 23: Skip masked secrets during deserialization (no crash)
+4. Sandbox container started with OH_SECRET_KEY (Patch 22)
+5. Agent reads secrets from environment variables
+6. Secret operations work correctly
+```
+
+### Troubleshooting
+
+| Issue | Possible Cause | Resolution |
+|-------|----------------|------------|
+| "ValidationError: Input should be valid string" | Patch 23 not applied | Check docker logs for "Patch 23" |
+| "Secret not found" after resume | OH_SECRET_KEY not injected | Check Patch 22 in logs |
+| Conversation won't load | base_state.json corrupted | Delete conversation and recreate |
+| "Skipping invalid secret" warnings | Expected behavior | Secrets work from env vars |
+| Secret value incorrect | Different encryption key | Verify OH_SECRET_KEY matches |
+
+### Cleanup
+
+```bash
+# Delete test secret via UI or API
+# Navigate to /settings/secrets and remove TEST_API_KEY
+
+# Delete test conversation if needed
+# Via conversations list or API
+```
