@@ -410,6 +410,9 @@ export class ComputeStack extends cdk.Stack {
       ] : [
         '      - USER_CONFIG_ENABLED=false',
       ]),
+      // OH_SECRET_KEY encrypts/decrypts secrets in conversation state (uses shell var from user-data)
+      // Required by both main app (load/save conversations) and sandbox containers (runtime access)
+      '      - OH_SECRET_KEY=$OH_SECRET_KEY',
       // Note: network_mode should NOT be set here as OpenHands sets it internally
       // Only set extra_hosts for MCP connection support (PR #12236)
       // When sandboxAwsAccess is enabled, also set environment variables for AWS credentials
