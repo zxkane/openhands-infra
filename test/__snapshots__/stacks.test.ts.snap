@@ -1317,6 +1317,7 @@ services:
                     "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefUserSecretsKmsKey2BAFA35EBEB4D071",
                   },
                   "
+      - OH_SECRET_KEY=$OH_SECRET_KEY
       - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"OH_SECRET_KEY":"$OH_SECRET_KEY"}}
       - AGENT_SERVER_IMAGE_REPOSITORY=123456789012.dkr.ecr.us-west-2.",
                   {
