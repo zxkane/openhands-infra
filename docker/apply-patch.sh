@@ -1228,6 +1228,73 @@ PYEOF
   fi
 fi
 
+# Patch 22: Inject runtime_startup_env_vars (including OH_SECRET_KEY) into sandbox containers
+# The DockerSandboxService.start_sandbox() method doesn't apply config.sandbox.runtime_startup_env_vars
+# This causes sandbox containers to start without OH_SECRET_KEY, breaking secret decryption
+# when resuming conversations that have encrypted secrets in base_state.json.
+#
+# The fix adds runtime_startup_env_vars from config to the env_vars dict in start_sandbox()
+SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+if [ -f "$SANDBOX_SERVICE_FILE" ]; then
+  if grep -q "Patch 22: Inject runtime_startup_env_vars" "$SANDBOX_SERVICE_FILE"; then
+    echo "Patch 22: runtime_startup_env_vars injection already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    sandbox_file = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+
+    with open(sandbox_file, 'r') as f:
+        content = f.read()
+
+    # Find where env_vars is built and GIT_CONFIG_PARAMETERS is added (from Patch 12/17)
+    # We need to add runtime_startup_env_vars injection after the existing env_vars setup
+    #
+    # The pattern we're looking for (after Patch 12/17):
+    #   env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'"
+    #
+    # We'll add the runtime_startup_env_vars injection right after this line
+
+    old_pattern = """env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
+
+    new_code = """env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'"
+        # Patch 22: Inject runtime_startup_env_vars (including OH_SECRET_KEY)
+        # This ensures sandbox containers can decrypt secrets in base_state.json
+        # when resuming conversations after EC2 replacement
+        try:
+            from openhands.core.config import load_openhands_config
+            oh_config = load_openhands_config()
+            if hasattr(oh_config, 'sandbox') and hasattr(oh_config.sandbox, 'runtime_startup_env_vars'):
+                runtime_env = oh_config.sandbox.runtime_startup_env_vars
+                if runtime_env:
+                    env_vars.update(runtime_env)
+                    _logger.info(f"Patch 22: Injected {len(runtime_env)} runtime_startup_env_vars into sandbox")
+        except Exception as e:
+            _logger.warning(f"Patch 22: Failed to inject runtime_startup_env_vars: {e}")"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(sandbox_file, 'w') as f:
+            f.write(content)
+        print("Patch 22: runtime_startup_env_vars injection applied successfully")
+    else:
+        # Try without trailing space
+        old_pattern_alt = """env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
+        if old_pattern_alt.strip() in content:
+            content = content.replace(old_pattern_alt.strip(), new_code.strip())
+            with open(sandbox_file, 'w') as f:
+                f.write(content)
+            print("Patch 22: runtime_startup_env_vars injection applied successfully (alt pattern)")
+        else:
+            print("WARNING: Patch 22 pattern not found - Patch 12/17 may need to be applied first")
+
+except Exception as e:
+    print(f"ERROR: Failed to apply Patch 22: {e}", file=sys.stderr)
+PYEOF
+  fi
+fi
+
 # Patch 21: Verify S3SettingsStore and S3SecretsStore are properly configured
 # This is a CRITICAL security patch - settings/secrets must be user-scoped
 # Without this patch, all users share the same settings.json and secrets.json
