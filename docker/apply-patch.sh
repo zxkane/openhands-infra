@@ -1326,23 +1326,33 @@ try:
     # We need to wrap these in try/except and skip invalid secrets
 
     # First, ensure ValidationError is imported
-    if 'from pydantic import' in content and 'ValidationError' not in content:
-        # Add ValidationError to existing pydantic import
-        content = re.sub(
-            r'(from pydantic import [^\n]+)',
-            r'\1, ValidationError',
-            content,
-            count=1
-        )
-        print("Added ValidationError to pydantic imports")
-    elif 'ValidationError' not in content:
-        # Add import if not present
-        content = content.replace(
-            'from pydantic import',
-            'from pydantic import ValidationError, ',
-            1
-        )
-        print("Added ValidationError import")
+    # Handle different import styles:
+    # 1. Single line: from pydantic import BaseModel, field_validator
+    # 2. Multi-line: from pydantic import (\n    BaseModel,\n    ...
+    if 'ValidationError' not in content:
+        # Check if it's a multi-line import with parentheses
+        if re.search(r'from pydantic import \(', content):
+            # Add ValidationError after the opening parenthesis
+            content = re.sub(
+                r'(from pydantic import \(\s*\n)',
+                r'\1    ValidationError,\n',
+                content,
+                count=1
+            )
+            print("Added ValidationError to multi-line pydantic imports")
+        elif 'from pydantic import' in content:
+            # Single-line import - add at the end before newline
+            content = re.sub(
+                r'(from pydantic import [^\n(]+)(\n)',
+                r'\1, ValidationError\2',
+                content,
+                count=1
+            )
+            print("Added ValidationError to single-line pydantic imports")
+        else:
+            # No pydantic import found, add a new one at the top
+            content = 'from pydantic import ValidationError\n' + content
+            print("Added new ValidationError import")
 
     # Track how many patterns were successfully patched
     patches_applied = 0
