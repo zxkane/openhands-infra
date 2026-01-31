@@ -18,6 +18,121 @@ RUN pip install uv
 WORKDIR /build
 RUN git clone --depth 1 --branch v1.8.1 https://github.com/OpenHands/software-agent-sdk.git .
 
+# Patch 23: Skip invalid/masked secrets during conversation resume
+# When base_state.json has secrets with null values (masked), Pydantic validation fails.
+# This patch adds error handling to skip invalid secrets instead of crashing.
+RUN python3 << 'PYEOF'
+import sys
+import re
+
+# Patch the agent_context.py to handle invalid secrets gracefully
+agent_context_file = "/build/openhands-sdk/openhands/sdk/context/agent_context.py"
+
+with open(agent_context_file, 'r') as f:
+    content = f.read()
+
+# Ensure model_validator is imported from pydantic
+# The target file likely has: from pydantic import BaseModel, Field, field_validator, model_validator
+# but we verify to be safe
+if 'model_validator' not in content:
+    if re.search(r'from pydantic import \(', content):
+        # Multi-line import
+        content = re.sub(
+            r'(from pydantic import \(\s*\n)',
+            r'\1    model_validator,\n',
+            content,
+            count=1
+        )
+        print("Patch 23: Added model_validator to multi-line pydantic imports")
+    elif 'from pydantic import' in content:
+        # Single-line import
+        content = re.sub(
+            r'(from pydantic import [^\n(]+)(\n)',
+            r'\1, model_validator\2',
+            content,
+            count=1
+        )
+        print("Patch 23: Added model_validator to pydantic imports")
+    else:
+        print("WARNING: No pydantic import found, model_validator may not be available")
+
+# Add a model_validator to filter out invalid secrets before validation
+# The validator runs 'before' mode to preprocess the input data
+
+patch_code = '''
+    @model_validator(mode="before")
+    @classmethod
+    def _filter_invalid_secrets(cls, data):
+        """Filter out invalid/masked secrets during deserialization.
+
+        Patch 23 (openhands-infra): When resuming a conversation after EC2 replacement,
+        base_state.json may contain secrets with null/masked values. These cause
+        Pydantic validation errors. This validator filters them out.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if not isinstance(data, dict):
+            return data
+
+        secrets = data.get("secrets")
+        if not secrets or not isinstance(secrets, dict):
+            return data
+
+        filtered_secrets = {}
+        for key, value in secrets.items():
+            # Skip None values
+            if value is None:
+                logger.warning(f"Patch 23: Skipping None secret '{key}'")
+                continue
+            # Skip dict values with null 'value' field (masked SecretSource)
+            if isinstance(value, dict) and value.get("value") is None:
+                logger.warning(f"Patch 23: Skipping masked secret '{key}'")
+                continue
+            # Keep valid secrets
+            filtered_secrets[key] = value
+
+        if len(filtered_secrets) < len(secrets):
+            logger.info(f"Patch 23: Filtered {len(secrets) - len(filtered_secrets)} invalid secrets")
+
+        data["secrets"] = filtered_secrets if filtered_secrets else None
+        return data
+
+'''
+
+# Find the class definition and insert the validator after the class docstring
+# Look for the end of the Field definitions section (before the first @field_validator)
+pattern = r'(class AgentContext\(BaseModel\):.*?""".*?""")'
+match = re.search(pattern, content, re.DOTALL)
+if not match:
+    print("ERROR: Could not find AgentContext class definition")
+    sys.exit(1)
+
+# Find where to insert - after the secrets Field definition, before @field_validator
+insert_pattern = r'(\s+secrets:.*?\)\n)(\n\s+@field_validator)'
+insert_match = re.search(insert_pattern, content, re.DOTALL)
+if insert_match:
+    insert_pos = insert_match.end(1)
+    content = content[:insert_pos] + patch_code + content[insert_pos:]
+    print("Patch 23: Added secret filter validator to AgentContext")
+else:
+    # Try inserting after the last Field definition, before any validator
+    insert_pattern2 = r'(load_public_skills:.*?skills repository\..*?"\n\s+\)\n)'
+    insert_match2 = re.search(insert_pattern2, content, re.DOTALL)
+    if insert_match2:
+        insert_pos = insert_match2.end(1)
+        content = content[:insert_pos] + patch_code + content[insert_pos:]
+        print("Patch 23: Added secret filter validator (alternative position)")
+    else:
+        print("ERROR: Could not find insertion point for Patch 23")
+        sys.exit(1)
+
+with open(agent_context_file, 'w') as f:
+    f.write(content)
+
+print("Patch 23: Successfully patched agent_context.py for secret validation")
+PYEOF
+
 # Install all dependencies including boto3
 RUN uv sync --frozen && \
     uv pip install boto3 botocore pyinstaller
