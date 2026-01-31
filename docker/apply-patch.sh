@@ -1295,6 +1295,101 @@ PYEOF
   fi
 fi
 
+# Patch 23: Skip invalid/masked secrets during conversation resume
+# When resuming a conversation after EC2 replacement, base_state.json contains secrets
+# that are correctly masked ("value": "**********" or null). However, Pydantic validation
+# expects string values for ProviderToken and CustomSecret, causing validation errors:
+#   ValidationError: Input should be a valid string [type=string_type, input_value={'description': ..., 'value': None}]
+#
+# Fix: Modify the Secrets model_validator to catch validation errors and skip invalid secrets
+# instead of crashing. The agent will use environment variables when it needs secrets.
+SECRETS_MODEL_FILE="/app/openhands/storage/data_models/secrets.py"
+if [ -f "$SECRETS_MODEL_FILE" ]; then
+  if grep -q "Patch 23: Skip invalid secrets" "$SECRETS_MODEL_FILE"; then
+    echo "Patch 23: Invalid secrets skip already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+import re
+
+try:
+    secrets_file = "/app/openhands/storage/data_models/secrets.py"
+
+    with open(secrets_file, 'r') as f:
+        content = f.read()
+
+    # We need to modify the model_validator to catch exceptions when converting secrets
+    # The original code does:
+    #   converted_tokens[provider_type] = ProviderToken.from_value(value)
+    #   converted_secrets[key] = CustomSecret.from_value(value)
+    #
+    # We need to wrap these in try/except and skip invalid secrets
+
+    # First, ensure ValidationError is imported
+    if 'from pydantic import' in content and 'ValidationError' not in content:
+        # Add ValidationError to existing pydantic import
+        content = re.sub(
+            r'(from pydantic import [^\n]+)',
+            r'\1, ValidationError',
+            content,
+            count=1
+        )
+        print("Added ValidationError to pydantic imports")
+    elif 'ValidationError' not in content:
+        # Add import if not present
+        content = content.replace(
+            'from pydantic import',
+            'from pydantic import ValidationError, ',
+            1
+        )
+        print("Added ValidationError import")
+
+    # Pattern 1: Fix ProviderToken.from_value conversion
+    # Look for the pattern where we convert provider tokens
+    # Original:  converted_tokens[provider_type] = ProviderToken.from_value(value)
+    old_provider_pattern = r'(\s+)(converted_tokens\[provider_type\] = ProviderToken\.from_value\(value\))'
+    new_provider_code = r'''\1try:
+\1    converted_tokens[provider_type] = ProviderToken.from_value(value)
+\1except (ValueError, ValidationError, TypeError) as e:
+\1    # Patch 23: Skip invalid secrets (masked with null value during resume)
+\1    import logging
+\1    logging.getLogger(__name__).warning(f"Skipping invalid provider token {key}: {e}")
+\1    continue'''
+
+    if re.search(old_provider_pattern, content):
+        content = re.sub(old_provider_pattern, new_provider_code, content)
+        print("Patched ProviderToken.from_value with try/except")
+    else:
+        print("WARNING: ProviderToken.from_value pattern not found")
+
+    # Pattern 2: Fix CustomSecret.from_value conversion
+    # Original:  converted_secrets[key] = CustomSecret.from_value(value)
+    old_secret_pattern = r'(\s+)(converted_secrets\[key\] = CustomSecret\.from_value\(value\))'
+    new_secret_code = r'''\1try:
+\1    converted_secrets[key] = CustomSecret.from_value(value)
+\1except (ValueError, ValidationError, TypeError) as e:
+\1    # Patch 23: Skip invalid secrets (masked with null value during resume)
+\1    import logging
+\1    logging.getLogger(__name__).warning(f"Skipping invalid custom secret {key}: {e}")
+\1    continue'''
+
+    if re.search(old_secret_pattern, content):
+        content = re.sub(old_secret_pattern, new_secret_code, content)
+        print("Patched CustomSecret.from_value with try/except")
+    else:
+        print("WARNING: CustomSecret.from_value pattern not found")
+
+    with open(secrets_file, 'w') as f:
+        f.write(content)
+
+    print("Patch 23: Invalid secrets skip applied successfully")
+
+except Exception as e:
+    print(f"ERROR: Failed to apply Patch 23: {e}", file=sys.stderr)
+PYEOF
+  fi
+fi
+
 # Patch 21: Verify S3SettingsStore and S3SecretsStore are properly configured
 # This is a CRITICAL security patch - settings/secrets must be user-scoped
 # Without this patch, all users share the same settings.json and secrets.json
