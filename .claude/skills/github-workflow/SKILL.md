@@ -54,12 +54,19 @@ Step 8: DEPLOY TO STAGING
   - Verify deployment succeeds
   - Update PR checklist
        ↓
-Step 9: EXECUTE E2E TESTS
-  - Run full E2E test suite (see E2E_TEST_CASES.md)
-  - If FAIL → Return to Step 2
+Step 9: EXECUTE ALL E2E TESTS (MANDATORY)
+  - Run ALL E2E test cases in test/E2E_TEST_CASES.md
+  - Use Chrome DevTools MCP server for browser automation
+  - CRITICAL: ALL test cases must pass, not just a subset
+  - Key tests to always run:
+    - TC-003: Login via Chrome DevTools
+    - TC-004: Verify Conversation List
+    - TC-005: Start New Conversation
+    - TC-014: Resume After EC2 Replacement (if EC2 changes)
+  - If ANY test FAILS → Return to Step 2
     - Fix bugs or add missing test cases
     - Push fixes and repeat from Step 5
-  - If PASS → Update PR checklist, proceed to Step 10
+  - If ALL tests PASS → Update PR checklist, proceed to Step 10
        ↓
 Step 10: READY FOR MERGE (DO NOT MERGE)
   - All CI checks passed
@@ -83,7 +90,11 @@ When creating a PR, include this checklist in the description. Update it as each
 - [ ] CI checks pass
 - [ ] Reviewer bot findings addressed (no new findings)
 - [ ] Deployed to staging
-- [ ] E2E tests pass
+- [ ] **ALL E2E tests pass** (see test/E2E_TEST_CASES.md)
+  - [ ] TC-003: Login
+  - [ ] TC-004: Conversation List
+  - [ ] TC-005: New Conversation
+  - [ ] TC-014: Resume After EC2 Replacement (if EC2 changes)
 
 ## Checklist
 
