@@ -133,6 +133,46 @@ with open(agent_context_file, 'w') as f:
 print("Patch 23: Successfully patched agent_context.py for secret validation")
 PYEOF
 
+# Patch 24: Fix _compose_conversation_info to exclude None values when dumping state
+# When the frontend polls /api/conversations endpoint, the state is dumped to dict
+# and re-validated. Secrets with None values cause validation errors.
+# Fix: Use exclude_none=True in model_dump() to skip these fields.
+RUN python3 << 'PYEOF'
+import sys
+import re
+
+conversation_service_file = "/build/openhands-agent-server/openhands/agent_server/conversation_service.py"
+
+with open(conversation_service_file, 'r') as f:
+    content = f.read()
+
+# Find and fix the _compose_conversation_info function
+# Old: **state.model_dump()
+# New: **state.model_dump(exclude_none=True)
+old_pattern = r'(\*\*state\.model_dump\(\))'
+if re.search(old_pattern, content):
+    content = re.sub(
+        old_pattern,
+        r'**state.model_dump(exclude_none=True)',
+        content
+    )
+    print("Patch 24: Updated _compose_conversation_info to use exclude_none=True")
+else:
+    print("WARNING: Could not find state.model_dump() in _compose_conversation_info")
+    # Try alternative pattern (maybe already has some args)
+    alt_pattern = r'(\*\*state\.model_dump\([^)]*\))'
+    if re.search(alt_pattern, content):
+        print("Patch 24: model_dump() already has arguments, manual review needed")
+    else:
+        print("ERROR: Could not find model_dump pattern")
+        sys.exit(1)
+
+with open(conversation_service_file, 'w') as f:
+    f.write(content)
+
+print("Patch 24: Successfully patched conversation_service.py")
+PYEOF
+
 # Install all dependencies including boto3
 RUN uv sync --frozen && \
     uv pip install boto3 botocore pyinstaller
