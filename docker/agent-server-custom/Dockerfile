@@ -85,8 +85,9 @@ patch_code = '''
             if value is None:
                 logger.warning(f"Patch 23: Skipping None secret '{key}'")
                 continue
-            # Skip dict values with null 'value' field (masked SecretSource)
-            if isinstance(value, dict) and value.get("value") is None:
+            # Skip dict values with missing or null 'value' field (masked SecretSource)
+            # After exclude_none=True serialization, 'value' key may be missing entirely
+            if isinstance(value, dict) and ("value" not in value or value.get("value") is None):
                 logger.warning(f"Patch 23: Skipping masked secret '{key}'")
                 continue
             # Keep valid secrets
@@ -226,8 +227,9 @@ def _filter_invalid_secrets_from_json(json_str: str) -> str:
                 logger.warning(f"Patch 25: Skipping None secret '{key}'")
                 skipped += 1
                 continue
-            # Skip dict values with null 'value' field (masked SecretSource)
-            if isinstance(value, dict) and value.get("value") is None:
+            # Skip dict values with missing or null 'value' field (masked SecretSource)
+            # After exclude_none=True serialization, 'value' key may be missing entirely
+            if isinstance(value, dict) and ("value" not in value or value.get("value") is None):
                 logger.warning(f"Patch 25: Skipping masked secret '{key}'")
                 skipped += 1
                 continue
@@ -282,6 +284,101 @@ with open(conversation_service_file, 'w') as f:
     f.write(content)
 
 print("Patch 25: Successfully patched conversation_service.py for JSON preprocessing")
+PYEOF
+
+# Patch 26: Filter invalid secrets from ConversationState (secret_registry)
+# ConversationState loads from base_state.json which may have secrets with missing 'value' field
+# The secret_registry.secret_sources structure needs similar filtering as AgentContext.secrets
+RUN python3 << 'PYEOF'
+import sys
+import re
+
+# Correct path: openhands-sdk/openhands/sdk/conversation/state.py
+state_file = "/build/openhands-sdk/openhands/sdk/conversation/state.py"
+
+with open(state_file, 'r') as f:
+    content = f.read()
+
+# model_validator is already imported in this file, verify
+if 'model_validator' not in content:
+    print("WARNING: model_validator not found, attempting to add")
+    if 'from pydantic import' in content:
+        content = re.sub(
+            r'(from pydantic import [^\n]+)',
+            r'\1, model_validator',
+            content,
+            count=1
+        )
+        print("Patch 26: Added model_validator to pydantic imports")
+else:
+    print("Patch 26: model_validator already imported")
+
+# Add a model_validator to filter invalid secret_registry entries
+# Insert BEFORE the existing _handle_secrets_manager_alias validator
+patch_code = '''
+    @model_validator(mode="before")
+    @classmethod
+    def _filter_invalid_secret_sources(cls, data):
+        """Filter out invalid/masked secrets from secret_registry during deserialization.
+
+        Patch 26 (openhands-infra): When resuming a conversation after EC2 replacement,
+        base_state.json may contain secret_registry.secret_sources with missing 'value' fields.
+        This happens because exclude_none=True removes null values during serialization.
+        This validator filters them out to prevent ValidationError.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if not isinstance(data, dict):
+            return data
+
+        secret_registry = data.get("secret_registry")
+        if not secret_registry or not isinstance(secret_registry, dict):
+            return data
+
+        secret_sources = secret_registry.get("secret_sources")
+        if not secret_sources or not isinstance(secret_sources, dict):
+            return data
+
+        filtered_sources = {}
+        skipped = 0
+        for key, value in secret_sources.items():
+            # Skip None values
+            if value is None:
+                logger.warning(f"Patch 26: Skipping None secret_source '{key}'")
+                skipped += 1
+                continue
+            # Skip dict values with missing or null 'value' field
+            if isinstance(value, dict) and ("value" not in value or value.get("value") is None):
+                logger.warning(f"Patch 26: Skipping masked secret_source '{key}'")
+                skipped += 1
+                continue
+            filtered_sources[key] = value
+
+        if skipped > 0:
+            logger.info(f"Patch 26: Filtered {skipped} invalid secret_sources from ConversationState")
+            secret_registry["secret_sources"] = filtered_sources
+            data["secret_registry"] = secret_registry
+
+        return data
+
+'''
+
+# Insert BEFORE the existing _handle_secrets_manager_alias validator
+existing_validator_pattern = r'(\s+@model_validator\(mode="before"\)\s+@classmethod\s+def _handle_secrets_manager_alias)'
+match = re.search(existing_validator_pattern, content)
+if match:
+    insert_pos = match.start()
+    content = content[:insert_pos] + patch_code + content[insert_pos:]
+    print("Patch 26: Added _filter_invalid_secret_sources validator before existing validator")
+else:
+    print("ERROR: Could not find existing _handle_secrets_manager_alias validator")
+    sys.exit(1)
+
+with open(state_file, 'w') as f:
+    f.write(content)
+
+print("Patch 26: Successfully patched conversation/state.py for secret_registry validation")
 PYEOF
 
 # Install all dependencies including boto3
