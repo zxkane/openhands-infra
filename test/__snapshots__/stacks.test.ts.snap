@@ -1326,7 +1326,7 @@ services:
                     "Ref": "AWS::URLSuffix",
                   },
                   "/cdk-hnb659fds-container-assets-123456789012-us-west-2
-      - AGENT_SERVER_IMAGE_TAG=87ae26e56ce93412e34305364633259aa34f9e8d61095fa3d66b2ab1bf3d4f51
+      - AGENT_SERVER_IMAGE_TAG=848c07805d996064a9503e51cd86a57f3082d8d8c5f3f12be7fcdff2ff776008
       - AGENT_ENABLE_BROWSING=false
       - AGENT_ENABLE_MCP=true
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
@@ -1456,7 +1456,7 @@ pull_with_retry "",
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:87ae26e56ce93412e34305364633259aa34f9e8d61095fa3d66b2ab1bf3d4f51",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:848c07805d996064a9503e51cd86a57f3082d8d8c5f3f12be7fcdff2ff776008",
                   },
                   ""
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
