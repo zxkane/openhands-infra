@@ -173,6 +173,117 @@ with open(conversation_service_file, 'w') as f:
 print("Patch 24: Successfully patched conversation_service.py")
 PYEOF
 
+# Patch 25: Filter invalid secrets from JSON before model_validate_json
+# When loading StoredConversation from stored.json, Pydantic fails if secrets have None values.
+# Fix: Parse JSON, filter secrets with null values, then pass to model_validate_json
+RUN python3 << 'PYEOF'
+import sys
+import re
+
+conversation_service_file = "/build/openhands-agent-server/openhands/agent_server/conversation_service.py"
+
+with open(conversation_service_file, 'r') as f:
+    content = f.read()
+
+# Find the StoredConversation.model_validate_json call and wrap it with JSON preprocessing
+# Target pattern:
+#   stored = StoredConversation.model_validate_json(
+#       json_str,
+#       context={
+#           "cipher": self.cipher,
+#       },
+#   )
+
+# First, add the helper function at the top of the file, after imports
+helper_function = '''
+import json as _json_module
+
+def _filter_invalid_secrets_from_json(json_str: str) -> str:
+    """Preprocess JSON to filter out secrets with null values.
+
+    Patch 25 (openhands-infra): When loading StoredConversation, secrets with
+    null values (masked after EC2 replacement) cause Pydantic validation errors.
+    This filters them out before validation.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        data = _json_module.loads(json_str)
+    except _json_module.JSONDecodeError:
+        return json_str  # Return as-is if not valid JSON
+
+    if not isinstance(data, dict):
+        return json_str
+
+    secrets = data.get("secrets")
+    if secrets and isinstance(secrets, dict):
+        filtered_secrets = {}
+        skipped = 0
+        for key, value in secrets.items():
+            # Skip None values
+            if value is None:
+                logger.warning(f"Patch 25: Skipping None secret '{key}'")
+                skipped += 1
+                continue
+            # Skip dict values with null 'value' field (masked SecretSource)
+            if isinstance(value, dict) and value.get("value") is None:
+                logger.warning(f"Patch 25: Skipping masked secret '{key}'")
+                skipped += 1
+                continue
+            filtered_secrets[key] = value
+
+        if skipped > 0:
+            logger.info(f"Patch 25: Filtered {skipped} invalid secrets from StoredConversation")
+            data["secrets"] = filtered_secrets if filtered_secrets else {}
+            return _json_module.dumps(data)
+
+    return json_str
+
+'''
+
+# Insert helper function after the last import statement
+# Find a good insertion point - after "from" or "import" lines
+import_section_end = 0
+for match in re.finditer(r'^(from .+|import .+)\n', content, re.MULTILINE):
+    import_section_end = match.end()
+
+if import_section_end > 0:
+    content = content[:import_section_end] + helper_function + content[import_section_end:]
+    print("Patch 25: Added _filter_invalid_secrets_from_json helper function")
+else:
+    print("WARNING: Could not find import section end")
+
+# Now wrap the model_validate_json call
+# Find: StoredConversation.model_validate_json(\n            json_str,
+# Replace with: StoredConversation.model_validate_json(\n            _filter_invalid_secrets_from_json(json_str),
+old_pattern = r'(StoredConversation\.model_validate_json\(\s*\n\s+)(json_str)(,)'
+new_replacement = r'\1_filter_invalid_secrets_from_json(json_str)\3'
+
+if re.search(old_pattern, content):
+    content = re.sub(old_pattern, new_replacement, content)
+    print("Patch 25: Wrapped json_str with _filter_invalid_secrets_from_json()")
+else:
+    # Try simpler pattern
+    simpler_pattern = r'(StoredConversation\.model_validate_json\()(\s*json_str)'
+    if re.search(simpler_pattern, content):
+        content = re.sub(simpler_pattern, r'\1\2.replace("json_str", "_filter_invalid_secrets_from_json(json_str)")', content)
+        print("WARNING: Used simpler pattern replacement")
+    else:
+        print("WARNING: Could not find model_validate_json pattern, checking file structure...")
+        # Show context around StoredConversation
+        if "StoredConversation.model_validate_json" in content:
+            print("Patch 25: Found model_validate_json but pattern didn't match")
+        else:
+            print("ERROR: StoredConversation.model_validate_json not found")
+            sys.exit(1)
+
+with open(conversation_service_file, 'w') as f:
+    f.write(content)
+
+print("Patch 25: Successfully patched conversation_service.py for JSON preprocessing")
+PYEOF
+
 # Install all dependencies including boto3
 RUN uv sync --frozen && \
     uv pip install boto3 botocore pyinstaller
