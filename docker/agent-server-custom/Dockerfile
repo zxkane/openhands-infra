@@ -530,11 +530,12 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Set AWS credentials file path for sandbox AWS access
-# The credentials file is mounted at /data/sandbox-credentials when sandboxAwsAccess is enabled
-# The file includes the region, so AWS_DEFAULT_REGION is not needed
-# If the file doesn't exist, AWS CLI falls back to instance metadata service
-ENV AWS_SHARED_CREDENTIALS_FILE=/data/sandbox-credentials
+# NOTE: AWS_SHARED_CREDENTIALS_FILE is NOT set here intentionally.
+# The agent-server uses EC2 instance role credentials via IMDS for Bedrock calls.
+# The sandbox containers receive AWS credentials through SANDBOX_RUNTIME_STARTUP_ENV_VARS
+# which is configured in compute-stack.ts to include AWS_SHARED_CREDENTIALS_FILE.
+# Setting AWS_SHARED_CREDENTIALS_FILE here would override IMDS and use sandbox credentials
+# (which expire) for agent-server's own Bedrock calls, causing "token expired" errors.
 
 # Create openhands user (or use existing UID 1000 user)
 # nikolaik/python-nodejs base image already has user 'pn' with UID 1000
