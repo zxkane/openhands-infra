@@ -1357,11 +1357,31 @@ try:
     # Track how many patterns were successfully patched
     patches_applied = 0
 
-    # Pattern 1: Fix ProviderToken.from_value conversion
-    # Look for the pattern where we convert provider tokens
-    # Original:  converted_tokens[provider_type] = ProviderToken.from_value(value)
-    old_provider_pattern = r'(\s+)(converted_tokens\[provider_type\] = ProviderToken\.from_value\(value\))'
-    new_provider_code = r'''\1try:
+    # Pattern 1: Fix ProviderToken.from_value exception handling
+    # The upstream code already has try/except ValueError around the conversion.
+    # We need to extend it to also catch ValidationError and TypeError.
+    # Original:  except ValueError:
+    #              # Skip invalid provider types or tokens
+    #              continue
+    # New:       except (ValueError, ValidationError, TypeError):
+    #              # Patch 23: Skip invalid provider tokens (masked during resume)
+    #              continue
+
+    # Pattern 1a: Check if code is already inside try/except (upstream has this)
+    # Look for: except ValueError:\n              # Skip invalid provider types or tokens
+    old_provider_except = r'except ValueError:\s*\n\s*# Skip invalid provider types or tokens\s*\n\s*continue'
+    new_provider_except = '''except (ValueError, ValidationError, TypeError):
+                        # Patch 23: Skip invalid provider tokens (masked with null value during resume)
+                        continue'''
+
+    if re.search(old_provider_except, content):
+        content = re.sub(old_provider_except, new_provider_except, content)
+        print("Patched ProviderToken exception to include ValidationError")
+        patches_applied += 1
+    else:
+        # Pattern 1b: Try original pattern (code not yet in try/except)
+        old_provider_pattern = r'(\s+)(converted_tokens\[provider_type\] = ProviderToken\.from_value\(value\))'
+        new_provider_code = r'''\1try:
 \1    converted_tokens[provider_type] = ProviderToken.from_value(value)
 \1except (ValueError, ValidationError, TypeError) as e:
 \1    # Patch 23: Skip invalid secrets (masked with null value during resume)
@@ -1369,12 +1389,12 @@ try:
 \1    logging.getLogger(__name__).warning(f"Skipping invalid provider token {provider_type}: {e}")
 \1    continue'''
 
-    if re.search(old_provider_pattern, content):
-        content = re.sub(old_provider_pattern, new_provider_code, content)
-        print("Patched ProviderToken.from_value with try/except")
-        patches_applied += 1
-    else:
-        print("WARNING: ProviderToken.from_value pattern not found - check if upstream OpenHands code changed", file=sys.stderr)
+        if re.search(old_provider_pattern, content):
+            content = re.sub(old_provider_pattern, new_provider_code, content)
+            print("Patched ProviderToken.from_value with try/except")
+            patches_applied += 1
+        else:
+            print("WARNING: ProviderToken.from_value pattern not found - check if upstream code changed", file=sys.stderr)
 
     # Pattern 2: Fix CustomSecret.from_value conversion
     # Original:  converted_secrets[key] = CustomSecret.from_value(value)
@@ -1392,7 +1412,7 @@ try:
         print("Patched CustomSecret.from_value with try/except")
         patches_applied += 1
     else:
-        print("WARNING: CustomSecret.from_value pattern not found - check if upstream OpenHands code changed", file=sys.stderr)
+        print("WARNING: CustomSecret.from_value pattern not found - check if upstream code changed", file=sys.stderr)
 
     # Verify at least one pattern was patched
     if patches_applied == 0:
