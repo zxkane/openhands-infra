@@ -177,6 +177,9 @@ export class SecurityStack extends cdk.Stack {
 
     // Custom policy for Secrets Manager (for optional secrets and sandbox secret key)
     // CreateSecret is needed for first-time sandbox secret key generation
+    // Secrets Manager access for sandbox secret key
+    // Scoped to specific secret to follow least-privilege principle
+    // Note: ARN suffix includes random characters added by Secrets Manager
     ec2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'SecretsManagerAccess',
       effect: iam.Effect.ALLOW,
@@ -185,7 +188,7 @@ export class SecurityStack extends cdk.Stack {
         'secretsmanager:CreateSecret',
       ],
       resources: [
-        `arn:aws:secretsmanager:${config.region}:${this.account}:secret:openhands/*`,
+        `arn:aws:secretsmanager:${config.region}:${this.account}:secret:openhands/sandbox-secret-key-*`,
       ],
     }));
 

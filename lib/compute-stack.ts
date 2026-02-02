@@ -349,10 +349,25 @@ export class ComputeStack extends cdk.Stack {
       'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
       // Generate or retrieve OH_SECRET_KEY from Secrets Manager (persists across EC2 replacement)
       // This key encrypts secrets in conversation state, enabling resume after sandbox restart
-      // Security: Disable xtrace to prevent logging secret value, handle race condition with retry
+      // Security: Disable xtrace to prevent logging secret value
+      // Race condition handling: If create-secret fails (another instance won), retry get-secret
       'set +x',
-      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text 2>/dev/null || (SK=$(openssl rand -base64 32) && aws secretsmanager create-secret --name openhands/sandbox-secret-key --secret-string "$SK" --region "$REGION" --description "OpenHands sandbox secret key" 2>/dev/null && echo "$SK" || aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text))`,
+      'echo "Retrieving or creating sandbox secret key..."',
+      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text 2>/dev/null)`,
+      'if [ -z "$OH_SECRET_KEY" ]; then',
+      '  echo "Secret not found, generating new key..."',
+      '  SK=$(openssl rand -base64 32)',
+      `  if aws secretsmanager create-secret --name openhands/sandbox-secret-key --secret-string "$SK" --region "$REGION" --description "OpenHands sandbox secret key" 2>/dev/null; then`,
+      '    echo "Secret created successfully"',
+      '    OH_SECRET_KEY="$SK"',
+      '  else',
+      '    echo "Create failed (race condition?), retrieving existing secret..."',
+      `    OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text)`,
+      '  fi',
+      'fi',
+      '[ -n "$OH_SECRET_KEY" ] || { echo "ERROR: Failed to get/create sandbox secret key" >&2; exit 1; }',
       'export OH_SECRET_KEY',
+      'echo "Sandbox secret key configured"',
       'set -x',
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
