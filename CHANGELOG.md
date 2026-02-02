@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-02
+
+### Added
+
+#### Cost Management
+- **Dynamic cost allocation tags** via CDK context (#14)
+  - `STAGE` tag auto-detected from domainName (`test.*` → staging, otherwise production)
+  - `Project` and `Purpose` tags configurable via `--context` parameters
+  - All tags integrated with AWS Cost Allocation for billing visibility
+
+### Fixed
+
+#### Authentication & Security
+- **Runtime subdomain cookie access** - Changed `SameSite=Lax` to `SameSite=None` in Lambda@Edge auth handler to enable cookies on cross-subdomain fetch requests (#16)
+- **npm package vulnerabilities** - Added override for `fast-xml-parser` to v5.3.4 to fix GHSA-37qj-frw5-hhjh RangeError DoS bug (#18)
+
+#### Sandbox & Conversation Resume
+- **Conversation resume after EC2 replacement** - Pass `OH_SECRET_KEY` to sandbox containers via Secrets Manager for encrypted secrets decryption (#17)
+- **Bedrock token expiration** - Fixed by using EC2 instance role instead of sandbox STS credentials for LLM calls (#17)
+
+#### Frontend Patches
+- **MCP server deduplication** - Intercept XMLHttpRequest instead of fetch to prevent global MCP servers from being duplicated in user settings (#15)
+- **Global MCP server protection** - Disable Edit/Delete buttons for system-managed MCP servers defined in config.toml (#15)
+
+[0.2.0]: https://github.com/zxkane/openhands-infra/releases/tag/v0.2.0
+
 ## [0.1.0] - 2026-01-29
 
 ### Added
