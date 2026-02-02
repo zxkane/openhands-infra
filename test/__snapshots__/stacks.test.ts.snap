@@ -1280,7 +1280,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:6aed219319e048f2992656864c5ff2c784e80d5c7625ebfa470bf09fb107be6c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:7c7bfa84aec371a5fb8d9beb80fb589f0e4c1bc2a4de8050b91effde7ccd02e4",
                   },
                   "
     container_name: openhands-app
@@ -1326,7 +1326,7 @@ services:
                     "Ref": "AWS::URLSuffix",
                   },
                   "/cdk-hnb659fds-container-assets-123456789012-us-west-2
-      - AGENT_SERVER_IMAGE_TAG=f211def8beaadfbf56e64a1d15ab3fede7e2cea0445292afa62ad600627b1e6b
+      - AGENT_SERVER_IMAGE_TAG=cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf
       - AGENT_ENABLE_BROWSING=false
       - AGENT_ENABLE_MCP=true
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
@@ -1441,7 +1441,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:6aed219319e048f2992656864c5ff2c784e80d5c7625ebfa470bf09fb107be6c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:7c7bfa84aec371a5fb8d9beb80fb589f0e4c1bc2a4de8050b91effde7ccd02e4",
                   },
                   ""
 pull_with_retry "",
@@ -1456,7 +1456,7 @@ pull_with_retry "",
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f211def8beaadfbf56e64a1d15ab3fede7e2cea0445292afa62ad600627b1e6b",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf",
                   },
                   ""
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
