@@ -54,15 +54,10 @@ Step 8: DEPLOY TO STAGING
   - Verify deployment succeeds
   - Update PR checklist
        ↓
-Step 9: EXECUTE ALL E2E TESTS (MANDATORY)
-  - Run ALL E2E test cases in test/E2E_TEST_CASES.md
+Step 9: EXECUTE E2E TESTS (MANDATORY)
+  - Use test/select-e2e-tests.sh to determine required tests
   - Use Chrome DevTools MCP server for browser automation
-  - CRITICAL: ALL test cases must pass, not just a subset
-  - Key tests to always run:
-    - TC-003: Login via Chrome DevTools
-    - TC-004: Verify Conversation List
-    - TC-005: Start New Conversation
-    - TC-014: Resume After EC2 Replacement (if EC2 changes)
+  - Run tests based on change category (see E2E Test Selection below)
   - If ANY test FAILS → Return to Step 2
     - Fix bugs or add missing test cases
     - Push fixes and repeat from Step 5
@@ -78,6 +73,71 @@ Step 10: READY FOR MERGE (DO NOT MERGE)
   - User decides when to merge
 ```
 
+## E2E Test Selection
+
+Run `test/select-e2e-tests.sh` to automatically determine which tests to run based on changed files.
+
+### Test Categories by Change Type
+
+| Change Category | Files Changed | Required Tests |
+|-----------------|---------------|----------------|
+| **Core (always)** | Any | TC-003, TC-004, TC-005 |
+| **Auth/Lambda@Edge** | `lib/lambda-edge/`, `edge-stack.ts` | + TC-011, TC-012, TC-013, TC-018 |
+| **Compute/Docker** | `docker/`, `compute-stack.ts` | + TC-006, TC-007, TC-008, TC-009, TC-010 |
+| **EC2/Persistence** | `compute-stack.ts`, EFS config | + TC-014, TC-021 |
+| **Sandbox AWS** | `security-stack.ts`, sandbox role | + TC-017 |
+| **MCP Config** | `config/config.toml`, MCP settings | + TC-015, TC-016 |
+| **User Config** | `user-config-stack.ts`, `lambda/user-config/` | + TC-019, TC-020 |
+
+### Quick Reference: All Test Cases
+
+| TC# | Name | When to Run |
+|-----|------|-------------|
+| TC-001 | Deploy Infrastructure | Manual deployment only |
+| TC-002 | Create Test User | First-time setup only |
+| TC-003 | Login via Chrome DevTools | **Always** |
+| TC-004 | Verify Conversation List | **Always** |
+| TC-005 | Start New Conversation | **Always** |
+| TC-006 | Execute Flask Todo App | Docker/runtime changes |
+| TC-007 | Verify Runtime Accessible | Docker/runtime changes |
+| TC-008 | Verify In-App Routing | Docker/runtime changes |
+| TC-009 | Verify Web App Subdomain | Docker/runtime changes |
+| TC-010 | Verify VS Code URL Rewriting | Docker/patch-fix.js changes |
+| TC-011 | Cross-User Access Denied | Auth/authorization changes |
+| TC-012 | Unauthenticated Access Denied | Auth changes |
+| TC-013 | Main App Access Works | Auth changes (regression) |
+| TC-014 | Resume After EC2 Replacement | EC2/persistence changes |
+| TC-015 | AWS Docs MCP Server | MCP config changes |
+| TC-016 | Chrome DevTools MCP Server | MCP/runtime image changes |
+| TC-017 | Sandbox AWS Access | Sandbox credentials changes |
+| TC-018 | Logout Functionality | Auth/patch-fix.js changes |
+| TC-019 | Secrets Page User Isolation | User config changes |
+| TC-020 | Settings Pages User Isolation | User config changes |
+| TC-021 | Secrets Persist After EC2 | EC2/secrets changes |
+
+### Using the Test Selector
+
+```bash
+# From repo root, compare against main branch
+./test/select-e2e-tests.sh
+
+# Compare against specific branch
+./test/select-e2e-tests.sh origin/main
+
+# Example output:
+# Required E2E Tests for this PR:
+# ================================
+# Core tests (always required):
+#   TC-003: Login via Chrome DevTools
+#   TC-004: Verify Conversation List
+#   TC-005: Start New Conversation
+#
+# Additional tests based on changes:
+#   TC-007: Verify Runtime Accessible (docker/ changes)
+#   TC-014: Resume After EC2 Replacement (compute-stack changes)
+#   TC-021: Secrets Persist After EC2 (docker/ changes)
+```
+
 ## PR Description Template
 
 When creating a PR, include this checklist in the description. Update it as each step completes:
@@ -90,11 +150,11 @@ When creating a PR, include this checklist in the description. Update it as each
 - [ ] CI checks pass
 - [ ] Reviewer bot findings addressed (no new findings)
 - [ ] Deployed to staging
-- [ ] **ALL E2E tests pass** (see test/E2E_TEST_CASES.md)
+- [ ] **E2E tests pass** (run `./test/select-e2e-tests.sh` for required tests)
   - [ ] TC-003: Login
   - [ ] TC-004: Conversation List
   - [ ] TC-005: New Conversation
-  - [ ] TC-014: Resume After EC2 Replacement (if EC2 changes)
+  - [ ] (add change-specific tests from selector output)
 
 ## Checklist
 
