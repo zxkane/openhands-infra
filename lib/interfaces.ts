@@ -63,6 +63,8 @@ export interface SecurityStackOutput {
   userSecretsKmsKeyArn?: string;
   /** KMS key ID for user secrets encryption (optional, only when user config enabled) */
   userSecretsKmsKeyId?: string;
+  /** Secrets Manager secret name for sandbox secret key */
+  sandboxSecretKeyName: string;
 }
 
 /**

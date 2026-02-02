@@ -3,6 +3,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -175,22 +176,29 @@ export class SecurityStack extends cdk.Stack {
       ],
     }));
 
-    // Custom policy for Secrets Manager (for optional secrets and sandbox secret key)
-    // CreateSecret is needed for first-time sandbox secret key generation
-    // Secrets Manager access for sandbox secret key
-    // Scoped to specific secret to follow least-privilege principle
-    // Note: ARN suffix includes random characters added by Secrets Manager
-    ec2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'SecretsManagerAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'secretsmanager:GetSecretValue',
-        'secretsmanager:CreateSecret',
-      ],
-      resources: [
-        `arn:aws:secretsmanager:${config.region}:${this.account}:secret:openhands/sandbox-secret-key-*`,
-      ],
-    }));
+    // ========================================
+    // Sandbox Secret Key (for session encryption)
+    // ========================================
+    // This secret key encrypts secrets in conversation state, enabling resume after sandbox restart.
+    // Managed by CDK to ensure it exists before EC2 instances launch.
+    //
+    // Note: Using fromSecretNameV2 to reference the secret by name.
+    // The secret must exist before deployment. For new environments, create it with:
+    //   aws secretsmanager create-secret --name openhands/sandbox-secret-key \
+    //     --secret-string "$(openssl rand -base64 32)" --region <region> \
+    //     --description "OpenHands sandbox secret key for session encryption"
+    //
+    // Why not create via CDK? CDK cannot adopt existing secrets, and different environments
+    // may have pre-existing secrets. Using fromSecretNameV2 provides consistent behavior.
+    const sandboxSecretKeyName = 'openhands/sandbox-secret-key';
+    const sandboxSecretKey = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'SandboxSecretKey',
+      sandboxSecretKeyName
+    );
+
+    // Grant EC2 role read-only access to sandbox secret key
+    sandboxSecretKey.grantRead(ec2Role);
 
     // ECR authorization token - required for docker login to any ECR repository
     // Note: GetAuthorizationToken is a service-level action that requires resource: '*'
@@ -404,6 +412,7 @@ export class SecurityStack extends cdk.Stack {
       sandboxRoleArn,
       userSecretsKmsKeyArn: userSecretsKmsKey.keyArn,
       userSecretsKmsKeyId: userSecretsKmsKey.keyId,
+      sandboxSecretKeyName: sandboxSecretKey.secretName,
     };
 
     // CloudFormation outputs

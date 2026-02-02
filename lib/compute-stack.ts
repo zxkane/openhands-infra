@@ -141,7 +141,7 @@ export class ComputeStack extends cdk.Stack {
 
     const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxAwsAccess } = props;
     const { vpc } = networkOutput;
-    const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile, sandboxRoleArn } = securityOutput;
+    const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile, sandboxRoleArn, sandboxSecretKeyName } = securityOutput;
     const { alertTopic, dataBucket } = monitoringOutput;
 
     // Full domain for runtime URL pattern
@@ -347,25 +347,13 @@ export class ComputeStack extends cdk.Stack {
       'retry mount -a',
       'mountpoint -q /data/openhands || exit 1',
       'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
-      // Generate or retrieve OH_SECRET_KEY from Secrets Manager (persists across EC2 replacement)
+      // Retrieve OH_SECRET_KEY from Secrets Manager (managed by SecurityStack CDK)
       // This key encrypts secrets in conversation state, enabling resume after sandbox restart
       // Security: Disable xtrace to prevent logging secret value
-      // Race condition handling: If create-secret fails (another instance won), retry get-secret
       'set +x',
-      'echo "Retrieving or creating sandbox secret key..."',
-      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text 2>/dev/null)`,
-      'if [ -z "$OH_SECRET_KEY" ]; then',
-      '  echo "Secret not found, generating new key..."',
-      '  SK=$(openssl rand -base64 32)',
-      `  if aws secretsmanager create-secret --name openhands/sandbox-secret-key --secret-string "$SK" --region "$REGION" --description "OpenHands sandbox secret key" 2>/dev/null; then`,
-      '    echo "Secret created successfully"',
-      '    OH_SECRET_KEY="$SK"',
-      '  else',
-      '    echo "Create failed (race condition?), retrieving existing secret..."',
-      `    OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text)`,
-      '  fi',
-      'fi',
-      '[ -n "$OH_SECRET_KEY" ] || { echo "ERROR: Failed to get/create sandbox secret key" >&2; exit 1; }',
+      'echo "Retrieving sandbox secret key..."',
+      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id ${sandboxSecretKeyName} --region "$REGION" --query SecretString --output text)`,
+      '[ -n "$OH_SECRET_KEY" ] || { echo "ERROR: Failed to retrieve sandbox secret key" >&2; exit 1; }',
       'export OH_SECRET_KEY',
       'echo "Sandbox secret key configured"',
       'set -x',
