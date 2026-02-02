@@ -6,14 +6,54 @@ This document covers the Docker container configuration, OpenResty proxy, and fr
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | OpenHands container with patches |
-| `apply-patch.sh` | Startup script applying all patches |
+| `Dockerfile` | OpenHands container with runtime patches |
+| `apply-patch.sh` | Startup script applying runtime patches |
 | `patch-fix.js` | Frontend JavaScript patches |
 | `cognito_user_auth.py` | CognitoUserAuth class for OpenHands |
 | `cognito_file_conversation_store.py` | User-scoped conversation storage |
 | `openresty/Dockerfile` | OpenResty proxy container |
 | `openresty/nginx.conf` | Nginx configuration with Lua |
 | `openresty/docker_discovery.lua` | Container discovery via Docker API |
+| `agent-server-custom/Dockerfile` | Custom agent-server with boto3 |
+| `agent-server-custom/apply-sdk-patches.py` | Build-time SDK patches |
+
+## Patch System Overview
+
+There are two types of patches in this project:
+
+| Type | Location | Applied When | Why |
+|------|----------|--------------|-----|
+| **Runtime patches** | `apply-patch.sh`, `patch-fix.js` | Container startup | Modify upstream OpenHands container |
+| **Build-time patches** | `agent-server-custom/apply-sdk-patches.py` | Docker build | Modify SDK before PyInstaller bundles it |
+
+### Why Two Different Approaches?
+
+**Runtime patches** (apply-patch.sh):
+- We use the upstream OpenHands container image
+- Source files are available in the running container
+- Patches applied before application starts
+- Allows customization without forking OpenHands
+
+**Build-time patches** (apply-sdk-patches.py):
+- We build agent-server from source with boto3 included
+- SDK code is cloned from GitHub during build
+- PyInstaller creates an **immutable binary**
+- Source code modifications MUST happen before `pyinstaller` runs
+
+```
+# Runtime patches flow:
+Upstream OpenHands Image → Start Container → apply-patch.sh → Application Runs
+
+# Build-time patches flow:
+Clone SDK → apply-sdk-patches.py → PyInstaller → Binary (immutable)
+```
+
+### Patch Numbering
+
+| Patch # | Type | Purpose |
+|---------|------|---------|
+| 1-22 | Runtime | OpenHands container patches (apply-patch.sh) |
+| 23-26 | Build-time | SDK patches for conversation resume (apply-sdk-patches.py) |
 
 ## Runtime Subdomain Routing
 

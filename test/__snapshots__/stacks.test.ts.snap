@@ -1248,6 +1248,24 @@ echo "",
 retry mount -a
 mountpoint -q /data/openhands || exit 1
 mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands
+set +x
+echo "Retrieving or creating sandbox secret key..."
+OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text 2>/dev/null)
+if [ -z "$OH_SECRET_KEY" ]; then
+  echo "Secret not found, generating new key..."
+  SK=$(openssl rand -base64 32)
+  if aws secretsmanager create-secret --name openhands/sandbox-secret-key --secret-string "$SK" --region "$REGION" --description "OpenHands sandbox secret key" 2>/dev/null; then
+    echo "Secret created successfully"
+    OH_SECRET_KEY="$SK"
+  else
+    echo "Create failed (race condition?), retrieving existing secret..."
+    OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text)
+  fi
+fi
+[ -n "$OH_SECRET_KEY" ] || { echo "ERROR: Failed to get/create sandbox secret key" >&2; exit 1; }
+export OH_SECRET_KEY
+echo "Sandbox secret key configured"
+set -x
 cat > /data/openhands/docker-compose.yml << EOF
 services:
   openresty:
@@ -1276,7 +1294,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:2069b46b24700872f5d76c682d2468038381c801b1b81c809b5bb34e89e2c57c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:81b3e0fd22fe42a6d9c1d692a7529e8065f35803a7f1ae8182e37135d3496482",
                   },
                   "
     container_name: openhands-app
@@ -1315,16 +1333,17 @@ services:
                     "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefUserSecretsKmsKey2BAFA35EBEB4D071",
                   },
                   "
-      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"}}
+      - OH_SECRET_KEY=$OH_SECRET_KEY
+      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"OH_SECRET_KEY":"$OH_SECRET_KEY"}}
       - AGENT_SERVER_IMAGE_REPOSITORY=123456789012.dkr.ecr.us-west-2.",
                   {
                     "Ref": "AWS::URLSuffix",
                   },
                   "/cdk-hnb659fds-container-assets-123456789012-us-west-2
-      - AGENT_SERVER_IMAGE_TAG=b31696d74d2f501f92974e5f67e27a386ebc6968508c8154a7a193cb509ae960
+      - AGENT_SERVER_IMAGE_TAG=cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf
       - AGENT_ENABLE_BROWSING=false
       - AGENT_ENABLE_MCP=true
-      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}
+      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
       - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
       - DB_PORT=5432
       - DB_NAME=openhands
@@ -1436,7 +1455,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:2069b46b24700872f5d76c682d2468038381c801b1b81c809b5bb34e89e2c57c",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:81b3e0fd22fe42a6d9c1d692a7529e8065f35803a7f1ae8182e37135d3496482",
                   },
                   ""
 pull_with_retry "",
@@ -1451,7 +1470,7 @@ pull_with_retry "",
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:b31696d74d2f501f92974e5f67e27a386ebc6968508c8154a7a193cb509ae960",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf",
                   },
                   ""
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
@@ -4145,9 +4164,12 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
               "Sid": "BedrockAccess",
             },
             {
-              "Action": "secretsmanager:GetSecretValue",
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:CreateSecret",
+              ],
               "Effect": "Allow",
-              "Resource": "arn:aws:secretsmanager:us-west-2:123456789012:secret:openhands/*",
+              "Resource": "arn:aws:secretsmanager:us-west-2:123456789012:secret:openhands/sandbox-secret-key-*",
               "Sid": "SecretsManagerAccess",
             },
             {

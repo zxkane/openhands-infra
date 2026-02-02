@@ -1,0 +1,21 @@
+# Exclude documentation and test files from Docker context
+# This prevents documentation changes from triggering image rebuilds
+
+# Documentation
+*.md
+CLAUDE.md
+README.md
+
+# Test files
+test_*.py
+__pycache__/
+*.pyc
+
+# Local configuration
+*.local.*
+
+# Editor files
+.vscode/
+*.swp
+*.swo
+*~

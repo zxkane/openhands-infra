@@ -347,6 +347,28 @@ export class ComputeStack extends cdk.Stack {
       'retry mount -a',
       'mountpoint -q /data/openhands || exit 1',
       'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
+      // Generate or retrieve OH_SECRET_KEY from Secrets Manager (persists across EC2 replacement)
+      // This key encrypts secrets in conversation state, enabling resume after sandbox restart
+      // Security: Disable xtrace to prevent logging secret value
+      // Race condition handling: If create-secret fails (another instance won), retry get-secret
+      'set +x',
+      'echo "Retrieving or creating sandbox secret key..."',
+      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text 2>/dev/null)`,
+      'if [ -z "$OH_SECRET_KEY" ]; then',
+      '  echo "Secret not found, generating new key..."',
+      '  SK=$(openssl rand -base64 32)',
+      `  if aws secretsmanager create-secret --name openhands/sandbox-secret-key --secret-string "$SK" --region "$REGION" --description "OpenHands sandbox secret key" 2>/dev/null; then`,
+      '    echo "Secret created successfully"',
+      '    OH_SECRET_KEY="$SK"',
+      '  else',
+      '    echo "Create failed (race condition?), retrieving existing secret..."',
+      `    OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text)`,
+      '  fi',
+      'fi',
+      '[ -n "$OH_SECRET_KEY" ] || { echo "ERROR: Failed to get/create sandbox secret key" >&2; exit 1; }',
+      'export OH_SECRET_KEY',
+      'echo "Sandbox secret key configured"',
+      'set -x',
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
       // OpenResty reverse proxy - runs as container on Docker bridge network
@@ -406,21 +428,26 @@ export class ComputeStack extends cdk.Stack {
       ] : [
         '      - USER_CONFIG_ENABLED=false',
       ]),
+      // OH_SECRET_KEY encrypts/decrypts secrets in conversation state (uses shell var from user-data)
+      // Required by both main app (load/save conversations) and sandbox containers (runtime access)
+      '      - OH_SECRET_KEY=$OH_SECRET_KEY',
       // Note: network_mode should NOT be set here as OpenHands sets it internally
       // Only set extra_hosts for MCP connection support (PR #12236)
       // When sandboxAwsAccess is enabled, also set environment variables for AWS credentials
+      // OH_SECRET_KEY is dynamically injected via $OH_SECRET_KEY shell variable (set in user-data)
       sandboxAwsAccess && sandboxRoleArn
-        ? `      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"${config.region}"}}`
-        : '      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"}}',
+        ? '      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}}'
+        : '      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"OH_SECRET_KEY":"$OH_SECRET_KEY"}}',
       `      - AGENT_SERVER_IMAGE_REPOSITORY=${agentServerRepo}`,
       `      - AGENT_SERVER_IMAGE_TAG=${agentServerTag}`,
       '      - AGENT_ENABLE_BROWSING=false',
       '      - AGENT_ENABLE_MCP=true',
       // Environment variables injected into sandbox containers at startup
       // When sandboxAwsAccess is enabled, include AWS_SHARED_CREDENTIALS_FILE to use scoped credentials
+      // OH_SECRET_KEY enables secret persistence across sandbox restarts (required for conversation resume)
       sandboxAwsAccess && sandboxRoleArn
-        ? `      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"${config.region}"}`
-        : '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false"}',
+        ? '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}'
+        : '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}',
       // DB_* env vars enable PostgreSQL mode in OpenHands V1 (DbSessionInjector checks DB_HOST)
       // DB_SSL=require is essential for Aurora IAM auth (asyncpg requires explicit SSL)
       // Use RDS Proxy endpoint for automatic IAM token management and connection pooling

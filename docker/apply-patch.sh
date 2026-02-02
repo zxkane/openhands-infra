@@ -1228,6 +1228,211 @@ PYEOF
   fi
 fi
 
+# Patch 22: Inject runtime_startup_env_vars (including OH_SECRET_KEY) into sandbox containers
+# The DockerSandboxService.start_sandbox() method doesn't apply config.sandbox.runtime_startup_env_vars
+# This causes sandbox containers to start without OH_SECRET_KEY, breaking secret decryption
+# when resuming conversations that have encrypted secrets in base_state.json.
+#
+# The fix adds runtime_startup_env_vars from config to the env_vars dict in start_sandbox()
+SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+if [ -f "$SANDBOX_SERVICE_FILE" ]; then
+  if grep -q "Patch 22: Inject runtime_startup_env_vars" "$SANDBOX_SERVICE_FILE"; then
+    echo "Patch 22: runtime_startup_env_vars injection already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    sandbox_file = "/app/openhands/app_server/sandbox/docker_sandbox_service.py"
+
+    with open(sandbox_file, 'r') as f:
+        content = f.read()
+
+    # Find where env_vars is built and GIT_CONFIG_PARAMETERS is added (from Patch 12/17)
+    # We need to add runtime_startup_env_vars injection after the existing env_vars setup
+    #
+    # The pattern we're looking for (after Patch 12/17):
+    #   env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'"
+    #
+    # We'll add the runtime_startup_env_vars injection right after this line
+
+    old_pattern = """env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
+
+    new_code = """env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'"
+        # Patch 22: Inject runtime_startup_env_vars (including OH_SECRET_KEY)
+        # This ensures sandbox containers can decrypt secrets in base_state.json
+        # when resuming conversations after EC2 replacement
+        try:
+            from openhands.core.config import load_openhands_config
+            oh_config = load_openhands_config()
+            if hasattr(oh_config, 'sandbox') and hasattr(oh_config.sandbox, 'runtime_startup_env_vars'):
+                runtime_env = oh_config.sandbox.runtime_startup_env_vars
+                if runtime_env:
+                    env_vars.update(runtime_env)
+                    _logger.info(f"Patch 22: Injected {len(runtime_env)} runtime_startup_env_vars into sandbox")
+        except Exception as e:
+            _logger.warning(f"Patch 22: Failed to inject runtime_startup_env_vars: {e}")"""
+
+    if old_pattern in content:
+        content = content.replace(old_pattern, new_code)
+        with open(sandbox_file, 'w') as f:
+            f.write(content)
+        print("Patch 22: runtime_startup_env_vars injection applied successfully")
+    else:
+        # Try without trailing space
+        old_pattern_alt = """env_vars['GIT_CONFIG_PARAMETERS'] = "'" + "safe.directory=*" + "'" """
+        if old_pattern_alt.strip() in content:
+            content = content.replace(old_pattern_alt.strip(), new_code.strip())
+            with open(sandbox_file, 'w') as f:
+                f.write(content)
+            print("Patch 22: runtime_startup_env_vars injection applied successfully (alt pattern)")
+        else:
+            print("WARNING: Patch 22 pattern not found - Patch 12/17 may need to be applied first")
+
+except Exception as e:
+    print(f"ERROR: Failed to apply Patch 22: {e}", file=sys.stderr)
+PYEOF
+  fi
+fi
+
+# Patch 23: Skip invalid/masked secrets during conversation resume
+# When resuming a conversation after EC2 replacement, base_state.json contains secrets
+# that are correctly masked ("value": "**********" or null). However, Pydantic validation
+# expects string values for ProviderToken and CustomSecret, causing validation errors:
+#   ValidationError: Input should be a valid string [type=string_type, input_value={'description': ..., 'value': None}]
+#
+# Fix: Modify the Secrets model_validator to catch validation errors and skip invalid secrets
+# instead of crashing. The agent will use environment variables when it needs secrets.
+SECRETS_MODEL_FILE="/app/openhands/storage/data_models/secrets.py"
+if [ -f "$SECRETS_MODEL_FILE" ]; then
+  if grep -q "Patch 23: Skip invalid secrets" "$SECRETS_MODEL_FILE"; then
+    echo "Patch 23: Invalid secrets skip already applied"
+  else
+    python3 << 'PYEOF'
+import sys
+import re
+
+try:
+    secrets_file = "/app/openhands/storage/data_models/secrets.py"
+
+    with open(secrets_file, 'r') as f:
+        content = f.read()
+
+    # We need to modify the model_validator to catch exceptions when converting secrets
+    # The original code does:
+    #   converted_tokens[provider_type] = ProviderToken.from_value(value)
+    #   converted_secrets[key] = CustomSecret.from_value(value)
+    #
+    # We need to wrap these in try/except and skip invalid secrets
+
+    # First, ensure ValidationError is imported
+    # Handle different import styles:
+    # 1. Single line: from pydantic import BaseModel, field_validator
+    # 2. Multi-line: from pydantic import (\n    BaseModel,\n    ...
+    if 'ValidationError' not in content:
+        # Check if it's a multi-line import with parentheses
+        if re.search(r'from pydantic import \(', content):
+            # Add ValidationError after the opening parenthesis
+            content = re.sub(
+                r'(from pydantic import \(\s*\n)',
+                r'\1    ValidationError,\n',
+                content,
+                count=1
+            )
+            print("Added ValidationError to multi-line pydantic imports")
+        elif 'from pydantic import' in content:
+            # Single-line import - add at the end before newline
+            content = re.sub(
+                r'(from pydantic import [^\n(]+)(\n)',
+                r'\1, ValidationError\2',
+                content,
+                count=1
+            )
+            print("Added ValidationError to single-line pydantic imports")
+        else:
+            # No pydantic import found, add a new one at the top
+            content = 'from pydantic import ValidationError\n' + content
+            print("Added new ValidationError import")
+
+    # Track how many patterns were successfully patched
+    patches_applied = 0
+
+    # Pattern 1: Fix ProviderToken.from_value exception handling
+    # The upstream code already has try/except ValueError around the conversion.
+    # We need to extend it to also catch ValidationError and TypeError.
+    # Original:  except ValueError:
+    #              # Skip invalid provider types or tokens
+    #              continue
+    # New:       except (ValueError, ValidationError, TypeError):
+    #              # Patch 23: Skip invalid provider tokens (masked during resume)
+    #              continue
+
+    # Pattern 1a: Check if code is already inside try/except (upstream has this)
+    # Look for: except ValueError:\n              # Skip invalid provider types or tokens
+    old_provider_except = r'except ValueError:\s*\n\s*# Skip invalid provider types or tokens\s*\n\s*continue'
+    new_provider_except = '''except (ValueError, ValidationError, TypeError):
+                        # Patch 23: Skip invalid provider tokens (masked with null value during resume)
+                        continue'''
+
+    if re.search(old_provider_except, content):
+        content = re.sub(old_provider_except, new_provider_except, content)
+        print("Patched ProviderToken exception to include ValidationError")
+        patches_applied += 1
+    else:
+        # Pattern 1b: Try original pattern (code not yet in try/except)
+        old_provider_pattern = r'(\s+)(converted_tokens\[provider_type\] = ProviderToken\.from_value\(value\))'
+        new_provider_code = r'''\1try:
+\1    converted_tokens[provider_type] = ProviderToken.from_value(value)
+\1except (ValueError, ValidationError, TypeError) as e:
+\1    # Patch 23: Skip invalid secrets (masked with null value during resume)
+\1    import logging
+\1    logging.getLogger(__name__).warning(f"Skipping invalid provider token {provider_type}: {e}")
+\1    continue'''
+
+        if re.search(old_provider_pattern, content):
+            content = re.sub(old_provider_pattern, new_provider_code, content)
+            print("Patched ProviderToken.from_value with try/except")
+            patches_applied += 1
+        else:
+            print("WARNING: ProviderToken.from_value pattern not found - check if upstream code changed", file=sys.stderr)
+
+    # Pattern 2: Fix CustomSecret.from_value conversion
+    # Original:  converted_secrets[key] = CustomSecret.from_value(value)
+    old_secret_pattern = r'(\s+)(converted_secrets\[key\] = CustomSecret\.from_value\(value\))'
+    new_secret_code = r'''\1try:
+\1    converted_secrets[key] = CustomSecret.from_value(value)
+\1except (ValueError, ValidationError, TypeError) as e:
+\1    # Patch 23: Skip invalid secrets (masked with null value during resume)
+\1    import logging
+\1    logging.getLogger(__name__).warning(f"Skipping invalid custom secret {key}: {e}")
+\1    continue'''
+
+    if re.search(old_secret_pattern, content):
+        content = re.sub(old_secret_pattern, new_secret_code, content)
+        print("Patched CustomSecret.from_value with try/except")
+        patches_applied += 1
+    else:
+        print("WARNING: CustomSecret.from_value pattern not found - check if upstream code changed", file=sys.stderr)
+
+    # Verify at least one pattern was patched
+    if patches_applied == 0:
+        print("ERROR: Patch 23 found NO patterns to patch - conversation resume may fail with ValidationError", file=sys.stderr)
+        sys.exit(1)
+    elif patches_applied < 2:
+        print(f"WARNING: Patch 23 only applied {patches_applied}/2 patterns", file=sys.stderr)
+
+    with open(secrets_file, 'w') as f:
+        f.write(content)
+
+    print(f"Patch 23: Invalid secrets skip applied successfully ({patches_applied}/2 patterns)")
+
+except Exception as e:
+    print(f"ERROR: Failed to apply Patch 23: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  fi
+fi
+
 # Patch 21: Verify S3SettingsStore and S3SecretsStore are properly configured
 # This is a CRITICAL security patch - settings/secrets must be user-scoped
 # Without this patch, all users share the same settings.json and secrets.json

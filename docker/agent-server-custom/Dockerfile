@@ -1,5 +1,9 @@
 # Custom agent-server build with boto3 included in PyInstaller bundle
 # This builds the agent-server binary from source with boto3/botocore as hidden imports
+#
+# Build-time patches (Patch 23-26) are applied via apply-sdk-patches.py
+# These patches MUST be at build time because PyInstaller creates an immutable binary.
+# Runtime patches are in docker/apply-patch.sh for the OpenHands container.
 
 # Stage 1: Build the binary
 FROM python:3.12-slim-bookworm AS builder
@@ -17,6 +21,12 @@ RUN pip install uv
 # Clone the OpenHands SDK repository
 WORKDIR /build
 RUN git clone --depth 1 --branch v1.8.1 https://github.com/OpenHands/software-agent-sdk.git .
+
+# Copy and run SDK patches
+# Patches 23-26: Handle invalid/masked secrets during conversation resume
+# See apply-sdk-patches.py for detailed documentation
+COPY apply-sdk-patches.py /build/
+RUN python3 /build/apply-sdk-patches.py /build
 
 # Install all dependencies including boto3
 RUN uv sync --frozen && \
@@ -167,11 +177,12 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Set AWS credentials file path for sandbox AWS access
-# The credentials file is mounted at /data/sandbox-credentials when sandboxAwsAccess is enabled
-# The file includes the region, so AWS_DEFAULT_REGION is not needed
-# If the file doesn't exist, AWS CLI falls back to instance metadata service
-ENV AWS_SHARED_CREDENTIALS_FILE=/data/sandbox-credentials
+# NOTE: AWS_SHARED_CREDENTIALS_FILE is NOT set here intentionally.
+# The agent-server uses EC2 instance role credentials via IMDS for Bedrock calls.
+# The sandbox containers receive AWS credentials through SANDBOX_RUNTIME_STARTUP_ENV_VARS
+# which is configured in compute-stack.ts to include AWS_SHARED_CREDENTIALS_FILE.
+# Setting AWS_SHARED_CREDENTIALS_FILE here would override IMDS and use sandbox credentials
+# (which expire) for agent-server's own Bedrock calls, causing "token expired" errors.
 
 # Create openhands user (or use existing UID 1000 user)
 # nikolaik/python-nodejs base image already has user 'pn' with UID 1000

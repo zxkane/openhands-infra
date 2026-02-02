@@ -1,0 +1,5 @@
+# Exclude documentation from Docker context
+# This prevents documentation changes from triggering image rebuilds
+
+*.md
+README.md
