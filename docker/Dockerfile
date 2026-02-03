@@ -15,7 +15,7 @@
 
 # Pin to specific version for stability
 # Check https://github.com/All-Hands-AI/OpenHands/releases for latest releases
-ARG OPENHANDS_VERSION=1.2.1
+ARG OPENHANDS_VERSION=1.3.0
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
 
 # Install boto3 for AWS Bedrock support (required by litellm for AWS authentication)

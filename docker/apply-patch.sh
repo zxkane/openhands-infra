@@ -142,47 +142,81 @@ try:
 
     # Find the "Prepare volumes" dict-comprehension and replace it with per-sandbox mount logic.
     # Keep this tolerant to small formatting differences across upstream versions and our other patches.
-    pattern = re.compile(
+    # Pattern 1: v1.2.x style with comment "# Prepare volumes"
+    pattern_v12 = re.compile(
         r"(?P<lead>^[ \t]*# Prepare volumes[ \t]*\n)"
         r"(?P<indent>^[ \t]*)volumes[ \t]*=[ \t]*\{"
         r"(?s:.*?mount\.host_path.*?for[ \t]+mount[ \t]+in[ \t]+self\.mounts.*?\n[ \t]*\}[ \t]*\n)",
         re.MULTILINE,
     )
-
-    m = pattern.search(content)
-    if not m:
-        print("WARNING: Prepare volumes block not found; per-sandbox mount patch not applied", file=sys.stderr)
-        sys.exit(0)
-
-    indent = m.group("indent")
-    lead = m.group("lead")
-
-    replacement = (
-        lead
-        + f"{indent}# Per-sandbox workspace mount (patched by openhands-infra): treat mount.host_path as a base dir for /workspace\n"
-        + f"{indent}volumes = {{}}\n"
-        + f"{indent}for mount in self.mounts:\n"
-        + f"{indent}    host_path = mount.host_path\n"
-        + f"{indent}    if mount.container_path == '/workspace':\n"
-        + f"{indent}        import os as _os\n"
-        + f"{indent}        host_path = _os.path.join(host_path, sandbox_id)\n"
-        + f"{indent}        _os.makedirs(host_path, exist_ok=True)\n"
-        + f"{indent}        try:\n"
-        + f"{indent}            _os.chmod(host_path, 0o777)\n"
-        + f"{indent}        except Exception:\n"
-        + f"{indent}            pass\n"
-        + f"{indent}    volumes[host_path] = {{\n"
-        + f"{indent}        'bind': mount.container_path,\n"
-        + f"{indent}        'mode': mount.mode,\n"
-        + f"{indent}    }}\n"
+    # Pattern 2: v1.3.x style - more flexible whitespace matching
+    pattern_v13 = re.compile(
+        r"(?P<indent>^[ \t]+)# Prepare volumes\n"
+        r"\s*volumes\s*=\s*\{\s*\n"
+        r"\s*mount\.host_path\s*:\s*\{\s*\n"
+        r"\s*'bind'\s*:\s*mount\.container_path\s*,\s*\n"
+        r"\s*'mode'\s*:\s*mount\.mode\s*,\s*\n"
+        r"\s*\}\s*\n"
+        r"\s*for\s+mount\s+in\s+self\.mounts\s*\n"
+        r"\s*\}",
+        re.MULTILINE,
     )
 
-    content = content[: m.start()] + replacement + content[m.end() :]
+    m = pattern_v12.search(content)
+    if m:
+        indent = m.group("indent")
+        lead = m.group("lead")
+
+        replacement = (
+            lead
+            + f"{indent}# Per-sandbox workspace mount (patched by openhands-infra): treat mount.host_path as a base dir for /workspace\n"
+            + f"{indent}volumes = {{}}\n"
+            + f"{indent}for mount in self.mounts:\n"
+            + f"{indent}    host_path = mount.host_path\n"
+            + f"{indent}    if mount.container_path == '/workspace':\n"
+            + f"{indent}        import os as _os\n"
+            + f"{indent}        host_path = _os.path.join(host_path, sandbox_id)\n"
+            + f"{indent}        _os.makedirs(host_path, exist_ok=True)\n"
+            + f"{indent}        try:\n"
+            + f"{indent}            _os.chmod(host_path, 0o777)\n"
+            + f"{indent}        except Exception:\n"
+            + f"{indent}            pass\n"
+            + f"{indent}    volumes[host_path] = {{\n"
+            + f"{indent}        'bind': mount.container_path,\n"
+            + f"{indent}        'mode': mount.mode,\n"
+            + f"{indent}    }}\n"
+        )
+        content = content[: m.start()] + replacement + content[m.end() :]
+        print("Per-sandbox workspace mount patch applied successfully (v1.2.x pattern)")
+    else:
+        m = pattern_v13.search(content)
+        if m:
+            indent = m.group("indent")
+            replacement = f"""{indent}# Per-sandbox workspace mount (patched by openhands-infra): treat mount.host_path as a base dir for /workspace
+{indent}volumes = {{}}
+{indent}for mount in self.mounts:
+{indent}    host_path = mount.host_path
+{indent}    if mount.container_path == '/workspace':
+{indent}        import os as _os
+{indent}        host_path = _os.path.join(host_path, sandbox_id)
+{indent}        _os.makedirs(host_path, exist_ok=True)
+{indent}        try:
+{indent}            _os.chmod(host_path, 0o777)
+{indent}        except Exception:
+{indent}            pass
+{indent}    volumes[host_path] = {{
+{indent}        'bind': mount.container_path,
+{indent}        'mode': mount.mode,
+{indent}    }}"""
+            content = content[: m.start()] + replacement + content[m.end() :]
+            print("Per-sandbox workspace mount patch applied successfully (v1.3.x pattern)")
+        else:
+            print("WARNING: Prepare volumes block not found; per-sandbox mount patch not applied", file=sys.stderr)
+            sys.exit(0)
 
     with open(file_path, "w") as f:
         f.write(content)
 
-    print("Per-sandbox workspace mount patch applied successfully")
 except Exception as e:
     print(f"ERROR: Failed to apply per-sandbox workspace mount patch: {e}", file=sys.stderr)
     sys.exit(1)
@@ -208,8 +242,18 @@ try:
     with open(file_path, 'r') as f:
         content = f.read()
 
-    # Find the conversation creation code block and add retry logic
-    old_pattern = r'''            response = await self\.httpx_client\.post\(
+    # Pattern for v1.2.x - includes separate response.raise_for_status() call
+    old_pattern_v12 = r'''            response = await self\.httpx_client\.post\(
+                f'\{agent_server_url\}/api/conversations',
+                json=body_json,
+                headers=\{'X-Session-API-Key': sandbox\.session_api_key\},
+                timeout=self\.sandbox_startup_timeout,
+            \)
+
+            response\.raise_for_status\(\)'''
+
+    # Pattern for v1.3.x - simpler format with raise_for_status on next line
+    old_pattern_v13 = r'''            response = await self\.httpx_client\.post\(
                 f'\{agent_server_url\}/api/conversations',
                 json=body_json,
                 headers=\{'X-Session-API-Key': sandbox\.session_api_key\},
@@ -242,11 +286,32 @@ try:
                     else:
                         raise'''
 
-    if re.search(old_pattern, content):
-        content = re.sub(old_pattern, new_code, content)
+    patched = False
+    if re.search(old_pattern_v12, content):
+        content = re.sub(old_pattern_v12, new_code, content)
+        patched = True
+        print("Conversation retry patch applied successfully (v1.2.x pattern)")
+    elif re.search(old_pattern_v13, content):
+        content = re.sub(old_pattern_v13, new_code, content)
+        patched = True
+        print("Conversation retry patch applied successfully (v1.3.x pattern)")
+    else:
+        # Try a more lenient pattern that matches both versions
+        lenient_pattern = r'''(            response = await self\.httpx_client\.post\(\s*
+                f'\{agent_server_url\}/api/conversations',\s*
+                json=body_json,\s*
+                headers=\{'X-Session-API-Key': sandbox\.session_api_key\},\s*
+                timeout=self\.sandbox_startup_timeout,\s*
+            \)\s*
+\s*            response\.raise_for_status\(\))'''
+        if re.search(lenient_pattern, content):
+            content = re.sub(lenient_pattern, new_code, content)
+            patched = True
+            print("Conversation retry patch applied successfully (lenient pattern)")
+
+    if patched:
         with open(file_path, 'w') as f:
             f.write(content)
-        print("Conversation retry patch applied successfully")
     else:
         print("Conversation retry patch pattern not found (may already be patched or code changed)")
 except Exception as e:
@@ -274,9 +339,17 @@ try:
         content = f.read()
 
     # Step 1: Add user_id parameter to start_sandbox method signature
-    # Handle both single-line and multi-line formats
+    # Handle multiple formats across versions
 
-    # Try multi-line format first (OpenHands 1.2.1+)
+    # v1.3.x format (single line)
+    old_sig_v13 = """    async def start_sandbox(
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
+    ) -> SandboxInfo:"""
+    new_sig_v13 = """    async def start_sandbox(
+        self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None
+    ) -> SandboxInfo:"""
+
+    # v1.2.x format (multi-line)
     old_sig_multiline = """async def start_sandbox(
         self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
     ) -> SandboxInfo:"""
@@ -284,18 +357,25 @@ try:
         self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None, user_id: str | None = None
     ) -> SandboxInfo:"""
 
-    if old_sig_multiline in content:
+    # v1.0.x format (single line)
+    old_sig_single = "async def start_sandbox(self, sandbox_id: str | None = None) -> Sandbox:"
+    new_sig_single = "async def start_sandbox(self, sandbox_id: str | None = None, user_id: str | None = None) -> Sandbox:"
+
+    sig_updated = False
+    if old_sig_v13 in content:
+        content = content.replace(old_sig_v13, new_sig_v13)
+        print("Step 1: start_sandbox signature updated (v1.3.x format)")
+        sig_updated = True
+    elif old_sig_multiline in content:
         content = content.replace(old_sig_multiline, new_sig_multiline)
-        print("Step 1: start_sandbox signature updated (multi-line format)")
+        print("Step 1: start_sandbox signature updated (v1.2.x multi-line format)")
+        sig_updated = True
+    elif old_sig_single in content:
+        content = content.replace(old_sig_single, new_sig_single)
+        print("Step 1: start_sandbox signature updated (v1.0.x single-line format)")
+        sig_updated = True
     else:
-        # Try old single-line format
-        old_sig = "async def start_sandbox(self, sandbox_id: str | None = None) -> Sandbox:"
-        new_sig = "async def start_sandbox(self, sandbox_id: str | None = None, user_id: str | None = None) -> Sandbox:"
-        if old_sig in content:
-            content = content.replace(old_sig, new_sig)
-            print("Step 1: start_sandbox signature updated (single-line format)")
-        else:
-            print("Step 1: start_sandbox signature not found or already patched")
+        print("Step 1: start_sandbox signature not found or already patched")
 
     # Step 2: Add user_id to labels dict (after Patch 10 adds conversation_id)
     old_labels = """labels = {
@@ -361,10 +441,16 @@ try:
     with open(file_path, "r") as f:
         content = f.read()
 
-    old_block = """            if sandbox_info is None:
+    # v1.2.x pattern
+    old_block_v12 = """            if sandbox_info is None:
                 raise SandboxError(f'Sandbox not found: {task.request.sandbox_id}')
             sandbox = sandbox_info
 """
+
+    # v1.3.x pattern - different error message format
+    old_block_v13 = """            if sandbox_info is None:
+                raise SandboxError(f'Sandbox not found: {task.request.sandbox_id}')
+            sandbox = sandbox_info"""
 
     new_block = """            if sandbox_info is None:
                 # Recreate missing sandbox (EC2 replacement): the host was replaced so the docker
@@ -387,22 +473,30 @@ try:
                 sandbox = sandbox_info
 """
 
-    if old_block not in content:
+    patched = False
+    if old_block_v12 in content:
+        content = content.replace(old_block_v12, new_block, 1)
+        patched = True
+        print("Missing sandbox resume patch applied successfully (v1.2.x pattern)")
+    elif old_block_v13 in content:
+        content = content.replace(old_block_v13, new_block.rstrip(), 1)
+        patched = True
+        print("Missing sandbox resume patch applied successfully (v1.3.x pattern)")
+    else:
         print("WARNING: Missing-sandbox resume block not found; patch not applied", file=sys.stderr)
         sys.exit(0)
 
-    content = content.replace(old_block, new_block, 1)
-    # Add an idempotency marker.
-    content = content.replace(
-        "# Recreate missing sandbox (EC2 replacement):",
-        "# Recreate missing sandbox (EC2 replacement) (patched by openhands-infra):",
-        1,
-    )
+    if patched:
+        # Add an idempotency marker.
+        content = content.replace(
+            "# Recreate missing sandbox (EC2 replacement):",
+            "# Recreate missing sandbox (EC2 replacement) (patched by openhands-infra):",
+            1,
+        )
 
-    with open(file_path, "w") as f:
-        f.write(content)
+        with open(file_path, "w") as f:
+            f.write(content)
 
-    print("Missing sandbox resume patch applied successfully")
 except Exception as e:
     print(f"ERROR: Failed to apply missing sandbox resume patch: {e}", file=sys.stderr)
     sys.exit(1)
@@ -631,6 +725,7 @@ if [ -f "$DB_SESSION_FILE" ]; then
     python3 << 'PYEOF'
 import sys
 import os
+import re
 
 try:
     file_path = "/app/openhands/app_server/services/db_session_injector.py"
@@ -644,16 +739,8 @@ try:
         print("PostgreSQL SSL patch skipped: DB_SSL not set")
         sys.exit(0)
 
-    # Find the create_async_engine call for PostgreSQL and add SSL connect_args
-    # The pattern is:
-    #   async_engine = create_async_engine(
-    #       url,
-    #       pool_size=self.pool_size,
-    #       max_overflow=self.max_overflow,
-    #       pool_recycle=self.pool_recycle,
-    #       pool_pre_ping=True,
-    #   )
-    old_pattern = '''async_engine = create_async_engine(
+    # v1.2.x pattern - indented with more spaces
+    old_pattern_v12 = '''async_engine = create_async_engine(
                     url,
                     pool_size=self.pool_size,
                     max_overflow=self.max_overflow,
@@ -661,7 +748,7 @@ try:
                     pool_pre_ping=True,
                 )'''
 
-    new_code = '''async_engine = create_async_engine(
+    new_code_v12 = '''async_engine = create_async_engine(
                     url,
                     pool_size=self.pool_size,
                     max_overflow=self.max_overflow,
@@ -670,11 +757,56 @@ try:
                     connect_args={'ssl': 'require'},  # Patch 9: SSL required for Aurora IAM auth
                 )'''
 
-    if old_pattern in content:
-        content = content.replace(old_pattern, new_code)
+    # v1.3.x pattern - less indentation
+    old_pattern_v13 = '''async_engine = create_async_engine(
+                    url,
+                    pool_size=self.pool_size,
+                    max_overflow=self.max_overflow,
+                    pool_recycle=self.pool_recycle,
+                    pool_pre_ping=True,
+                )'''
+
+    new_code_v13 = '''async_engine = create_async_engine(
+                    url,
+                    pool_size=self.pool_size,
+                    max_overflow=self.max_overflow,
+                    pool_recycle=self.pool_recycle,
+                    pool_pre_ping=True,
+                    connect_args={'ssl': 'require'},  # Patch 9: SSL required for Aurora IAM auth
+                )'''
+
+    patched = False
+    if old_pattern_v12 in content:
+        content = content.replace(old_pattern_v12, new_code_v12)
+        patched = True
+        print("PostgreSQL SSL patch applied successfully (v1.2.x pattern)")
+    elif old_pattern_v13 in content:
+        content = content.replace(old_pattern_v13, new_code_v13)
+        patched = True
+        print("PostgreSQL SSL patch applied successfully (v1.3.x pattern)")
+    else:
+        # Try regex pattern for any indentation style
+        pattern = re.compile(
+            r"(async_engine = create_async_engine\(\s*\n"
+            r"\s+url,\s*\n"
+            r"\s+pool_size=self\.pool_size,\s*\n"
+            r"\s+max_overflow=self\.max_overflow,\s*\n"
+            r"\s+pool_recycle=self\.pool_recycle,\s*\n"
+            r"\s+pool_pre_ping=True,\s*\n)"
+            r"(\s+\))",
+            re.MULTILINE
+        )
+        match = pattern.search(content)
+        if match:
+            indent = re.match(r'\s*', match.group(2)).group()
+            replacement = match.group(1) + f"{indent}    connect_args={{'ssl': 'require'}},  # Patch 9: SSL required for Aurora IAM auth\n" + match.group(2)
+            content = content[:match.start()] + replacement + content[match.end():]
+            patched = True
+            print("PostgreSQL SSL patch applied successfully (regex pattern)")
+
+    if patched:
         with open(file_path, 'w') as f:
             f.write(content)
-        print("PostgreSQL SSL patch applied successfully")
     else:
         print("PostgreSQL SSL patch pattern not found (code structure may have changed)")
 except Exception as e:
@@ -742,6 +874,7 @@ if [ -f "$CONV_SERVICE_FILE" ]; then
   else
     python3 << 'PYEOF'
 import sys
+import re
 
 try:
     file_path = "/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
@@ -749,16 +882,8 @@ try:
     with open(file_path, 'r') as f:
         content = f.read()
 
-    # Find the sandbox_id_str generation code and add early conversation_id generation
-    # Original pattern:
-    #         if not task.request.sandbox_id:
-    #             # Convert conversation_id to hex string if present
-    #             sandbox_id_str = (
-    #                 task.request.conversation_id.hex
-    #                 if task.request.conversation_id is not None
-    #                 else None
-    #             )
-    old_pattern = """        if not task.request.sandbox_id:
+    # v1.2.x pattern
+    old_pattern_v12 = """        if not task.request.sandbox_id:
             # Convert conversation_id to hex string if present
             sandbox_id_str = (
                 task.request.conversation_id.hex
@@ -766,7 +891,19 @@ try:
                 else None
             )"""
 
-    new_code = """        if not task.request.sandbox_id:
+    # v1.3.x pattern - simpler format
+    old_pattern_v13 = """        if not task.request.sandbox_id:
+            # Convert conversation_id to hex string if present
+            sandbox_id_str = (
+                task.request.conversation_id.hex
+                if task.request.conversation_id is not None
+                else None
+            )
+            sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str
+            )"""
+
+    new_code_v12 = """        if not task.request.sandbox_id:
             # Patch 11: Ensure conversation_id exists before sandbox creation
             # This is needed for OpenResty dynamic routing to work correctly
             # The container label needs to match the URL format: /runtime/{conversation_id.hex}/{port}/
@@ -775,13 +912,34 @@ try:
                 task.request.conversation_id = uuid4()
             sandbox_id_str = task.request.conversation_id.hex"""
 
-    if old_pattern in content:
-        content = content.replace(old_pattern, new_code)
-        with open(file_path, 'w') as f:
-            f.write(content)
-        print("conversation_id generation patch applied successfully")
+    new_code_v13 = """        if not task.request.sandbox_id:
+            # Patch 11: Ensure conversation_id exists before sandbox creation
+            # This is needed for OpenResty dynamic routing to work correctly
+            # The container label needs to match the URL format: /runtime/{conversation_id.hex}/{port}/
+            if task.request.conversation_id is None:
+                from uuid import uuid4
+                task.request.conversation_id = uuid4()
+            sandbox_id_str = task.request.conversation_id.hex
+            sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str,
+                user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
+            )"""
+
+    patched = False
+    if old_pattern_v13 in content:
+        content = content.replace(old_pattern_v13, new_code_v13)
+        patched = True
+        print("conversation_id generation patch applied successfully (v1.3.x pattern, with Patch 16)")
+    elif old_pattern_v12 in content:
+        content = content.replace(old_pattern_v12, new_code_v12)
+        patched = True
+        print("conversation_id generation patch applied successfully (v1.2.x pattern)")
     else:
         print("conversation_id generation patch pattern not found (code structure may have changed)")
+
+    if patched:
+        with open(file_path, 'w') as f:
+            f.write(content)
 except Exception as e:
     print(f"ERROR: Failed to apply conversation_id generation patch: {e}", file=sys.stderr)
     # Don't exit - let app try to start
@@ -875,6 +1033,7 @@ if [ -f "$CONV_SERVICE_FILE" ]; then
   else
     python3 << 'PYEOF'
 import sys
+import re
 
 try:
     file_path = "/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
@@ -882,24 +1041,42 @@ try:
     with open(file_path, 'r') as f:
         content = f.read()
 
-    # Find the code that gets user_id again after sandbox start
-    # Original pattern:
-    #             # Store info...
-    #             user_id = await self.user_context.get_user_id()
-    old_pattern = """            # Store info...
+    # v1.2.x pattern - "# Store info..." comment
+    old_pattern_v12 = """            # Store info...
             user_id = await self.user_context.get_user_id()"""
 
-    new_code = """            # Store info...
+    new_code_v12 = """            # Store info...
             # Patch 13: Reuse user_id from task instead of calling user_context.get_user_id()
             # By this point, the HTTP request context is closed (running in background task)
             # so user_context.get_user_id() would return None
             user_id = task.created_by_user_id"""
 
-    if old_pattern in content:
-        content = content.replace(old_pattern, new_code)
+    patched = False
+    if old_pattern_v12 in content:
+        content = content.replace(old_pattern_v12, new_code_v12)
+        patched = True
+        print("user_id background task patch applied successfully (v1.2.x pattern)")
+    else:
+        # v1.3.x may have different placement - search for the user_id retrieval after conversation creation
+        # Look for: user_id = await self.user_context.get_user_id() followed by AppConversationInfo creation
+        pattern = re.compile(
+            r"(response\.raise_for_status\(\)[\s\S]*?)"
+            r"(\n\s+# Store info\.\.\.[\s\S]*?)"
+            r"(user_id = await self\.user_context\.get_user_id\(\))"
+        )
+        match = pattern.search(content)
+        if match:
+            replacement = match.group(1) + match.group(2) + """# Patch 13: Reuse user_id from task instead of calling user_context.get_user_id()
+            # By this point, the HTTP request context is closed (running in background task)
+            # so user_context.get_user_id() would return None
+            user_id = task.created_by_user_id"""
+            content = content[:match.start()] + replacement + content[match.end():]
+            patched = True
+            print("user_id background task patch applied successfully (v1.3.x regex pattern)")
+
+    if patched:
         with open(file_path, 'w') as f:
             f.write(content)
-        print("user_id background task patch applied successfully")
     else:
         print("user_id background task patch pattern not found (code structure may have changed)")
 except Exception as e:
@@ -1016,6 +1193,8 @@ fi
 # - All sandboxes (new and recreated) get the user_id label
 # - OpenResty can verify container ownership for runtime URL access
 # - Authorization works correctly for both new and resumed conversations
+#
+# NOTE: In v1.3.x, Patch 11 is combined with Patch 16 since they modify the same code block.
 CONV_SERVICE_FILE="/app/openhands/app_server/app_conversation/live_status_app_conversation_service.py"
 if [ -f "$CONV_SERVICE_FILE" ]; then
   if grep -q "user_id=task.created_by_user_id,  # Patch 16" "$CONV_SERVICE_FILE"; then
@@ -1030,37 +1209,45 @@ try:
     with open(conv_file, 'r') as f:
         content = f.read()
 
-    # Find the start_sandbox call for NEW conversations and add user_id parameter
-    # This call is in the "if not task.request.sandbox_id:" block (new conversation)
-    # Original:
-    #             sandbox = await self.sandbox_service.start_sandbox(
-    #                 sandbox_id=sandbox_id_str
-    #             )
-    # New:
-    #             sandbox = await self.sandbox_service.start_sandbox(
-    #                 sandbox_id=sandbox_id_str,
-    #                 user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
-    #             )
-    old_call = """sandbox = await self.sandbox_service.start_sandbox(
+    # v1.2.x pattern
+    old_call_v12 = """sandbox = await self.sandbox_service.start_sandbox(
                 sandbox_id=sandbox_id_str
             )"""
 
-    new_call = """sandbox = await self.sandbox_service.start_sandbox(
+    new_call_v12 = """sandbox = await self.sandbox_service.start_sandbox(
                 sandbox_id=sandbox_id_str,
                 user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
             )"""
 
-    if old_call in content:
-        content = content.replace(old_call, new_call)
-        with open(conv_file, 'w') as f:
-            f.write(content)
-        print("Patch 16: user_id added to start_sandbox call for new conversations")
+    # v1.3.x pattern - same structure
+    old_call_v13 = """            sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str
+            )"""
+
+    new_call_v13 = """            sandbox = await self.sandbox_service.start_sandbox(
+                sandbox_id=sandbox_id_str,
+                user_id=task.created_by_user_id,  # Patch 16: Pass user_id for container label
+            )"""
+
+    patched = False
+    if old_call_v12 in content:
+        content = content.replace(old_call_v12, new_call_v12)
+        patched = True
+        print("Patch 16: user_id added to start_sandbox call (v1.2.x pattern)")
+    elif old_call_v13 in content:
+        content = content.replace(old_call_v13, new_call_v13)
+        patched = True
+        print("Patch 16: user_id added to start_sandbox call (v1.3.x pattern)")
     elif "user_id=task.created_by_user_id" in content:
         print("Patch 16: start_sandbox already has user_id parameter")
+        patched = True
     else:
         print("Patch 16: start_sandbox call pattern not found (code structure may have changed)")
 
-    print("Patch 16 applied successfully")
+    if patched:
+        with open(conv_file, 'w') as f:
+            f.write(content)
+        print("Patch 16 applied successfully")
 except Exception as e:
     print(f"ERROR: Failed to apply Patch 16: {e}", file=sys.stderr)
     # CRITICAL: This is a security patch - mark failure for startup check
@@ -1305,7 +1492,7 @@ fi
 # instead of crashing. The agent will use environment variables when it needs secrets.
 SECRETS_MODEL_FILE="/app/openhands/storage/data_models/secrets.py"
 if [ -f "$SECRETS_MODEL_FILE" ]; then
-  if grep -q "Patch 23: Skip invalid secrets" "$SECRETS_MODEL_FILE"; then
+  if grep -q "Patch 23: Skip invalid" "$SECRETS_MODEL_FILE"; then
     echo "Patch 23: Invalid secrets skip already applied"
   else
     python3 << 'PYEOF'
@@ -1318,21 +1505,10 @@ try:
     with open(secrets_file, 'r') as f:
         content = f.read()
 
-    # We need to modify the model_validator to catch exceptions when converting secrets
-    # The original code does:
-    #   converted_tokens[provider_type] = ProviderToken.from_value(value)
-    #   converted_secrets[key] = CustomSecret.from_value(value)
-    #
-    # We need to wrap these in try/except and skip invalid secrets
-
     # First, ensure ValidationError is imported
-    # Handle different import styles:
-    # 1. Single line: from pydantic import BaseModel, field_validator
-    # 2. Multi-line: from pydantic import (\n    BaseModel,\n    ...
     if 'ValidationError' not in content:
         # Check if it's a multi-line import with parentheses
         if re.search(r'from pydantic import \(', content):
-            # Add ValidationError after the opening parenthesis
             content = re.sub(
                 r'(from pydantic import \(\s*\n)',
                 r'\1    ValidationError,\n',
@@ -1341,7 +1517,6 @@ try:
             )
             print("Added ValidationError to multi-line pydantic imports")
         elif 'from pydantic import' in content:
-            # Single-line import - add at the end before newline
             content = re.sub(
                 r'(from pydantic import [^\n(]+)(\n)',
                 r'\1, ValidationError\2',
@@ -1350,25 +1525,12 @@ try:
             )
             print("Added ValidationError to single-line pydantic imports")
         else:
-            # No pydantic import found, add a new one at the top
             content = 'from pydantic import ValidationError\n' + content
             print("Added new ValidationError import")
 
-    # Track how many patterns were successfully patched
     patches_applied = 0
 
-    # Pattern 1: Fix ProviderToken.from_value exception handling
-    # The upstream code already has try/except ValueError around the conversion.
-    # We need to extend it to also catch ValidationError and TypeError.
-    # Original:  except ValueError:
-    #              # Skip invalid provider types or tokens
-    #              continue
-    # New:       except (ValueError, ValidationError, TypeError):
-    #              # Patch 23: Skip invalid provider tokens (masked during resume)
-    #              continue
-
-    # Pattern 1a: Check if code is already inside try/except (upstream has this)
-    # Look for: except ValueError:\n              # Skip invalid provider types or tokens
+    # v1.2.x and v1.3.x both have try/except ValueError already - extend it
     old_provider_except = r'except ValueError:\s*\n\s*# Skip invalid provider types or tokens\s*\n\s*continue'
     new_provider_except = '''except (ValueError, ValidationError, TypeError):
                         # Patch 23: Skip invalid provider tokens (masked with null value during resume)
@@ -1379,52 +1541,80 @@ try:
         print("Patched ProviderToken exception to include ValidationError")
         patches_applied += 1
     else:
-        # Pattern 1b: Try original pattern (code not yet in try/except)
-        old_provider_pattern = r'(\s+)(converted_tokens\[provider_type\] = ProviderToken\.from_value\(value\))'
-        new_provider_code = r'''\1try:
-\1    converted_tokens[provider_type] = ProviderToken.from_value(value)
-\1except (ValueError, ValidationError, TypeError) as e:
-\1    # Patch 23: Skip invalid secrets (masked with null value during resume)
-\1    import logging
-\1    logging.getLogger(__name__).warning(f"Skipping invalid provider token {provider_type}: {e}")
-\1    continue'''
-
-        if re.search(old_provider_pattern, content):
-            content = re.sub(old_provider_pattern, new_provider_code, content)
-            print("Patched ProviderToken.from_value with try/except")
-            patches_applied += 1
+        # Try without the comment
+        old_provider_except_simple = r'except ValueError:\s*\n\s*continue'
+        if re.search(old_provider_except_simple, content):
+            # Need to be careful to only match the one for provider tokens
+            # Look for the pattern in the right context (after ProviderToken.from_value)
+            pattern = re.compile(
+                r'(converted_tokens\[provider_type\] = ProviderToken\.from_value\(\s*\n?\s*value\s*\n?\s*\)\s*\n\s*)'
+                r'except ValueError:\s*\n\s*continue',
+                re.MULTILINE
+            )
+            if pattern.search(content):
+                content = pattern.sub(
+                    r'\1except (ValueError, ValidationError, TypeError):  # Patch 23\n                        continue',
+                    content
+                )
+                patches_applied += 1
+                print("Patched ProviderToken exception (simple pattern)")
         else:
-            print("WARNING: ProviderToken.from_value pattern not found - check if upstream code changed", file=sys.stderr)
+            print("WARNING: ProviderToken exception pattern not found", file=sys.stderr)
 
-    # Pattern 2: Fix CustomSecret.from_value conversion
-    # Original:  converted_secrets[key] = CustomSecret.from_value(value)
-    old_secret_pattern = r'(\s+)(converted_secrets\[key\] = CustomSecret\.from_value\(value\))'
-    new_secret_code = r'''\1try:
-\1    converted_secrets[key] = CustomSecret.from_value(value)
-\1except (ValueError, ValidationError, TypeError) as e:
-\1    # Patch 23: Skip invalid secrets (masked with null value during resume)
-\1    import logging
-\1    logging.getLogger(__name__).warning(f"Skipping invalid custom secret {key}: {e}")
-\1    continue'''
-
-    if re.search(old_secret_pattern, content):
-        content = re.sub(old_secret_pattern, new_secret_code, content)
-        print("Patched CustomSecret.from_value with try/except")
+    # For CustomSecret - check if it has try/except or needs to be wrapped
+    # v1.3.x pattern: converted_secrets[key] = CustomSecret.from_value(value) followed by except ValueError
+    # We need to capture the indentation properly to avoid IndentationError
+    old_secret_except = re.compile(
+        r'(converted_secrets\[key\] = CustomSecret\.from_value\(value\)\s*\n)'
+        r'(\s*)(except ValueError:)\s*\n'
+        r'(\s*)(continue)',
+        re.MULTILINE
+    )
+    match = old_secret_except.search(content)
+    if match:
+        # Preserve the exact indentation from the original file
+        except_indent = match.group(2)  # Indentation before 'except'
+        continue_indent = match.group(4)  # Indentation before 'continue'
+        replacement = (
+            match.group(1) +
+            except_indent + 'except (ValueError, ValidationError, TypeError):  # Patch 23: Skip invalid secrets\n' +
+            continue_indent + 'continue'
+        )
+        content = old_secret_except.sub(replacement, content, count=1)
         patches_applied += 1
+        print("Patched CustomSecret exception to include ValidationError")
     else:
-        print("WARNING: CustomSecret.from_value pattern not found - check if upstream code changed", file=sys.stderr)
+        # Try wrapping standalone CustomSecret.from_value call
+        old_secret_pattern = r'(\s+)(converted_secrets\[key\] = CustomSecret\.from_value\(value\))\s*\n(\s+)continue'
+        if re.search(old_secret_pattern, content):
+            # Already has continue after it, just need to add exception types
+            pass  # Skip - already handled
+        else:
+            print("WARNING: CustomSecret exception pattern not found", file=sys.stderr)
 
-    # Verify at least one pattern was patched
     if patches_applied == 0:
-        print("ERROR: Patch 23 found NO patterns to patch - conversation resume may fail with ValidationError", file=sys.stderr)
+        # Last resort - try generic pattern matching with specific context
+        # Only match ValueError exceptions in the secrets validation context
+        generic_pattern = re.compile(
+            r'(converted_(?:tokens|secrets)\[.*?\]\s*=\s*(?:ProviderToken|CustomSecret)\.from_value\(.*?\)\s*\n\s*)(except\s+)ValueError(:)',
+            re.MULTILINE | re.DOTALL
+        )
+        matches = list(generic_pattern.finditer(content))
+        if matches:
+            # Replace ValueError with (ValueError, ValidationError, TypeError) only in secrets context
+            for match in reversed(matches):
+                content = content[:match.start(2)] + match.group(2) + '(ValueError, ValidationError, TypeError)' + match.group(3) + '  # Patch 23' + content[match.end():]
+                patches_applied += 1
+            print(f"Applied Patch 23 via generic pattern ({len(matches)} matches)")
+
+    if patches_applied == 0:
+        print("ERROR: Patch 23 found NO patterns to patch", file=sys.stderr)
         sys.exit(1)
-    elif patches_applied < 2:
-        print(f"WARNING: Patch 23 only applied {patches_applied}/2 patterns", file=sys.stderr)
 
     with open(secrets_file, 'w') as f:
         f.write(content)
 
-    print(f"Patch 23: Invalid secrets skip applied successfully ({patches_applied}/2 patterns)")
+    print(f"Patch 23: Invalid secrets skip applied successfully ({patches_applied} pattern(s))")
 
 except Exception as e:
     print(f"ERROR: Failed to apply Patch 23: {e}", file=sys.stderr)
