@@ -149,16 +149,16 @@ try:
         r"(?s:.*?mount\.host_path.*?for[ \t]+mount[ \t]+in[ \t]+self\.mounts.*?\n[ \t]*\}[ \t]*\n)",
         re.MULTILINE,
     )
-    # Pattern 2: v1.3.x style without leading comment
+    # Pattern 2: v1.3.x style - more flexible whitespace matching
     pattern_v13 = re.compile(
         r"(?P<indent>^[ \t]+)# Prepare volumes\n"
-        r"\s+volumes = \{\n"
-        r"\s+mount\.host_path: \{\n"
-        r"\s+'bind': mount\.container_path,\n"
-        r"\s+'mode': mount\.mode,\n"
-        r"\s+\}\n"
-        r"\s+for mount in self\.mounts\n"
-        r"\s+\}",
+        r"\s*volumes\s*=\s*\{\s*\n"
+        r"\s*mount\.host_path\s*:\s*\{\s*\n"
+        r"\s*'bind'\s*:\s*mount\.container_path\s*,\s*\n"
+        r"\s*'mode'\s*:\s*mount\.mode\s*,\s*\n"
+        r"\s*\}\s*\n"
+        r"\s*for\s+mount\s+in\s+self\.mounts\s*\n"
+        r"\s*\}",
         re.MULTILINE,
     )
 
