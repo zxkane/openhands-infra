@@ -48,6 +48,15 @@ npx cdk diff --all --context ...
 - `subDomain` - Optional, defaults to "openhands"
 - `region` - Optional, defaults to us-east-1
 
+### Prerequisites (First-Time Deployment)
+
+Create sandbox secret key before first deployment:
+```bash
+aws secretsmanager create-secret --name openhands/sandbox-secret-key \
+  --secret-string "$(openssl rand -base64 32)" --region <region> \
+  --description "OpenHands sandbox secret key for session encryption"
+```
+
 ## Architecture (8 Stacks)
 
 ```
