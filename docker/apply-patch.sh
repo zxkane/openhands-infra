@@ -1582,14 +1582,17 @@ try:
             print("WARNING: CustomSecret exception pattern not found", file=sys.stderr)
 
     if patches_applied == 0:
-        # Last resort - try generic pattern matching
-        # Look for: try: ... ProviderToken.from_value ... except ValueError:
-        generic_pattern = re.compile(r'(except\s+)ValueError(:)', re.MULTILINE)
+        # Last resort - try generic pattern matching with specific context
+        # Only match ValueError exceptions in the secrets validation context
+        generic_pattern = re.compile(
+            r'(converted_(?:tokens|secrets)\[.*?\]\s*=\s*(?:ProviderToken|CustomSecret)\.from_value\(.*?\)\s*\n\s*)(except\s+)ValueError(:)',
+            re.MULTILINE | re.DOTALL
+        )
         matches = list(generic_pattern.finditer(content))
         if matches:
-            # Replace all ValueError with (ValueError, ValidationError, TypeError)
+            # Replace ValueError with (ValueError, ValidationError, TypeError) only in secrets context
             for match in reversed(matches):
-                content = content[:match.start()] + match.group(1) + '(ValueError, ValidationError, TypeError)' + match.group(2) + '  # Patch 23' + content[match.end():]
+                content = content[:match.start(2)] + match.group(2) + '(ValueError, ValidationError, TypeError)' + match.group(3) + '  # Patch 23' + content[match.end():]
                 patches_applied += 1
             print(f"Applied Patch 23 via generic pattern ({len(matches)} matches)")
 
