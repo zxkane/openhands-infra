@@ -80,7 +80,21 @@ npx cdk bootstrap --region <your-main-region>
 npx cdk bootstrap --region us-east-1  # Required for Lambda@Edge and CloudFront
 ```
 
-### 4. Deploy
+### 4. Create Sandbox Secret Key (First Time Only)
+
+The sandbox secret key is used to encrypt secrets in conversation state, enabling session resume after sandbox restart. Create it before deployment:
+
+```bash
+aws secretsmanager create-secret \
+  --name openhands/sandbox-secret-key \
+  --secret-string "$(openssl rand -base64 32)" \
+  --region <your-main-region> \
+  --description "OpenHands sandbox secret key for session encryption"
+```
+
+**Note**: This secret must exist in each region where you deploy. If deploying to multiple regions, create the secret in each region.
+
+### 5. Deploy
 
 ```bash
 # Deploy all stacks
@@ -102,7 +116,7 @@ npx cdk deploy --all \
 5. Compute (main region) - depends on Network, Security, Monitoring, Database
 6. Edge (us-east-1) - depends on Compute
 
-### 5. Access OpenHands
+### 6. Access OpenHands
 
 After deployment, access OpenHands at:
 ```
