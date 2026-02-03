@@ -1563,13 +1563,24 @@ try:
 
     # For CustomSecret - check if it has try/except or needs to be wrapped
     # v1.3.x pattern: converted_secrets[key] = CustomSecret.from_value(value) followed by except ValueError
-    old_secret_except = r'(converted_secrets\[key\] = CustomSecret\.from_value\(value\)\s*\n\s*)except ValueError:\s*\n\s*continue'
-    if re.search(old_secret_except, content):
-        content = re.sub(
-            old_secret_except,
-            r'\1except (ValueError, ValidationError, TypeError):  # Patch 23: Skip invalid secrets\n                    continue',
-            content
+    # We need to capture the indentation properly to avoid IndentationError
+    old_secret_except = re.compile(
+        r'(converted_secrets\[key\] = CustomSecret\.from_value\(value\)\s*\n)'
+        r'(\s*)(except ValueError:)\s*\n'
+        r'(\s*)(continue)',
+        re.MULTILINE
+    )
+    match = old_secret_except.search(content)
+    if match:
+        # Preserve the exact indentation from the original file
+        except_indent = match.group(2)  # Indentation before 'except'
+        continue_indent = match.group(4)  # Indentation before 'continue'
+        replacement = (
+            match.group(1) +
+            except_indent + 'except (ValueError, ValidationError, TypeError):  # Patch 23: Skip invalid secrets\n' +
+            continue_indent + 'continue'
         )
+        content = old_secret_except.sub(replacement, content, count=1)
         patches_applied += 1
         print("Patched CustomSecret exception to include ValidationError")
     else:
