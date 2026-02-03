@@ -34,7 +34,7 @@ import {
  * See docker/ directory for Dockerfile contents.
  */
 const DEFAULT_OPENHANDS_VERSION = '1.3.0';
-// Runtime version matching OpenHands 1.2.x - see docker-compose.yml in OpenHands repo
+// Runtime version matching OpenHands 1.3.x - see docker-compose.yml in OpenHands repo
 const DEFAULT_RUNTIME_VERSION = '1.2-nikolaik';
 
 /**
