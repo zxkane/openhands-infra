@@ -53,7 +53,7 @@ npx cdk diff --all --context ...
 Create sandbox secret key before first deployment:
 ```bash
 aws secretsmanager create-secret --name openhands/sandbox-secret-key \
-  --secret-string "$(openssl rand -base64 32)" --region <region> \
+  --secret-string "$(openssl rand -base64 32)" --region <your-main-region> \
   --description "OpenHands sandbox secret key for session encryption"
 ```
 
