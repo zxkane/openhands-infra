@@ -1927,20 +1927,19 @@ try:
                     _sec_logger.warning(f"Patch 29: Sandbox not healthy after 180s, skipping secret re-injection")
                     return
 
-                # Get session API key from sandbox
+                # Get session API key from container env vars (avoids auth chicken-and-egg)
                 try:
-                    async with httpx.AsyncClient(timeout=10) as _key_client:
-                        _conv_resp = await _key_client.get(f'{_sandbox_url}/api/conversations?ids={_conv_id_hex}')
-                        if _conv_resp.status_code == 200:
-                            _conv_data = _conv_resp.json()
-                            if isinstance(_conv_data, list) and _conv_data:
-                                _api_key = _conv_data[0].get('session_api_key', '')
-                            elif isinstance(_conv_data, dict):
-                                _items = _conv_data.get('items', _conv_data.get('results', []))
-                                if _items:
-                                    _api_key = _items[0].get('session_api_key', '')
+                    _env_list = _container.attrs.get('Config', {}).get('Env', [])
+                    for _env_item in _env_list:
+                        if _env_item.startswith('OH_SESSION_API_KEYS_0='):
+                            _api_key = _env_item.split('=', 1)[1]
+                            break
+                    if _api_key:
+                        _sec_logger.info(f"Patch 29: Got session API key from container env")
+                    else:
+                        _sec_logger.warning(f"Patch 29: OH_SESSION_API_KEYS_0 not found in container env")
                 except Exception as _key_err:
-                    _sec_logger.warning(f"Patch 29: Failed to get API key: {_key_err}")
+                    _sec_logger.warning(f"Patch 29: Failed to get API key from env: {_key_err}")
 
                 # Build secrets from user's provider tokens (same as new conversation flow)
                 _user = await app_conversation_service.user_context.get_user_info()
@@ -1961,7 +1960,7 @@ try:
                 # POST to sandbox's conversation secrets endpoint
                 _headers = {}
                 if _api_key:
-                    _headers['X-Session-Api-Key'] = _api_key
+                    _headers['X-Session-API-Key'] = _api_key
                 async with httpx.AsyncClient(timeout=30) as _client:
                     _resp = await _client.post(
                         f'{_sandbox_url}/api/conversations/{_conv_id_hex}/secrets',
