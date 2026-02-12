@@ -1651,6 +1651,8 @@ try:
             return
 
         # Convert postgresql:// to postgresql+asyncpg:// for async driver
+        # Also strip sslmode= from URL since asyncpg uses ssl= in connect_args
+        import re as _re
         if database_url.startswith('postgresql://'):
             async_url = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgresql+asyncpg://'):
@@ -1659,14 +1661,20 @@ try:
             logger.warning(f"Unsupported DATABASE_URL scheme, skipping migration")
             return
 
+        # asyncpg doesn't support sslmode= in URL, use ssl= in connect_args instead
+        has_ssl = 'sslmode=' in async_url or os.environ.get('DB_SSL', '')
+        async_url = _re.sub(r'[?&]sslmode=[^&]*', '', async_url)
+
         from sqlalchemy.ext.asyncio import create_async_engine
         from sqlalchemy import text
 
-        # Determine SSL requirement
-        db_ssl = os.environ.get('DB_SSL', '')
         connect_args = {}
-        if db_ssl:
-            connect_args = {'ssl': 'require'}
+        if has_ssl:
+            import ssl as _ssl_module
+            ssl_ctx = _ssl_module.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = _ssl_module.CERT_NONE
+            connect_args = {'ssl': ssl_ctx}
 
         engine = create_async_engine(async_url, connect_args=connect_args)
 
