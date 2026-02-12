@@ -1874,23 +1874,73 @@ try:
         # Patch 29: Re-inject secrets into recreated sandbox
         # Resumed conversations have masked secrets in persisted state (Patches 23/25/26 filter them).
         # We re-inject fresh secrets via the sandbox's POST /api/conversations/{conv_id}/secrets endpoint.
+        # NOTE: We use direct HTTP health polling instead of get_sandbox() because resumed sandboxes
+        # may not be tracked by the sandbox service's internal registry.
         try:
             import asyncio as _asyncio
 
             async def _reinject_secrets():
                 \"\"\"Background task to re-inject secrets after sandbox is ready.\"\"\"
                 import httpx
+                import docker
                 _sec_logger = logging.getLogger(__name__)
 
-                # Wait for sandbox to be running (up to 60s)
-                for _attempt in range(12):
-                    _sb_info = await app_conversation_service.sandbox_service.get_sandbox(sandbox.id)
-                    if _sb_info and _sb_info.status == _SbStatus.RUNNING:
-                        break
-                    await _asyncio.sleep(5)
-                else:
-                    _sec_logger.warning("Patch 29: Sandbox not running after 60s, skipping secret re-injection")
+                # Find sandbox container port via Docker API (bypasses sandbox service registry)
+                _conv_id_hex = conversation_id.replace('-', '')
+                _container_name = f'oh-agent-server-{_conv_id_hex}'
+                _sandbox_port = None
+                _api_key = None
+
+                try:
+                    _docker_client = docker.from_env()
+                    _container = _docker_client.containers.get(_container_name)
+                    _ports = _container.attrs.get('NetworkSettings', {}).get('Ports', {})
+                    _port_bindings = _ports.get('8000/tcp', [])
+                    if _port_bindings:
+                        _sandbox_port = _port_bindings[0].get('HostPort')
+                    _sec_logger.info(f"Patch 29: Found sandbox container {_container_name} on port {_sandbox_port}")
+                except Exception as _docker_err:
+                    _sec_logger.warning(f"Patch 29: Docker lookup failed: {_docker_err}")
                     return
+
+                if not _sandbox_port:
+                    _sec_logger.warning(f"Patch 29: No port mapping found for {_container_name}")
+                    return
+
+                _sandbox_url = f'http://host.docker.internal:{_sandbox_port}'
+
+                # Wait for sandbox health endpoint (up to 180s, poll every 5s)
+                _healthy = False
+                async with httpx.AsyncClient(timeout=10) as _health_client:
+                    for _attempt in range(36):
+                        try:
+                            _health_resp = await _health_client.get(f'{_sandbox_url}/health')
+                            if _health_resp.status_code == 200:
+                                _healthy = True
+                                _sec_logger.info(f"Patch 29: Sandbox healthy after {(_attempt + 1) * 5}s")
+                                break
+                        except Exception:
+                            pass
+                        await _asyncio.sleep(5)
+
+                if not _healthy:
+                    _sec_logger.warning(f"Patch 29: Sandbox not healthy after 180s, skipping secret re-injection")
+                    return
+
+                # Get session API key from sandbox
+                try:
+                    async with httpx.AsyncClient(timeout=10) as _key_client:
+                        _conv_resp = await _key_client.get(f'{_sandbox_url}/api/conversations?ids={_conv_id_hex}')
+                        if _conv_resp.status_code == 200:
+                            _conv_data = _conv_resp.json()
+                            if isinstance(_conv_data, list) and _conv_data:
+                                _api_key = _conv_data[0].get('session_api_key', '')
+                            elif isinstance(_conv_data, dict):
+                                _items = _conv_data.get('items', _conv_data.get('results', []))
+                                if _items:
+                                    _api_key = _items[0].get('session_api_key', '')
+                except Exception as _key_err:
+                    _sec_logger.warning(f"Patch 29: Failed to get API key: {_key_err}")
 
                 # Build secrets from user's provider tokens (same as new conversation flow)
                 _user = await app_conversation_service.user_context.get_user_info()
@@ -1903,37 +1953,26 @@ try:
                     _sec_logger.info("Patch 29: No secrets to inject for this user")
                     return
 
-                # Find sandbox agent_server URL
-                _sandbox_url = None
-                for _eu in (_sb_info.exposed_urls or []):
-                    if _eu.name == 'agent_server':
-                        _sandbox_url = _eu.url
-                        break
-
-                if not _sandbox_url:
-                    _sec_logger.warning("Patch 29: No agent_server URL found on sandbox")
-                    return
-
-                _api_key = _sb_info.session_api_key or ''
-
                 # Serialize secrets with real values exposed
                 _secret_data = {}
                 for _name, _secret_val in _secrets.items():
                     _secret_data[_name] = _secret_val.model_dump(mode='json', context={'expose_secrets': True})
 
                 # POST to sandbox's conversation secrets endpoint
+                _headers = {}
+                if _api_key:
+                    _headers['X-Session-Api-Key'] = _api_key
                 async with httpx.AsyncClient(timeout=30) as _client:
                     _resp = await _client.post(
-                        f'{_sandbox_url}/api/conversations/{conversation_id}/secrets',
+                        f'{_sandbox_url}/api/conversations/{_conv_id_hex}/secrets',
                         json=_secret_data,
-                        headers={'X-Session-Api-Key': _api_key},
+                        headers=_headers,
                     )
-                    if _resp.status_code in (200, 201):
+                    if _resp.status_code in (200, 201, 204):
                         _sec_logger.info(f"Patch 29: Re-injected {len(_secrets)} secrets into resumed sandbox {conversation_id}")
                     else:
                         _sec_logger.warning(f"Patch 29: Secret injection returned {_resp.status_code}: {_resp.text[:200]}")
 
-            from openhands.app_server.sandbox.sandbox_models import SandboxStatus as _SbStatus
             # Fire and forget - don't block the resume response
             _asyncio.create_task(_reinject_secrets())
 
