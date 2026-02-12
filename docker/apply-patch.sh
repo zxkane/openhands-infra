@@ -1964,7 +1964,7 @@ try:
                 async with httpx.AsyncClient(timeout=30) as _client:
                     _resp = await _client.post(
                         f'{_sandbox_url}/api/conversations/{_conv_id_hex}/secrets',
-                        json=_secret_data,
+                        json={'secrets': _secret_data},
                         headers=_headers,
                     )
                     if _resp.status_code in (200, 201, 204):
