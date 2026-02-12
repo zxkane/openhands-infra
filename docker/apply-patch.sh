@@ -1623,6 +1623,161 @@ PYEOF
   fi
 fi
 
+# Patch 27: Multi-tenant conversation isolation (database migration + injector swap)
+# Step 1: Add user_id column to conversation_metadata table (idempotent DDL)
+# Step 2: Backfill existing conversations with user_id from app_conversation_start_task
+# Step 3: Swap SQLAppConversationInfoServiceInjector with CognitoSQLAppConversationInfoServiceInjector
+#
+# This uses the CognitoSQLAppConversationInfoService custom module (COPY'd in Dockerfile)
+# to add user_id-based filtering so each user only sees their own conversations.
+
+# Step 27a: Database migration - add user_id column and backfill
+if [ -n "$DATABASE_URL" ]; then
+  python3 << 'PYEOF'
+import os
+import sys
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - Patch 27 - %(message)s')
+logger = logging.getLogger(__name__)
+
+try:
+    import asyncio
+
+    async def run_migration():
+        database_url = os.environ.get('DATABASE_URL', '')
+        if not database_url:
+            logger.warning("DATABASE_URL not set, skipping database migration")
+            return
+
+        # Convert postgresql:// to postgresql+asyncpg:// for async driver
+        if database_url.startswith('postgresql://'):
+            async_url = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
+        elif database_url.startswith('postgresql+asyncpg://'):
+            async_url = database_url
+        else:
+            logger.warning(f"Unsupported DATABASE_URL scheme, skipping migration")
+            return
+
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy import text
+
+        # Determine SSL requirement
+        db_ssl = os.environ.get('DB_SSL', '')
+        connect_args = {}
+        if db_ssl:
+            connect_args = {'ssl': 'require'}
+
+        engine = create_async_engine(async_url, connect_args=connect_args)
+
+        async with engine.begin() as conn:
+            # Step 1: Add user_id column (idempotent)
+            await conn.execute(text(
+                "ALTER TABLE conversation_metadata ADD COLUMN IF NOT EXISTS user_id VARCHAR"
+            ))
+            logger.info("user_id column ensured on conversation_metadata")
+
+            # Step 2: Create index (idempotent)
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_conversation_metadata_user_id "
+                "ON conversation_metadata(user_id)"
+            ))
+            logger.info("user_id index ensured")
+
+            # Step 3: Backfill user_id from app_conversation_start_task
+            # Only update rows where user_id is NULL
+            result = await conn.execute(text("""
+                UPDATE conversation_metadata cm
+                SET user_id = t.created_by_user_id
+                FROM app_conversation_start_task t
+                WHERE cm.sandbox_id = t.sandbox_id
+                  AND cm.user_id IS NULL
+                  AND t.created_by_user_id IS NOT NULL
+            """))
+            logger.info(f"Backfilled user_id for {result.rowcount} existing conversations")
+
+        await engine.dispose()
+        logger.info("Database migration completed successfully")
+
+    asyncio.run(run_migration())
+
+except ImportError as e:
+    # asyncpg may not be installed in all environments
+    print(f"Patch 27: Skipping async migration (import error: {e}), will be handled by SQLAlchemy at runtime")
+except Exception as e:
+    # Non-fatal: the column will be created by SQLAlchemy ORM if missing
+    print(f"WARNING: Patch 27 database migration failed: {e}", file=sys.stderr)
+    print("The user_id column may be created lazily by SQLAlchemy at runtime")
+PYEOF
+  echo "Patch 27a: Database migration script executed"
+else
+  echo "Patch 27a: DATABASE_URL not set, skipping database migration (will happen at runtime)"
+fi
+
+# Step 27b: Swap the conversation info service injector in config.py
+APP_CONFIG_FILE="/app/openhands/app_server/config.py"
+COGNITO_SQL_SERVICE="/app/openhands/app_server/app_conversation/cognito_sql_conversation_info_service.py"
+if [ -f "$APP_CONFIG_FILE" ] && [ -f "$COGNITO_SQL_SERVICE" ]; then
+  if grep -q "CognitoSQLAppConversationInfoServiceInjector" "$APP_CONFIG_FILE"; then
+    echo "Patch 27b: CognitoSQLAppConversationInfoServiceInjector already configured"
+  else
+    python3 << 'PYEOF'
+import sys
+
+try:
+    config_file = "/app/openhands/app_server/config.py"
+
+    with open(config_file, 'r') as f:
+        content = f.read()
+
+    # Add import for our custom injector after the existing SQL import
+    old_import = "from openhands.app_server.app_conversation.sql_app_conversation_info_service import (  # noqa: E501\n        SQLAppConversationInfoServiceInjector,"
+    new_import = """from openhands.app_server.app_conversation.sql_app_conversation_info_service import (  # noqa: E501
+        SQLAppConversationInfoServiceInjector,"""
+
+    # Try more lenient approach: just add import and swap the instantiation
+    if "SQLAppConversationInfoServiceInjector" in content:
+        # Add the import for our custom module
+        import_line = "from openhands.app_server.app_conversation.cognito_sql_conversation_info_service import CognitoSQLAppConversationInfoServiceInjector  # Patch 27\n"
+
+        # Find a good place to add the import - after the SQL import
+        import_marker = "SQLAppConversationInfoServiceInjector,"
+        marker_pos = content.find(import_marker)
+        if marker_pos != -1:
+            # Find end of this import statement (closing paren + newline)
+            after_marker = content.find(")", marker_pos)
+            if after_marker != -1:
+                next_newline = content.find("\n", after_marker)
+                if next_newline != -1:
+                    content = content[:next_newline + 1] + "    " + import_line + content[next_newline + 1:]
+
+        # Swap the injector instantiation
+        old_line = "config.app_conversation_info = SQLAppConversationInfoServiceInjector()"
+        new_line = "config.app_conversation_info = CognitoSQLAppConversationInfoServiceInjector()  # Patch 27: Multi-tenant isolation"
+
+        if old_line in content:
+            content = content.replace(old_line, new_line)
+            with open(config_file, 'w') as f:
+                f.write(content)
+            print("Patch 27b: Swapped SQLAppConversationInfoServiceInjector with CognitoSQLAppConversationInfoServiceInjector")
+        else:
+            print("WARNING: Patch 27b - SQLAppConversationInfoServiceInjector() instantiation not found")
+    else:
+        print("WARNING: Patch 27b - SQLAppConversationInfoServiceInjector not found in config.py")
+
+except Exception as e:
+    print(f"ERROR: Patch 27b failed: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    if [ $? -ne 0 ]; then
+      mark_critical_failure "Patch27b-conversation-isolation-injector"
+    fi
+  fi
+else
+  echo "WARNING: Patch 27b - config.py or custom service not found" >&2
+  mark_critical_failure "Patch27b-conversation-isolation-files-missing"
+fi
+
 # Patch 21: Verify S3SettingsStore and S3SecretsStore are properly configured
 # This is a CRITICAL security patch - settings/secrets must be user-scoped
 # Without this patch, all users share the same settings.json and secrets.json

@@ -1282,6 +1282,7 @@ Use this checklist to track test execution:
 | TC-018 | Logout Functionality | [ ] | Logout button clears session |
 | TC-019 | Secrets Page User Isolation | [x] | User-scoped S3 storage enabled via S3SecretsStore |
 | TC-020 | Settings Pages User Isolation | [x] | User-scoped S3 storage enabled via S3SettingsStore |
+| TC-022 | Conversation List User Isolation | [ ] | Multi-tenant DB isolation (Patch 27) |
 | TC-021 | Secrets Persist After EC2 Replace | [ ] | Patch 22 + Patch 23 enable secret access on resume |
 
 ---
@@ -2173,6 +2174,143 @@ Verify that all settings pages (/settings/mcp, /settings/integrations, /settings
 | `GET /api/secrets` | Returns only current user's secrets |
 | `GET /api/v1/user-config/mcp` | Returns only current user's MCP config |
 | `GET /api/v1/user-config/integrations` | Returns only current user's integrations |
+
+---
+
+## TC-022: Verify Conversation List User Isolation (Database)
+
+### Description
+Verify that the conversation list is scoped per-user via the CognitoSQLAppConversationInfoService (Patch 27). User A should only see their own conversations and User B should not see User A's conversations.
+
+### Prerequisites
+- Infrastructure deployed with Patch 27 (CognitoSQLAppConversationInfoServiceInjector)
+- Two Cognito test users
+- TC-003 completed (login process verified)
+
+### Steps
+
+1. **Phase 1: User A creates a conversation**
+
+   1.1. Login as User A (TC-003)
+
+   1.2. Start a new conversation (TC-005)
+
+   1.3. Send a prompt to create conversation history
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "What is 2+2?"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   mcp__chrome-devtools__wait_for({
+     text: "4",
+     timeout: 120000
+   })
+   ```
+
+   1.4. Note the conversation ID from the URL
+
+   1.5. Navigate to home page and verify conversation visible in list
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   // Should show User A's conversation in "Recent Conversations"
+   ```
+
+2. **Phase 2: User B sees only their own conversations**
+
+   2.1. Logout User A
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/_logout",
+     type: "url"
+   })
+   ```
+
+   2.2. Login as User B
+
+   2.3. Navigate to home page
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+   2.4. Verify User A's conversation is NOT visible
+   ```javascript
+   // The conversation list should NOT contain User A's conversation
+   // For a new user, should show empty or "Start new conversation" only
+   ```
+
+   2.5. Start a new conversation as User B and verify it appears
+   ```javascript
+   // Create conversation as User B
+   // Navigate home and verify it appears in their list
+   ```
+
+3. **Phase 3: Verify User A still sees only their conversations**
+
+   3.1. Logout User B, login as User A
+
+   3.2. Verify User A's conversation is visible, User B's is NOT
+
+4. **Phase 4: Database verification**
+
+   ```bash
+   # SSH to EC2 and check database
+   # Verify user_id column exists and is populated
+   docker exec -it openhands-app python3 -c "
+   import asyncio, os
+   from sqlalchemy.ext.asyncio import create_async_engine
+   from sqlalchemy import text
+   url = os.environ['DATABASE_URL'].replace('postgresql://', 'postgresql+asyncpg://')
+   async def check():
+       engine = create_async_engine(url, connect_args={'ssl': 'require'})
+       async with engine.begin() as conn:
+           result = await conn.execute(text('SELECT conversation_id, user_id FROM conversation_metadata WHERE user_id IS NOT NULL LIMIT 5'))
+           for row in result:
+               print(f'  conv={row[0][:8]}... user_id={row[1]}')
+       await engine.dispose()
+   asyncio.run(check())
+   "
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | User A sees own conversation | Conversation visible in list after creation |
+| 2 | User B cannot see User A's conversation | User B's home page does not show User A's conversations |
+| 3 | User B sees own conversations | User B's newly created conversation is visible |
+| 4 | User A cannot see User B's conversation | User A's home page does not show User B's conversations |
+| 5 | Database has user_id | `SELECT user_id FROM conversation_metadata` returns non-null values |
+| 6 | Event paths work correctly | Conversations have correct event storage paths |
+| 7 | Resume works with user_id | After EC2 replacement, sandbox recreated with correct user_id label |
+
+### API Verification
+
+| Request | Expected |
+|---------|----------|
+| `GET /api/conversations` (User A) | Only User A's conversations |
+| `GET /api/conversations` (User B) | Only User B's conversations |
+| `DELETE /api/conversations/{id}` (User B on User A's conv) | 404 or no effect |
+
+### Technical Details
+
+**Implementation**: CognitoSQLAppConversationInfoService (Patch 27) extends SQLAppConversationInfoService to:
+1. Add `WHERE user_id = ?` to all SELECT queries via `_secure_select()`
+2. Persist `user_id` in `save_app_conversation_info()`
+3. Return real `created_by_user_id` in `_to_info()`
+4. Scope count and delete operations to user
+
+**Database**: `conversation_metadata` table has a `user_id` VARCHAR column with index, added via idempotent DDL at container startup.
+
+**Rollback**: Revert Dockerfile and apply-patch.sh changes. The `user_id` column is harmless (unused by upstream code).
 
 ---
 
