@@ -209,10 +209,16 @@ class CognitoSQLAppConversationInfoService(SQLAppConversationInfoService):
             )
             return False
 
-        if user_id:
-            delete_query = delete_query.where(
-                StoredConversationMetadata.user_id == user_id
+        if not user_id:
+            logger.warning(
+                'CognitoSQL: No user_id available for delete of %s, refusing',
+                conversation_id,
             )
+            return False
+
+        delete_query = delete_query.where(
+            StoredConversationMetadata.user_id == user_id
+        )
 
         result = await self.db_session.execute(delete_query)
         await self.db_session.commit()

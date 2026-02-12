@@ -1685,14 +1685,25 @@ try:
             logger.info("user_id index ensured")
 
             # Step 3: Backfill user_id from app_conversation_start_task
+            # Join on conversation_id (unique) not sandbox_id (can be reused)
             # Only update rows where user_id is NULL
             result = await conn.execute(text("""
                 UPDATE conversation_metadata cm
-                SET user_id = t.created_by_user_id
-                FROM app_conversation_start_task t
-                WHERE cm.sandbox_id = t.sandbox_id
-                  AND cm.user_id IS NULL
-                  AND t.created_by_user_id IS NOT NULL
+                SET user_id = (
+                    SELECT t.created_by_user_id
+                    FROM app_conversation_start_task t
+                    WHERE t.conversation_id::text = cm.conversation_id
+                      AND t.created_by_user_id IS NOT NULL
+                    ORDER BY t.created_at DESC
+                    LIMIT 1
+                )
+                WHERE cm.user_id IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM app_conversation_start_task t
+                      WHERE t.conversation_id::text = cm.conversation_id
+                        AND t.created_by_user_id IS NOT NULL
+                  )
             """))
             logger.info(f"Backfilled user_id for {result.rowcount} existing conversations")
 
