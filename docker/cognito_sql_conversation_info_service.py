@@ -76,7 +76,8 @@ class CognitoSQLAppConversationInfoService(SQLAppConversationInfoService):
         When a user_id is available from user_context, adds WHERE user_id = ?
         to scope all queries to the current user's conversations.
 
-        When user_id is None (internal/admin calls), returns all V1 conversations
+        When user_id is None (legitimate internal/webhook calls where
+        user_context has no request), returns all V1 conversations
         (same behavior as upstream).
         """
         query = select(StoredConversationMetadata).where(
@@ -86,6 +87,9 @@ class CognitoSQLAppConversationInfoService(SQLAppConversationInfoService):
         try:
             user_id = await self.user_context.get_user_id()
         except Exception:
+            # user_context.get_user_id() raises when there is no request context
+            # (e.g., internal webhook callbacks, background tasks). This is expected
+            # and equivalent to the upstream unscoped behavior.
             user_id = None
 
         if user_id:
@@ -104,7 +108,7 @@ class CognitoSQLAppConversationInfoService(SQLAppConversationInfoService):
         # Let parent handle the core save logic
         result = await super().save_app_conversation_info(info)
 
-        # Update user_id if available
+        # Update user_id if available — this is critical for multi-tenant isolation
         user_id = info.created_by_user_id
         if user_id:
             try:
@@ -126,6 +130,7 @@ class CognitoSQLAppConversationInfoService(SQLAppConversationInfoService):
                     'CognitoSQL: Failed to update user_id for conversation %s',
                     info.id,
                 )
+                raise  # Re-raise: user_id persistence failure is a security issue
 
         return result
 
@@ -188,16 +193,21 @@ class CognitoSQLAppConversationInfoService(SQLAppConversationInfoService):
         """Override to scope deletion to current user's conversations.
 
         Prevents cross-user deletion by adding user_id filter to the DELETE query.
+        If user_id cannot be determined, refuses to delete (fail-closed).
         """
         delete_query = sa_delete(StoredConversationMetadata).where(
             StoredConversationMetadata.conversation_id == str(conversation_id)
         )
 
-        # Add user_id filter for safety
+        # Add user_id filter — fail-closed: refuse unscoped deletes
         try:
             user_id = await self.user_context.get_user_id()
         except Exception:
-            user_id = None
+            logger.warning(
+                'CognitoSQL: Cannot determine user_id for delete of %s, refusing',
+                conversation_id,
+            )
+            return False
 
         if user_id:
             delete_query = delete_query.where(
@@ -205,6 +215,7 @@ class CognitoSQLAppConversationInfoService(SQLAppConversationInfoService):
             )
 
         result = await self.db_session.execute(delete_query)
+        await self.db_session.commit()
         return result.rowcount > 0
 
 
