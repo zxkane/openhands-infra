@@ -1797,6 +1797,166 @@ else
   mark_critical_failure "Patch27b-conversation-isolation-files-missing"
 fi
 
+# Patch 28: Fix event_callback_result.id NULL violation
+# v1.3.0 bug: StoredEventCallbackResult.id has no default UUID generator,
+# causing IntegrityError when webhook callbacks try to save results.
+# This silently kills webhook callbacks (including secret re-injection for resumed conversations).
+CALLBACK_SERVICE_FILE="/app/openhands/app_server/event_callback/sql_event_callback_service.py"
+if [ -f "$CALLBACK_SERVICE_FILE" ]; then
+  python3 << 'PYEOF'
+import sys
+
+try:
+    filepath = "/app/openhands/app_server/event_callback/sql_event_callback_service.py"
+    with open(filepath, 'r') as f:
+        content = f.read()
+
+    # Check if uuid4 default is already present on the id column
+    if 'default=uuid4' in content and 'event_callback_result' in content:
+        print("Patch 28: event_callback_result.id already has default=uuid4")
+    else:
+        # Add uuid4 import if not present
+        if 'from uuid import uuid4' not in content:
+            # Add after existing uuid imports or other imports
+            if 'from uuid import' in content:
+                content = content.replace('from uuid import', 'from uuid import uuid4, ', 1)
+                # Handle case where uuid4 was already there partially
+                content = content.replace('uuid4, uuid4', 'uuid4')
+            else:
+                # Add import at top of imports section
+                content = 'from uuid import uuid4\n' + content
+
+        # Fix the id column to include default=uuid4
+        # Original: id = Column(SQLUUID, primary_key=True)
+        # Fixed:    id = Column(SQLUUID, primary_key=True, default=uuid4)
+        old_id_col = 'id = Column(SQLUUID, primary_key=True)'
+        new_id_col = 'id = Column(SQLUUID, primary_key=True, default=uuid4)  # Patch 28: auto-generate UUID'
+        if old_id_col in content:
+            content = content.replace(old_id_col, new_id_col)
+            with open(filepath, 'w') as f:
+                f.write(content)
+            print("Patch 28: Added default=uuid4 to StoredEventCallbackResult.id")
+        else:
+            print("Patch 28: id column pattern not found (may already be patched or code changed)")
+
+except Exception as e:
+    print(f"WARNING: Patch 28 failed: {e}", file=sys.stderr)
+PYEOF
+else
+  echo "Patch 28: sql_event_callback_service.py not found, skipping"
+fi
+
+# Patch 29: Re-inject secrets when resuming a conversation
+# When a conversation is resumed, the sandbox restarts from persisted state which has
+# masked secrets (e.g., **********). Patches 23/25/26 correctly filter these out, but
+# the resume flow doesn't re-inject fresh secrets from the user's S3SecretsStore.
+# This patch modifies the resume endpoint to re-inject secrets after sandbox recreation.
+CONV_ROUTER_FILE="/app/openhands/app_server/app_conversation/app_conversation_router.py"
+if [ -f "$CONV_ROUTER_FILE" ]; then
+  python3 << 'PYEOF'
+import sys
+import re
+
+try:
+    filepath = "/app/openhands/app_server/app_conversation/app_conversation_router.py"
+    with open(filepath, 'r') as f:
+        content = f.read()
+
+    if 'Patch 29' in content:
+        print("Patch 29: Secret re-injection on resume already applied")
+    else:
+        # Find the resume endpoint's success return: return {"status": "ok", "sandbox_id": sandbox.id}
+        # and inject secret re-injection BEFORE the return statement
+        old_return = '_logger.info(f"Sandbox recreated for conversation {conversation_id}: {sandbox.id}")\n        return {"status": "ok", "sandbox_id": sandbox.id}'
+
+        new_return = '''_logger.info(f"Sandbox recreated for conversation {conversation_id}: {sandbox.id}")
+
+        # Patch 29: Re-inject secrets into recreated sandbox
+        # Resumed conversations have masked secrets in persisted state (Patches 23/25/26 filter them).
+        # We re-inject fresh secrets via the sandbox's POST /api/conversations/{conv_id}/secrets endpoint.
+        try:
+            import asyncio as _asyncio
+
+            async def _reinject_secrets():
+                \"\"\"Background task to re-inject secrets after sandbox is ready.\"\"\"
+                import httpx
+                _sec_logger = logging.getLogger(__name__)
+
+                # Wait for sandbox to be running (up to 60s)
+                for _attempt in range(12):
+                    _sb_info = await app_conversation_service.sandbox_service.get_sandbox(sandbox.id)
+                    if _sb_info and _sb_info.status == _SbStatus.RUNNING:
+                        break
+                    await _asyncio.sleep(5)
+                else:
+                    _sec_logger.warning("Patch 29: Sandbox not running after 60s, skipping secret re-injection")
+                    return
+
+                # Build secrets from user's provider tokens (same as new conversation flow)
+                _user = await app_conversation_service.user_context.get_user_info()
+                _secrets = await app_conversation_service._setup_secrets_for_git_providers(_user)
+                # Also get user custom secrets from S3
+                _user_secrets = await app_conversation_service.user_context.get_secrets()
+                _secrets.update(_user_secrets)
+
+                if not _secrets:
+                    _sec_logger.info("Patch 29: No secrets to inject for this user")
+                    return
+
+                # Find sandbox agent_server URL
+                _sandbox_url = None
+                for _eu in (_sb_info.exposed_urls or []):
+                    if _eu.name == 'agent_server':
+                        _sandbox_url = _eu.url
+                        break
+
+                if not _sandbox_url:
+                    _sec_logger.warning("Patch 29: No agent_server URL found on sandbox")
+                    return
+
+                _api_key = _sb_info.session_api_key or ''
+
+                # Serialize secrets with real values exposed
+                _secret_data = {}
+                for _name, _secret_val in _secrets.items():
+                    _secret_data[_name] = _secret_val.model_dump(mode='json', context={'expose_secrets': True})
+
+                # POST to sandbox's conversation secrets endpoint
+                async with httpx.AsyncClient(timeout=30) as _client:
+                    _resp = await _client.post(
+                        f'{_sandbox_url}/api/conversations/{conversation_id}/secrets',
+                        json=_secret_data,
+                        headers={'X-Session-Api-Key': _api_key},
+                    )
+                    if _resp.status_code in (200, 201):
+                        _sec_logger.info(f"Patch 29: Re-injected {len(_secrets)} secrets into resumed sandbox {conversation_id}")
+                    else:
+                        _sec_logger.warning(f"Patch 29: Secret injection returned {_resp.status_code}: {_resp.text[:200]}")
+
+            from openhands.app_server.sandbox.sandbox_models import SandboxStatus as _SbStatus
+            # Fire and forget - don't block the resume response
+            _asyncio.create_task(_reinject_secrets())
+
+        except Exception as _sec_err:
+            _logger.warning(f"Patch 29: Secret re-injection setup failed (non-fatal): {_sec_err}")
+
+        return {"status": "ok", "sandbox_id": sandbox.id}'''
+
+        if old_return in content:
+            content = content.replace(old_return, new_return)
+            with open(filepath, 'w') as f:
+                f.write(content)
+            print("Patch 29: Secret re-injection on resume applied successfully")
+        else:
+            print("WARNING: Patch 29 - resume return pattern not found in router")
+
+except Exception as e:
+    print(f"WARNING: Patch 29 failed: {e}", file=sys.stderr)
+PYEOF
+else
+  echo "Patch 29: app_conversation_router.py not found, skipping"
+fi
+
 # Patch 21: Verify S3SettingsStore and S3SecretsStore are properly configured
 # This is a CRITICAL security patch - settings/secrets must be user-scoped
 # Without this patch, all users share the same settings.json and secrets.json
