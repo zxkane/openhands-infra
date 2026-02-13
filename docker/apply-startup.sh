@@ -66,7 +66,10 @@ fi
 
 # ─── Patch 5: Copy patched modules to Python site-packages ──────────────────
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>&1) || {
+  echo "ERROR: Failed to detect Python version" >&2
+  exit 1
+}
 
 if [ -f "/app/patched/auth_user_context.py" ]; then
   PATCHED_DIR="/app/.venv/lib/python${PYTHON_VERSION}/site-packages/patched"
