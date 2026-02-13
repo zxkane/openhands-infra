@@ -11,7 +11,7 @@ set -e
 
 FORK_REPO="${FORK_REPO:-zxkane/openhands}"
 # Pin to commit SHA for reproducible builds (tag: custom-v1.3.0-r1)
-FORK_REF="${FORK_REF:-0dfc713e37ccecc6fda72cd4434110b744aee7ca}"
+FORK_REF="${FORK_REF:-1b8ad60abcfe5609127be0d503030aeee57d6003}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
 # 9 upstream Python files modified in the fork
