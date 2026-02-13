@@ -1147,7 +1147,7 @@
     var target = document.body || document.documentElement;
     if (target) {
       observer.observe(target, { childList: true, subtree: true });
-      console.log('Shared MutationObserver started with', handlers.length, 'handler(s)');
+      console.log('Shared MutationObserver started with', (window.__ohMutationHandlers || []).length, 'handler(s)');
     }
   }
 
