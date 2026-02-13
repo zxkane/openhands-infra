@@ -15,7 +15,7 @@
 
 # Pin to specific version for stability
 # Check https://github.com/All-Hands-AI/OpenHands/releases for latest releases
-ARG OPENHANDS_VERSION=1.2.1
+ARG OPENHANDS_VERSION=1.3.0
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
 
 # Install boto3 for AWS Bedrock support (required by litellm for AWS authentication)
@@ -50,6 +50,11 @@ COPY user_config_loader.py /opt/user_config_loader.py
 # instead of global bucket root paths (CRITICAL SECURITY FIX)
 COPY s3_settings_store.py /app/openhands/storage/settings/
 COPY s3_secrets_store.py /app/openhands/storage/secrets/
+
+# Copy custom SQL conversation info service for multi-tenant conversation isolation
+# This extends SQLAppConversationInfoService to add user_id filtering
+# so each user only sees their own conversations (Patch 27)
+COPY cognito_sql_conversation_info_service.py /app/openhands/app_server/app_conversation/
 
 # Patch server_config.py to use CognitoUserAuth instead of DefaultUserAuth
 # OpenHands hardcodes user_auth_class and doesn't read from environment variables,

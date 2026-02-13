@@ -1283,7 +1283,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:81b3e0fd22fe42a6d9c1d692a7529e8065f35803a7f1ae8182e37135d3496482",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:bcb05f908b702587c434d9fc5ab5d752022e985c09f46e3cb1ac732c0d2286fc",
                   },
                   "
     container_name: openhands-app
@@ -1292,7 +1292,7 @@ services:
       - SANDBOX_USER_ID=0
       - SANDBOX_RUNTIME_CONTAINER_IMAGE=",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c72d27bdebcc62321647ac698a4a3af8ec4ba6623163686f59bd33103f32bf84",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
                   },
                   "
       - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw
@@ -1444,7 +1444,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:81b3e0fd22fe42a6d9c1d692a7529e8065f35803a7f1ae8182e37135d3496482",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:bcb05f908b702587c434d9fc5ab5d752022e985c09f46e3cb1ac732c0d2286fc",
                   },
                   ""
 pull_with_retry "",
@@ -1454,7 +1454,7 @@ pull_with_retry "",
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c72d27bdebcc62321647ac698a4a3af8ec4ba6623163686f59bd33103f32bf84",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
                   },
                   ""
 pull_with_retry "",
@@ -1526,7 +1526,7 @@ echo "OpenHands setup complete!"",
         "Name": "/openhands/docker/openhands-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.2.1",
+        "Value": "1.3.0",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -1570,7 +1570,7 @@ echo "OpenHands setup complete!"",
         "Name": "/openhands/docker/runtime-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.2-nikolaik",
+        "Value": "1.3-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
     },
