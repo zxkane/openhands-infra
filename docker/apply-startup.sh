@@ -66,7 +66,7 @@ fi
 
 # ─── Patch 5: Copy patched modules to Python site-packages ──────────────────
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>&1) || {
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")') || {
   echo "ERROR: Failed to detect Python version" >&2
   exit 1
 }
@@ -220,7 +220,7 @@ fi
 
 SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
 if [ -f "$SANDBOX_SERVICE_FILE" ]; then
-  if grep -q "'user_id':" "$SANDBOX_SERVICE_FILE"; then
+  if grep -q "'user_id': user_id" "$SANDBOX_SERVICE_FILE"; then
     echo "Verify: user_id label present in docker_sandbox_service.py"
   else
     mark_critical_failure "Patch16-user_id_label-missing-in-fork"
