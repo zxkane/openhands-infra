@@ -756,6 +756,21 @@
     return cachedConvId;
   }
 
+  // Invalidate cache on navigation to handle SPA route changes.
+  // popstate fires on browser back/forward; pushState/replaceState are used by React Router.
+  function invalidateConvIdCache() { convIdChecked = false; }
+  window.addEventListener('popstate', invalidateConvIdCache);
+  var origPushState = history.pushState;
+  var origReplaceState = history.replaceState;
+  history.pushState = function() {
+    invalidateConvIdCache();
+    return origPushState.apply(this, arguments);
+  };
+  history.replaceState = function() {
+    invalidateConvIdCache();
+    return origReplaceState.apply(this, arguments);
+  };
+
   // Check if URL host matches the main domain (ignoring port)
   function isMainDomainUrl(urlHost) {
     var currentHost = window.location.host;
@@ -841,6 +856,7 @@
   // them in the next idle callback or animation frame.
   var pendingNodes = [];
   var idleCallbackScheduled = false;
+  var MAX_PENDING_NODES = 10000;  // Prevent unbounded growth in background tabs
 
   function processPendingNodes() {
     var nodes = pendingNodes;
@@ -884,7 +900,9 @@
       for (var j = 0; j < addedNodes.length; j++) {
         var node = addedNodes[j];
         if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-          pendingNodes.push(node);
+          if (pendingNodes.length < MAX_PENDING_NODES) {
+            pendingNodes.push(node);
+          }
         }
       }
     }
@@ -1112,14 +1130,13 @@
 // callback overhead during large conversation loads, blocking message rendering.
 // Now a single observer dispatches to all registered handlers.
 (function() {
-  var handlers = window.__ohMutationHandlers || [];
-
-  if (handlers.length === 0) return;
-
   var observer = new MutationObserver(function(mutations) {
-    for (var i = 0; i < handlers.length; i++) {
+    // Re-read handlers on each callback to support late registration
+    // (e.g., MCP protection handler registers on 'load' event)
+    var currentHandlers = window.__ohMutationHandlers || [];
+    for (var i = 0; i < currentHandlers.length; i++) {
       try {
-        handlers[i](mutations);
+        currentHandlers[i](mutations);
       } catch (e) {
         console.error('Shared MutationObserver handler error:', e);
       }
