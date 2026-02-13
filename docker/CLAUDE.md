@@ -1,16 +1,22 @@
 # docker/CLAUDE.md - Runtime Routing & Container Patches
 
-This document covers the Docker container configuration, OpenResty proxy, and frontend patches.
+This document covers the Docker container configuration, OpenResty proxy, and patch system.
 
 ## Directory Structure
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | OpenHands container with runtime patches |
-| `apply-patch.sh` | Startup script applying runtime patches |
+| `Dockerfile` | OpenHands container with fork-based patches |
+| `download-fork-patches.sh` | Build-time: downloads patched files from fork |
+| `apply-startup.sh` | Runtime: JS injection, site-packages patch, DB migration |
 | `patch-fix.js` | Frontend JavaScript patches |
 | `cognito_user_auth.py` | CognitoUserAuth class for OpenHands |
 | `cognito_file_conversation_store.py` | User-scoped conversation storage |
+| `cognito_sql_conversation_info_service.py` | Multi-tenant conversation isolation |
+| `s3_settings_store.py` | User-scoped settings store |
+| `s3_secrets_store.py` | User-scoped secrets store |
+| `user_config_loader.py` | User MCP configuration loader |
+| `patched/auth_user_context.py` | Patched webhook auth for Docker internal network |
 | `openresty/Dockerfile` | OpenResty proxy container |
 | `openresty/nginx.conf` | Nginx configuration with Lua |
 | `openresty/docker_discovery.lua` | Container discovery via Docker API |
@@ -19,41 +25,83 @@ This document covers the Docker container configuration, OpenResty proxy, and fr
 
 ## Patch System Overview
 
-There are two types of patches in this project:
+There are three types of patches in this project:
 
 | Type | Location | Applied When | Why |
 |------|----------|--------------|-----|
-| **Runtime patches** | `apply-patch.sh`, `patch-fix.js` | Container startup | Modify upstream OpenHands container |
-| **Build-time patches** | `agent-server-custom/apply-sdk-patches.py` | Docker build | Modify SDK before PyInstaller bundles it |
+| **Fork patches** | `zxkane/openhands` fork | Docker build (download) | Upstream Python file modifications |
+| **Runtime patches** | `apply-startup.sh`, `patch-fix.js` | Container startup | Dynamic operations (JS injection, site-packages, DB migration) |
+| **SDK patches** | `agent-server-custom/apply-sdk-patches.py` | Docker build | Modify SDK before PyInstaller bundles it |
 
-### Why Two Different Approaches?
-
-**Runtime patches** (apply-patch.sh):
-- We use the upstream OpenHands container image
-- Source files are available in the running container
-- Patches applied before application starts
-- Allows customization without forking OpenHands
-
-**Build-time patches** (apply-sdk-patches.py):
-- We build agent-server from source with boto3 included
-- SDK code is cloned from GitHub during build
-- PyInstaller creates an **immutable binary**
-- Source code modifications MUST happen before `pyinstaller` runs
+### Architecture
 
 ```
-# Runtime patches flow:
-Upstream OpenHands Image → Start Container → apply-patch.sh → Application Runs
+Before (old):
+  Upstream Image → Container Start → apply-patch.sh (29 regex patches) → App runs
 
-# Build-time patches flow:
-Clone SDK → apply-sdk-patches.py → PyInstaller → Binary (immutable)
+After (current):
+  Upstream Image → Docker Build (download patched files from fork) → Container Start → apply-startup.sh (minimal) → App runs
 ```
 
-### Patch Numbering
+### Fork-Based Patches (`zxkane/openhands`)
 
-| Patch # | Type | Purpose |
-|---------|------|---------|
-| 1-22 | Runtime | OpenHands container patches (apply-patch.sh) |
-| 23-26 | Build-time | SDK patches for conversation resume (apply-sdk-patches.py) |
+Upstream file modifications live as clean per-feature git commits in the fork:
+
+- **Branch**: `custom/v1.3.0` (branched from tag `v1.3.0`)
+- **Tag**: `custom-v1.3.0-r1` (referenced by `download-fork-patches.sh`)
+- **Files**: 9 upstream Python files with ~13 feature commits
+
+| # | Feature | Upstream Files |
+|---|---------|----------------|
+| 1 | Container labels for sandbox_spec_id | `docker_sandbox_service.py` |
+| 2 | Per-sandbox workspace mount isolation | `docker_sandbox_service.py` |
+| 3 | Retry logic for agent-server race condition | `live_status_app_conversation_service.py` |
+| 4 | Pass user_id to start_sandbox for labeling | `docker_sandbox_service.py`, `live_status_app_conversation_service.py` |
+| 5 | Sandbox recreation and /resume endpoint | `live_status_app_conversation_service.py`, `app_conversation_router.py` |
+| 6 | SSL support for PostgreSQL (env-gated) | `db_session_injector.py` |
+| 7 | conversation_id label and webhook headers | `docker_sandbox_service.py` |
+| 8 | Generate conv_id before sandbox, user_id in bg task | `live_status_app_conversation_service.py` |
+| 9 | Handle None user_id and preserve on update | `webhook_router.py` |
+| 10 | Cognito auth and user-scoped stores | `server_config.py` |
+| 11 | Skip invalid secrets during resume | `secrets.py` |
+| 12 | Conversation isolation and UUID fix | `config.py`, `sql_event_callback_service.py` |
+| 13 | Secrets injection and runtime env vars | `live_status_app_conversation_service.py`, `docker_sandbox_service.py` |
+
+### Runtime Patches (`apply-startup.sh`)
+
+Operations that must happen at container startup (not build time):
+
+| Patch | Purpose | Critical? |
+|-------|---------|-----------|
+| 1 | Inject `patch-fix.js` into `index.html` | No |
+| 5 | Copy `auth_user_context.py` to site-packages | No |
+| 6 | Swap AuthUserContextInjector import in openhands_cloud | No |
+| 27a | Database migration DDL (add user_id column) | No |
+| 21 | Verify multi-tenant S3 store configuration | **Yes** |
+
+### SDK Patches (`apply-sdk-patches.py`)
+
+Targets `software-agent-sdk` (not OpenHands). Applied at build time in `agent-server-custom/`.
+
+### Upgrade Workflow
+
+When upstream releases a new version (e.g., v1.4.0):
+
+1. In fork: `git checkout -b custom/v1.4.0 v1.4.0`
+2. `git cherry-pick` each commit from `custom/v1.3.0` — conflicts isolated per feature
+3. Resolve, test, tag as `custom-v1.4.0-r1`
+4. In openhands-infra: update `OPENHANDS_VERSION=1.4.0` and `FORK_REF=custom-v1.4.0-r1`
+5. Remove any patches accepted upstream
+
+### Critical Patch Failure Handling
+
+```bash
+# If critical patches fail, container startup is blocked
+if [ -n "$CRITICAL_PATCH_FAILURES" ]; then
+  echo "CRITICAL SECURITY PATCHES FAILED" >&2
+  exit 1
+fi
+```
 
 ## Runtime Subdomain Routing
 
@@ -160,26 +208,6 @@ Handles VS Code Server URLs and extensions:
 // Rewrites /stable/{hash}/... to runtime subdomain
 ```
 
-## Apply Patch Script (`apply-patch.sh`)
-
-Critical patches applied at container startup:
-
-| Patch | Purpose | Critical? |
-|-------|---------|-----------|
-| Patch 1 | Inject patch-fix.js into index.html | No |
-| Patch 7 | Set `network_mode='host'` for runtime | No |
-| Patch 16 | Add `user_id` label to containers | **Yes** |
-
-### Critical Patch Failure Handling
-
-```bash
-# If critical patches fail, container startup is blocked
-if [ -n "$CRITICAL_PATCH_FAILURES" ]; then
-  echo "CRITICAL SECURITY PATCHES FAILED" >&2
-  exit 1
-fi
-```
-
 ## Testing Runtime Routing
 
 ```bash
@@ -196,7 +224,7 @@ docker logs openresty-proxy 2>&1 | grep "Routing /runtime"
 ## Debugging
 
 ```bash
-# Check patches applied
+# Check startup patches applied
 docker logs openhands-app 2>&1 | grep -i patch
 
 # Check container discovery
