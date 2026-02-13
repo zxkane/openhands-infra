@@ -724,6 +724,11 @@
 // The AI agent outputs URLs like "http://localhost:51745" which users cannot access
 // Also handles main domain with port (VS Code URLs): http://{subdomain}.{domain}:49955
 // This rewrites them to runtime subdomain URLs: https://{port}-{convId}.runtime.{subdomain}.{domain}/
+//
+// MOBILE OPTIMIZATION: Uses requestIdleCallback-based batched processing instead of
+// synchronous recursive DOM walking. The previous implementation processed every added
+// DOM node synchronously in the MutationObserver callback, which blocked the main thread
+// on mobile Safari (iPhone) during large conversation loads, preventing messages from rendering.
 (function() {
   // Pattern for localhost/host.docker.internal URLs
   var urlPattern = /https?:\/\/(localhost|host\.docker\.internal):(\d+)(\/[^\s<>"')\]]*)?/gi;
@@ -737,13 +742,18 @@
   // our runtime subdomain, never to external domains.
   var mainDomainPortPattern = /https?:\/\/(?!\d+-[a-f0-9]+\.runtime\.)([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?/gi;
 
+  // Cache conversation ID to avoid repeated regex matching on every DOM mutation.
+  // Invalidated on navigation (popstate) so it re-checks on SPA route changes.
+  var cachedConvId = null;
+  var convIdChecked = false;
+
   // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
   function getConversationId() {
+    if (convIdChecked) return cachedConvId;
     var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
-    if (match) {
-      return match[1].replace(/-/g, '');
-    }
-    return null;
+    cachedConvId = match ? match[1].replace(/-/g, '') : null;
+    convIdChecked = true;
+    return cachedConvId;
   }
 
   // Check if URL host matches the main domain (ignoring port)
@@ -825,27 +835,68 @@
     }
   }
 
+  // Batched, non-blocking node processing for MutationObserver.
+  // Instead of processing every DOM node synchronously (which blocks the main thread
+  // on mobile during large conversation loads), we collect pending nodes and process
+  // them in the next idle callback or animation frame.
+  var pendingNodes = [];
+  var idleCallbackScheduled = false;
+
+  function processPendingNodes() {
+    var nodes = pendingNodes;
+    pendingNodes = [];
+    idleCallbackScheduled = false;
+
+    // Reset cache at the start of each batch so it re-reads the current URL.
+    // This handles SPA navigation via pushState/replaceState which does not
+    // fire popstate events. The cache still benefits within a single batch
+    // (multiple rewriteTextUrls calls during processNode share the cached value).
+    convIdChecked = false;
+
+    // Skip all processing if not on a conversation page
+    if (!getConversationId()) return;
+
+    for (var i = 0; i < nodes.length; i++) {
+      processNode(nodes[i]);
+    }
+  }
+
+  function scheduleProcessing() {
+    if (idleCallbackScheduled) return;
+    idleCallbackScheduled = true;
+    // Use requestIdleCallback for non-blocking processing when available (most modern browsers).
+    // Falls back to requestAnimationFrame which runs before the next paint.
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(processPendingNodes, { timeout: 500 });
+    } else {
+      requestAnimationFrame(processPendingNodes);
+    }
+  }
+
+  // Register with shared MutationObserver dispatcher (see bottom of file)
+  window.__ohMutationHandlers = window.__ohMutationHandlers || [];
+  window.__ohMutationHandlers.push(function(mutations) {
+    // Skip if not on a conversation page (early exit before iterating mutations)
+    if (!getConversationId()) return;
+
+    for (var i = 0; i < mutations.length; i++) {
+      var addedNodes = mutations[i].addedNodes;
+      for (var j = 0; j < addedNodes.length; j++) {
+        var node = addedNodes[j];
+        if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
+          pendingNodes.push(node);
+        }
+      }
+    }
+    if (pendingNodes.length > 0) {
+      scheduleProcessing();
+    }
+  });
+
   // Process existing content after DOM is ready
   function init() {
     if (document.body) {
       processNode(document.body);
-
-      // Observe future DOM changes
-      var observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-          mutation.addedNodes.forEach(function(node) {
-            if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-              processNode(node);
-            }
-          });
-        });
-      });
-
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-
       console.log('OpenHands localhost URL text rewriter loaded');
     }
   }
@@ -909,10 +960,13 @@
   // Scan initially
   scanForLogoutButtons();
 
-  // Watch for new buttons added to DOM
-  var observer = new MutationObserver(function(mutations) {
-    mutations.forEach(function(mutation) {
-      mutation.addedNodes.forEach(function(node) {
+  // Register with shared MutationObserver dispatcher (see bottom of file)
+  window.__ohMutationHandlers = window.__ohMutationHandlers || [];
+  window.__ohMutationHandlers.push(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var addedNodes = mutations[i].addedNodes;
+      for (var j = 0; j < addedNodes.length; j++) {
+        var node = addedNodes[j];
         if (node.nodeType === Node.ELEMENT_NODE) {
           if (node.tagName === 'BUTTON' && isLogoutButton(node)) {
             patchLogoutButton(node);
@@ -925,13 +979,8 @@
             }
           });
         }
-      });
-    });
-  });
-
-  observer.observe(document.body || document.documentElement, {
-    childList: true,
-    subtree: true
+      }
+    }
   });
 
   // Also add document-level backup handler on mousedown (fires before React click)
@@ -1031,17 +1080,13 @@
     // Initial check
     setTimeout(protectGlobalMcpServers, 500);
 
-    // Watch for DOM changes (for SPA page transitions)
-    var observer = new MutationObserver(function(mutations) {
+    // Register with shared MutationObserver dispatcher (see bottom of file)
+    var mcpDebounceTimer = null;
+    window.__ohMutationHandlers = window.__ohMutationHandlers || [];
+    window.__ohMutationHandlers.push(function() {
       // Debounce - only run once per batch of mutations
-      clearTimeout(observer._timeout);
-      observer._timeout = setTimeout(protectGlobalMcpServers, 200);
-    });
-
-    // Start observing
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
+      clearTimeout(mcpDebounceTimer);
+      mcpDebounceTimer = setTimeout(protectGlobalMcpServers, 200);
     });
 
     // Also handle URL changes (popstate for back/forward)
@@ -1057,5 +1102,42 @@
   }
 
   console.log('OpenHands MCP protection patch loaded');
+})();
+
+// Shared MutationObserver dispatcher - consolidates all MutationObserver callbacks into
+// a single observer to reduce overhead on mobile devices.
+// Previously, 3 independent MutationObservers on document.body with {childList: true,
+// subtree: true} meant the browser invoked 3 separate JavaScript callbacks for every
+// single DOM mutation. On mobile Safari (iPhone) with limited CPU, this tripled the
+// callback overhead during large conversation loads, blocking message rendering.
+// Now a single observer dispatches to all registered handlers.
+(function() {
+  var handlers = window.__ohMutationHandlers || [];
+
+  if (handlers.length === 0) return;
+
+  var observer = new MutationObserver(function(mutations) {
+    for (var i = 0; i < handlers.length; i++) {
+      try {
+        handlers[i](mutations);
+      } catch (e) {
+        console.error('Shared MutationObserver handler error:', e);
+      }
+    }
+  });
+
+  function startObserving() {
+    var target = document.body || document.documentElement;
+    if (target) {
+      observer.observe(target, { childList: true, subtree: true });
+      console.log('Shared MutationObserver started with', handlers.length, 'handler(s)');
+    }
+  }
+
+  if (document.body) {
+    startObserving();
+  } else {
+    document.addEventListener('DOMContentLoaded', startObserving);
+  }
 })();
 </script>
