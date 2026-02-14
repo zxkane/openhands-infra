@@ -1,0 +1,288 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 0.4.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  models: read
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Version must be in semver format (e.g., 0.4.0)"
+            exit 1
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Check tag does not already exist
+        run: |
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Get last tag and commits
+        id: commits
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "No previous tag found, using all commits"
+            COMMIT_RANGE="HEAD"
+          else
+            echo "Last tag: $LAST_TAG"
+            COMMIT_RANGE="${LAST_TAG}..HEAD"
+          fi
+          echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+          echo "commit_range=$COMMIT_RANGE" >> "$GITHUB_OUTPUT"
+
+      - name: Gather commit and PR data
+        id: gather
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT_RANGE="${{ steps.commits.outputs.commit_range }}"
+
+          # Collect commit messages with PR numbers
+          COMMIT_DATA=""
+          while IFS= read -r line; do
+            HASH=$(echo "$line" | cut -d' ' -f1)
+            MSG=$(echo "$line" | cut -d' ' -f2-)
+
+            # Extract PR number if present (e.g., (#42))
+            PR_NUM=$(echo "$MSG" | grep -oP '\(#\K[0-9]+(?=\))' | head -1)
+
+            ENTRY="- ${MSG}"
+
+            if [ -n "$PR_NUM" ]; then
+              # Fetch PR title and body
+              PR_INFO=$(gh pr view "$PR_NUM" --json title,body --jq '{title: .title, body: (.body // "" | .[0:500])}' 2>/dev/null || echo "")
+              if [ -n "$PR_INFO" ]; then
+                PR_TITLE=$(echo "$PR_INFO" | jq -r '.title')
+                PR_BODY=$(echo "$PR_INFO" | jq -r '.body')
+                ENTRY="- ${MSG}\n  PR Title: ${PR_TITLE}\n  PR Description: ${PR_BODY}"
+              fi
+            fi
+
+            if [ -z "$COMMIT_DATA" ]; then
+              COMMIT_DATA="$ENTRY"
+            else
+              COMMIT_DATA="${COMMIT_DATA}\n${ENTRY}"
+            fi
+          done < <(git log --oneline "$COMMIT_RANGE")
+
+          # Write to file for safe handling
+          echo -e "$COMMIT_DATA" > /tmp/commit_data.txt
+
+          # Validate we have commits to release
+          if [ ! -s /tmp/commit_data.txt ]; then
+            echo "::error::No commits found since last tag. Nothing to release."
+            exit 1
+          fi
+
+          echo "commits_file=/tmp/commit_data.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Read existing changelog format
+        id: format
+        run: |
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::warning::CHANGELOG.md not found. Skipping format example."
+            touch /tmp/format_example.txt
+            exit 0
+          fi
+
+          # Extract the first version section as a format example
+          FIRST_VERSION=$(grep -m1 '^## \[' CHANGELOG.md | sed 's/^## \[\(.*\)\].*/\1/')
+          SECOND_VERSION=$(grep '^## \[' CHANGELOG.md | sed -n '2p' | sed 's/^## \[\(.*\)\].*/\1/')
+          if [ -n "$SECOND_VERSION" ]; then
+            sed -n "/^## \[${FIRST_VERSION}\]/,/^## \[${SECOND_VERSION}\]/p" CHANGELOG.md | head -n -1 > /tmp/format_example.txt
+          else
+            sed -n "/^## \[${FIRST_VERSION}\]/,\$p" CHANGELOG.md > /tmp/format_example.txt
+          fi
+
+      - name: Generate changelog with GitHub Models
+        id: changelog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          TODAY=$(date +%Y-%m-%d)
+
+          # Build the prompt in a temp file to avoid shell escaping issues
+          cat > /tmp/prompt.txt << 'PROMPT_END'
+          You are a changelog generator. Generate a changelog entry for a new software release.
+
+          ## Instructions
+          - Use the "Keep a Changelog" format
+          - Categorize changes into these sections (only include sections that have changes): Added, Changed, Fixed, Removed, Documentation
+          - Use sub-headings (####) to group related changes within sections
+          - Include PR numbers in parentheses like (#42)
+          - Include technical details and metrics where available
+          - Output ONLY raw markdown, no code fences, no leading/trailing blank lines
+          - Start with the version header line: ## [VERSION] - DATE (replace VERSION and DATE with actual values provided below)
+          - Be concise but informative
+          PROMPT_END
+
+          # Append dynamic content (variable-expanded heredoc)
+          {
+            echo ""
+            echo "## Format Example"
+            cat /tmp/format_example.txt
+            echo ""
+            echo "## Version: ${VERSION}"
+            echo "## Date: ${TODAY}"
+            echo ""
+            echo "## Commits and PR Data"
+            cat /tmp/commit_data.txt
+          } >> /tmp/prompt.txt
+
+          # Build JSON payload using jq for safe escaping
+          PROMPT_CONTENT=$(cat /tmp/prompt.txt)
+          jq -n \
+            --arg model "openai/gpt-4o" \
+            --arg content "$PROMPT_CONTENT" \
+            '{
+              model: $model,
+              messages: [
+                {
+                  role: "user",
+                  content: $content
+                }
+              ]
+            }' > /tmp/request.json
+
+          # Call GitHub Models API
+          HTTP_STATUS=$(curl -s -w "%{http_code}" -o /tmp/response.json \
+            -X POST "https://models.github.ai/inference/chat/completions" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/request.json)
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "::warning::GitHub Models API returned status $HTTP_STATUS. Using placeholder changelog."
+            {
+              echo "## [${VERSION}] - ${TODAY}"
+              echo ""
+              echo "> **Note**: Auto-generated changelog failed. Please review the commits and update manually."
+              echo ""
+              echo "### Changes"
+              echo ""
+              cat /tmp/commit_data.txt
+            } > /tmp/generated_changelog.md
+          elif jq -e '.choices[0].message.content' /tmp/response.json >/dev/null 2>&1; then
+            jq -r '.choices[0].message.content' /tmp/response.json > /tmp/generated_changelog.md
+          else
+            echo "::warning::GitHub Models API returned invalid response structure. Using placeholder changelog."
+            {
+              echo "## [${VERSION}] - ${TODAY}"
+              echo ""
+              echo "> **Note**: Auto-generated changelog failed. Please review the commits and update manually."
+              echo ""
+              echo "### Changes"
+              echo ""
+              cat /tmp/commit_data.txt
+            } > /tmp/generated_changelog.md
+          fi
+
+      - name: Update CHANGELOG.md
+        run: |
+          VERSION="${{ inputs.version }}"
+          LAST_TAG="${{ steps.commits.outputs.last_tag }}"
+          GENERATED=$(cat /tmp/generated_changelog.md)
+
+          # Build the compare link
+          if [ -n "$LAST_TAG" ]; then
+            COMPARE_LINK="[${VERSION}]: https://github.com/${{ github.repository }}/compare/${LAST_TAG}...v${VERSION}"
+          else
+            COMPARE_LINK="[${VERSION}]: https://github.com/${{ github.repository }}/releases/tag/v${VERSION}"
+          fi
+
+          # Create CHANGELOG.md with header if it doesn't exist
+          if [ ! -f CHANGELOG.md ]; then
+            cat > CHANGELOG.md << 'HEADER'
+          # Changelog
+
+          All notable changes to this project will be documented in this file.
+
+          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+          HEADER
+            # Remove leading whitespace from heredoc
+            sed -i 's/^          //' CHANGELOG.md
+          fi
+
+          # Find insertion point: line of first version header, or end of file
+          INSERT_LINE=$(grep -n '^## \[' CHANGELOG.md | head -1 | cut -d: -f1)
+          if [ -n "$INSERT_LINE" ]; then
+            # Insert before the first version entry
+            {
+              head -n $((INSERT_LINE - 1)) CHANGELOG.md
+              echo "$GENERATED"
+              echo ""
+              echo "$COMPARE_LINK"
+              echo ""
+              tail -n +"$INSERT_LINE" CHANGELOG.md
+            } > /tmp/new_changelog.md
+          else
+            # No existing version entries, append to end
+            {
+              cat CHANGELOG.md
+              echo ""
+              echo "$GENERATED"
+              echo ""
+              echo "$COMPARE_LINK"
+            } > /tmp/new_changelog.md
+          fi
+
+          mv /tmp/new_changelog.md CHANGELOG.md
+
+      - name: Bump version in package.json
+        run: npm version "${{ inputs.version }}" --no-git-tag-version
+
+      - name: Create release branch and PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          BRANCH="release/v${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add package.json CHANGELOG.md
+          # Only add package-lock.json if it exists
+          if [ -f package-lock.json ]; then
+            git add package-lock.json
+          fi
+          git commit -m "chore: release v${VERSION}"
+          git push origin "$BRANCH"
+
+          # Use generated changelog as PR body
+          CHANGELOG_BODY=$(cat /tmp/generated_changelog.md)
+
+          gh pr create \
+            --title "chore: release v${VERSION}" \
+            --body "$CHANGELOG_BODY" \
+            --base main \
+            --head "$BRANCH"
