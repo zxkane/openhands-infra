@@ -23,7 +23,9 @@ class EcsManager:
     ):
         self._cluster_arn = cluster_arn
         self._task_definition_arn = task_definition_arn
-        self._subnets = subnets
+        self._subnets = [s for s in subnets if s.startswith('subnet-')]
+        if not self._subnets:
+            raise ValueError('No valid subnets configured for ECS tasks')
         self._security_group_id = security_group_id
         session = boto3.Session(region_name=region) if region else boto3.Session()
         self._ecs = session.client('ecs')

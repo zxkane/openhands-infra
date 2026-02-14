@@ -10,7 +10,6 @@ local _M = {}
 
 -- Configuration
 local ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL") or "http://localhost:8081"
-local ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY") or ""
 
 -- Error types returned by find_container for proper HTTP status mapping
 _M.ERR_SOCKET = "socket_error"      -- Orchestrator connection failed (503)
@@ -33,7 +32,7 @@ function _M.find_container(cid, tp)
   local res, err = h:request_uri(url, {
     method = "GET",
     headers = {
-      ["X-API-Key"] = ORCHESTRATOR_API_KEY,
+
       ["Content-Type"] = "application/json",
     },
   })
@@ -83,7 +82,7 @@ function _M.find_container(cid, tp)
   activity_h:request_uri(ORCHESTRATOR_URL .. "/activity", {
     method = "POST",
     headers = {
-      ["X-API-Key"] = ORCHESTRATOR_API_KEY,
+
       ["Content-Type"] = "application/json",
     },
     body = cjson.encode({ session_id = cid }),

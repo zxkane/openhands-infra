@@ -9,7 +9,7 @@ import os
 import uuid
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from dynamodb_store import DynamoDBStore, SandboxRecord
@@ -26,7 +26,6 @@ ECS_CLUSTER_ARN = os.environ.get('ECS_CLUSTER_ARN', '')
 TASK_DEFINITION_ARN = os.environ.get('TASK_DEFINITION_ARN', '')
 SUBNETS = os.environ.get('SUBNETS', '').split(',')
 SECURITY_GROUP_ID = os.environ.get('SECURITY_GROUP_ID', '')
-ORCHESTRATOR_API_KEY = os.environ.get('ORCHESTRATOR_API_KEY', '')
 AWS_REGION = os.environ.get('AWS_REGION_NAME', os.environ.get('AWS_DEFAULT_REGION', 'us-east-1'))
 SANDBOX_IMAGE = os.environ.get('SANDBOX_IMAGE', '')
 
@@ -41,11 +40,8 @@ ecs = EcsManager(
 )
 
 
-def verify_api_key(x_api_key: Optional[str] = Header(None)) -> None:
-    """Verify the API key matches the expected orchestrator key."""
-    if ORCHESTRATOR_API_KEY and x_api_key != ORCHESTRATOR_API_KEY:
-        raise HTTPException(status_code=401, detail='Invalid API key')
-
+# NOTE: No API key auth needed — orchestrator only listens on localhost:8081 (EC2 private).
+# The security group does not expose port 8081 to the ALB or internet.
 
 # ========================================
 # Request/Response Models
@@ -123,9 +119,9 @@ async def health():
 
 
 @app.post('/start', response_model=StartResponse)
-def start_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
+def start_sandbox(req: StartRequest):
     """Start a new sandbox Fargate task for a conversation."""
-    verify_api_key(x_api_key)
+
 
     session_id = req.session_id
     image = req.image or SANDBOX_IMAGE
@@ -217,9 +213,9 @@ def start_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
 
 
 @app.post('/stop')
-def stop_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
+def stop_sandbox(req: StopRequest):
     """Stop a running sandbox task."""
-    verify_api_key(x_api_key)
+
 
     record = store.get_sandbox(req.session_id)
     if not record:
@@ -236,9 +232,9 @@ def stop_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
 
 
 @app.post('/pause')
-def pause_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
+def pause_sandbox(req: StopRequest):
     """Pause a sandbox (stops the task but marks as PAUSED for resume)."""
-    verify_api_key(x_api_key)
+
 
     record = store.get_sandbox(req.session_id)
     if not record:
@@ -255,9 +251,9 @@ def pause_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
 
 
 @app.post('/resume', response_model=StartResponse)
-def resume_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
+def resume_sandbox(req: StartRequest):
     """Resume a paused sandbox (starts new task, workspace intact on EFS)."""
-    verify_api_key(x_api_key)
+
 
     record = store.get_sandbox(req.session_id)
     if not record:
@@ -307,9 +303,9 @@ def resume_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
 
 
 @app.get('/sessions/{session_id}', response_model=SessionResponse)
-def get_session(session_id: str, x_api_key: Optional[str] = Header(None)):
+def get_session(session_id: str):
     """Get sandbox info by session/conversation ID. Used by OpenResty for discovery."""
-    verify_api_key(x_api_key)
+
 
     record = store.get_sandbox(session_id)
     if not record:
@@ -319,26 +315,26 @@ def get_session(session_id: str, x_api_key: Optional[str] = Header(None)):
 
 
 @app.post('/sessions/batch')
-def batch_get_sessions(req: BatchRequest, x_api_key: Optional[str] = Header(None)):
+def batch_get_sessions(req: BatchRequest):
     """Batch get sandbox info for multiple sessions."""
-    verify_api_key(x_api_key)
+
 
     records = store.batch_get_sandboxes(req.session_ids)
     return {'sessions': [record_to_session_response(r) for r in records]}
 
 
 @app.get('/list', response_model=ListResponse)
-def list_sessions(x_api_key: Optional[str] = Header(None)):
+def list_sessions():
     """List all running sandboxes."""
-    verify_api_key(x_api_key)
+
 
     records = store.list_running()
     return ListResponse(sessions=[record_to_session_response(r) for r in records])
 
 
 @app.post('/activity')
-def update_activity(req: ActivityRequest, x_api_key: Optional[str] = Header(None)):
+def update_activity(req: ActivityRequest):
     """Update last_activity_at timestamp (called by OpenResty on each proxied request)."""
-    verify_api_key(x_api_key)
+
     store.update_activity(req.session_id)
     return {'status': 'ok'}

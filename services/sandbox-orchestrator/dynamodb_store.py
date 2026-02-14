@@ -176,4 +176,6 @@ class DynamoDBStore:
             },
             ExpressionAttributeNames={'#status': 'status'},
         )
+        # Note: DynamoDB supports <, >, <=, >=, BETWEEN, begins_with on sort keys
+        # in KeyConditionExpression. This is valid since last_activity_at is the sort key.
         return [SandboxRecord(item) for item in response.get('Items', [])]
