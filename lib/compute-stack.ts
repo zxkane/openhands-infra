@@ -432,11 +432,8 @@ export class ComputeStack extends cdk.Stack {
       'export OH_SECRET_KEY',
       'echo "Sandbox secret key configured"',
       'set -x',
-      // Discover private subnets for ECS Fargate sandbox task placement (uses IMDSv2 token)
-      'IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")',
-      'VPC_ID=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/mac)/vpc-id)',
-      'SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:aws-cdk:subnet-type,Values=Private" --query "Subnets[].SubnetId" --output text --region $REGION | tr "\\t" ",")',
-      '[ -n "$SUBNETS" ] || { echo "ERROR: Failed to discover private subnets"; exit 1; }',
+      `SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=${config.vpcId}" "Name=tag:aws-cdk:subnet-type,Values=Private" --query "Subnets[].SubnetId" --output text --region $REGION | tr "\\t" ",")`,
+      '[ -n "$SUBNETS" ] || { echo "ERROR: No private subnets"; exit 1; }',
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
       // OpenResty reverse proxy - runs as container on Docker bridge network
@@ -618,7 +615,6 @@ export class ComputeStack extends cdk.Stack {
       `pull_with_retry "${sandboxOutput.orchestratorImageUri}"`,  // Sandbox orchestrator
       'set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap \'error_handler $LINENO\' ERR',
       'systemctl daemon-reload && systemctl enable openhands && systemctl start openhands',
-      // Wait for sandbox-orchestrator container to be ready
       'for i in {1..30}; do docker inspect sandbox-orchestrator >/dev/null 2>&1 && break; sleep 2; done',
       'echo "OpenHands setup complete!"',
     );
