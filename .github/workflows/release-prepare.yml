@@ -140,6 +140,7 @@ jobs:
           - Include technical details and metrics where available
           - Output ONLY raw markdown, no code fences, no leading/trailing blank lines
           - Start with the version header line: ## [VERSION] - DATE (replace VERSION and DATE with actual values provided below)
+          - Do NOT include link reference definitions (e.g., [0.3.0]: https://...) at the end — those are added separately
           - Be concise but informative
           PROMPT_END
 
@@ -203,6 +204,14 @@ jobs:
               cat /tmp/commit_data.txt
             } > /tmp/generated_changelog.md
           fi
+
+      - name: Strip link references from generated changelog
+        run: |
+          # Remove any markdown link reference definitions the LLM may have included
+          # (e.g., [0.3.0]: https://...) since the workflow adds its own
+          sed -i '/^\[.*\]: https\?:\/\//d' /tmp/generated_changelog.md
+          # Remove trailing blank lines
+          sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /tmp/generated_changelog.md
 
       - name: Update CHANGELOG.md
         run: |

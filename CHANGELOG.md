@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-14
+
+### Added
+
+#### CI/CD Automation
+- **Automated release workflows integrated with LLM-generated changelogs** (#26)
+  - Introduced two GitHub Actions workflows:
+    - `release-prepare.yml` for manual release preparation with commit/PR enrichment and LLM-assisted changelog generation.
+    - `release-publish.yml` for automated version tagging and package publishing.
+
+#### Infrastructure
+- **OpenHands upgraded to v1.3.0** (#22)
+  - Upgraded from v1.2.1 with support for new upstream features:
+    - CORS environment variable `OH_ALLOW_CORS_ORIGINS_0` for customizable origins.
+    - Host network mode enabled via `OH_SANDBOX_USE_HOST_NETWORK=true`.
+  - Applied multi-tenant conversation isolation update (Patch 27) and webhook callback UUID + secret fixes (Patches 28/29).
+
+### Changed
+
+#### Code Refactor
+- Replaced runtime regex patching with fork-based patches (#23):
+  - Deprecated `apply-patch.sh` with 29 regex-based patches and introduced clean upstream modifications stored in `zxkane/openhands@custom-v1.3.0-r1`.
+  - Consolidated patching process to Docker build time, reducing container startup complexity.
+
+### Fixed
+
+#### Mobile Interface
+- **Fix for iPhone historical conversation messages** (#24):
+  - Addressed viewport-specific React component remounts causing conversation history issues.
+  - Replaced synchronous DOM walking with `requestIdleCallback`-based batched processing to improve performance.
+  - Applied temporary React Fiber patch to resolve stuck skeleton loading state on mobile viewports.
+
+### Documentation
+
+#### Deployment Guide
+- Added prerequisites for creating sandbox secret key before first-time deployment (#21):
+  - Updated README.md to include a required step for configuring the `sandbox secret key`.
+  - Prerequisites documented in `CLAUDE.md` with accompanying CLI command examples.
+
+[0.3.0]: https://github.com/zxkane/openhands-infra/compare/v0.2.0...v0.3.0
+
 ## [0.2.0] - 2026-02-02
 
 ### Added

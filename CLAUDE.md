@@ -94,6 +94,8 @@ EdgeStack (us-east-1) ← depends on Compute + Auth
 | `lib/lambda-edge/` | Lambda@Edge handlers |
 | `test/E2E_TEST_CASES.md` | E2E test cases |
 | `docs/ARCHITECTURE.md` | Architecture deep dive |
+| `.github/workflows/release-prepare.yml` | Automated release PR with LLM changelog |
+| `.github/workflows/release-publish.yml` | Auto tag + GitHub Release on merge |
 
 ## User Configuration (Multi-Tenant)
 
@@ -197,6 +199,32 @@ aws ssm start-session --target <instance-id> --region <region>
 # Check logs
 docker logs openhands-app 2>&1 | grep -iE "(error|exception|failed)" | tail -20
 ```
+
+## Release Process (Automated)
+
+Releases are automated via two GitHub Actions workflows.
+
+### Creating a Release
+
+1. **Trigger** `release-prepare.yml` via GitHub Actions UI with the version number (e.g., `0.4.0`)
+2. The workflow automatically:
+   - Gathers commits since last tag, enriches with PR data
+   - Generates changelog via GitHub Models (GPT-4o) using existing CHANGELOG.md format
+   - Bumps `package.json`, prepends changelog to `CHANGELOG.md`
+   - Creates `release/v{version}` branch and opens a PR
+3. **Review** the generated PR — edit changelog if needed
+4. **Merge** the PR to trigger `release-publish.yml`, which creates the git tag and GitHub Release
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `.github/workflows/release-prepare.yml` | Manual trigger: changelog generation + release PR |
+| `.github/workflows/release-publish.yml` | Auto trigger: tag + GitHub Release on PR merge |
+
+### Prerequisites
+
+- Repo setting **"Allow GitHub Actions to create and approve pull requests"** must be enabled (Settings > Actions > General > Workflow permissions)
 
 ## Security Scanning
 
