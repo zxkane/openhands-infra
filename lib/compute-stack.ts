@@ -432,8 +432,8 @@ export class ComputeStack extends cdk.Stack {
       'export OH_SECRET_KEY',
       'echo "Sandbox secret key configured"',
       'set -x',
-      `SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=${config.vpcId}" "Name=tag:aws-cdk:subnet-type,Values=Private" --query "Subnets[].SubnetId" --output text --region $REGION | tr "\\t" ",")`,
-      '[ -n "$SUBNETS" ] || { echo "ERROR: No private subnets"; exit 1; }',
+      // Pass private subnet IDs from CDK (known at synth time from VPC lookup)
+      `SUBNETS="${privateSubnets.subnetIds.join(',')}"`,
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
       // OpenResty reverse proxy - runs as container on Docker bridge network

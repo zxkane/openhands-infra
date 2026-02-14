@@ -1255,8 +1255,7 @@ OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbo
 export OH_SECRET_KEY
 echo "Sandbox secret key configured"
 set -x
-SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=vpc-12345678" "Name=tag:aws-cdk:subnet-type,Values=Private" --query "Subnets[].SubnetId" --output text --region $REGION | tr "\\t" ",")
-[ -n "$SUBNETS" ] || { echo "ERROR: No private subnets"; exit 1; }
+SUBNETS="p-12345,p-67890"
 cat > /data/openhands/docker-compose.yml << EOF
 services:
   openresty:
