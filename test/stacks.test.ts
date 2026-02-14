@@ -45,7 +45,6 @@ const mockSandboxOutput: SandboxStackOutput = {
   taskDefinitionArn: 'arn:aws:ecs:us-west-2:123456789012:task-definition/openhands-sandbox:1',
   sandboxTaskSecurityGroupId: 'sg-sandbox123',
   orchestratorApiUrl: 'http://localhost:8081',
-  orchestratorApiKeySecretName: 'openhands/sandbox-orchestrator-api-key',
   sandboxLogGroupName: '/openhands/sandbox',
   orchestratorImageUri: '123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest',
   sandboxExecutionRoleArn: 'arn:aws:iam::123456789012:role/mock-execution-role',
@@ -767,14 +766,14 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       const template = Template.fromStack(stack);
 
-      // Verify ECS Cluster is created
+      // Verify ECS Cluster is created (name derived from domain)
       template.hasResourceProperties('AWS::ECS::Cluster', {
-        ClusterName: 'openhands-sandbox',
+        ClusterName: 'openhands-example-com-sandbox',
       });
 
-      // Verify DynamoDB table is created
+      // Verify DynamoDB table is created (name derived from domain)
       template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'openhands-sandbox-registry',
+        TableName: 'openhands-example-com-sandbox-registry',
         KeySchema: Match.arrayWith([
           Match.objectLike({
             AttributeName: 'conversation_id',

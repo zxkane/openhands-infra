@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as efs from 'aws-cdk-lib/aws-efs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -31,10 +30,6 @@ export interface SandboxStackProps extends cdk.StackProps {
   sandboxAwsAccess?: boolean;
   /** Sandbox IAM role ARN (from SecurityStack, when sandboxAwsAccess is enabled) */
   sandboxRoleArn?: string;
-  /** EFS file system for workspace persistence (from ComputeStack) */
-  workspaceFileSystem?: efs.IFileSystem;
-  /** EFS access point for workspace (from ComputeStack) */
-  workspaceAccessPoint?: efs.IAccessPoint;
 }
 
 /**
@@ -58,12 +53,16 @@ export class SandboxStack extends cdk.Stack {
     const { vpc } = networkOutput;
     const { alertTopic } = monitoringOutput;
 
+    // Name prefix derived from domain to support multi-environment deployments
+    const fullDomain = `${config.subDomain}.${config.domainName}`;
+    const namePrefix = fullDomain.replace(/\./g, '-');
+
     // ========================================
     // ECS Cluster
     // ========================================
     const cluster = new ecs.Cluster(this, 'SandboxCluster', {
       vpc,
-      clusterName: 'openhands-sandbox',
+      clusterName: `${namePrefix}-sandbox`,
       containerInsightsV2: ecs.ContainerInsights.ENABLED,
     });
 
@@ -71,7 +70,7 @@ export class SandboxStack extends cdk.Stack {
     // DynamoDB Sandbox Registry
     // ========================================
     const registryTable = new dynamodb.Table(this, 'SandboxRegistry', {
-      tableName: 'openhands-sandbox-registry',
+      tableName: `${namePrefix}-sandbox-registry`,
       partitionKey: {
         name: 'conversation_id',
         type: dynamodb.AttributeType.STRING,
@@ -258,67 +257,9 @@ export class SandboxStack extends cdk.Stack {
       },
     });
 
-    // ========================================
-    // Orchestrator API Key (internal authentication)
-    // ========================================
-    const orchestratorApiKeySecret = new secretsmanager.Secret(this, 'OrchestratorApiKey', {
-      secretName: 'openhands/sandbox-orchestrator-api-key',
-      description: 'API key for sandbox orchestrator internal authentication',
-      generateSecretString: {
-        excludePunctuation: true,
-        passwordLength: 48,
-      },
-    });
-
-    // ========================================
-    // Sandbox Orchestrator IAM Role
-    // ========================================
-    const orchestratorRole = new iam.Role(this, 'OrchestratorRole', {
-      assumedBy: new iam.CompositePrincipal(
-        new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-        securityOutput.ec2Role,
-      ),
-      description: 'IAM role for sandbox orchestrator (ECS + DynamoDB operations)',
-    });
-
-    // ECS permissions for orchestrator
-    orchestratorRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'EcsTaskManagement',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'ecs:RunTask',
-        'ecs:StopTask',
-        'ecs:DescribeTasks',
-        'ecs:ListTasks',
-      ],
-      resources: ['*'],
-      conditions: {
-        ArnEquals: {
-          'ecs:cluster': cluster.clusterArn,
-        },
-      },
-    }));
-
-    // RunTask needs to pass roles
-    orchestratorRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'PassTaskRoles',
-      effect: iam.Effect.ALLOW,
-      actions: ['iam:PassRole'],
-      resources: [
-        sandboxExecutionRole.roleArn,
-        sandboxTaskRole.roleArn,
-      ],
-    }));
-
-    // DynamoDB permissions for orchestrator
-    registryTable.grantReadWriteData(orchestratorRole);
-
-    // Secrets Manager access for orchestrator API key
-    orchestratorApiKeySecret.grantRead(orchestratorRole);
-    sandboxSecretKey.grantRead(orchestratorRole);
-
-    // NOTE: EC2 role permissions for ECS/DynamoDB are added in ComputeStack
-    // to avoid cyclic cross-stack references between SecurityStack and SandboxStack
+    // NOTE: Orchestrator runs as a docker-compose sidecar on EC2 — it inherits the
+    // EC2 instance role. ECS/DynamoDB permissions are added to EC2 role in ComputeStack
+    // to avoid cyclic cross-stack references between SecurityStack and SandboxStack.
 
     // ========================================
     // Sandbox Orchestrator Docker Image
@@ -413,7 +354,6 @@ export class SandboxStack extends cdk.Stack {
       taskDefinitionArn: sandboxTaskDefinition.taskDefinitionArn,
       sandboxTaskSecurityGroupId: sandboxTaskSg.securityGroupId,
       orchestratorApiUrl: 'http://localhost:8081', // Orchestrator runs as sidecar on EC2
-      orchestratorApiKeySecretName: orchestratorApiKeySecret.secretName,
       sandboxLogGroupName: sandboxLogGroup.logGroupName,
       orchestratorImageUri: orchestratorImage.imageUri,
       sandboxExecutionRoleArn: sandboxExecutionRole.roleArn,

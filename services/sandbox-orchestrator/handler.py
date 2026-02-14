@@ -123,7 +123,7 @@ async def health():
 
 
 @app.post('/start', response_model=StartResponse)
-async def start_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
+def start_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
     """Start a new sandbox Fargate task for a conversation."""
     verify_api_key(x_api_key)
 
@@ -217,7 +217,7 @@ async def start_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(Non
 
 
 @app.post('/stop')
-async def stop_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
+def stop_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
     """Stop a running sandbox task."""
     verify_api_key(x_api_key)
 
@@ -236,7 +236,7 @@ async def stop_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)
 
 
 @app.post('/pause')
-async def pause_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
+def pause_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None)):
     """Pause a sandbox (stops the task but marks as PAUSED for resume)."""
     verify_api_key(x_api_key)
 
@@ -255,7 +255,7 @@ async def pause_sandbox(req: StopRequest, x_api_key: Optional[str] = Header(None
 
 
 @app.post('/resume', response_model=StartResponse)
-async def resume_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
+def resume_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(None)):
     """Resume a paused sandbox (starts new task, workspace intact on EFS)."""
     verify_api_key(x_api_key)
 
@@ -307,7 +307,7 @@ async def resume_sandbox(req: StartRequest, x_api_key: Optional[str] = Header(No
 
 
 @app.get('/sessions/{session_id}', response_model=SessionResponse)
-async def get_session(session_id: str, x_api_key: Optional[str] = Header(None)):
+def get_session(session_id: str, x_api_key: Optional[str] = Header(None)):
     """Get sandbox info by session/conversation ID. Used by OpenResty for discovery."""
     verify_api_key(x_api_key)
 
@@ -319,7 +319,7 @@ async def get_session(session_id: str, x_api_key: Optional[str] = Header(None)):
 
 
 @app.post('/sessions/batch')
-async def batch_get_sessions(req: BatchRequest, x_api_key: Optional[str] = Header(None)):
+def batch_get_sessions(req: BatchRequest, x_api_key: Optional[str] = Header(None)):
     """Batch get sandbox info for multiple sessions."""
     verify_api_key(x_api_key)
 
@@ -328,7 +328,7 @@ async def batch_get_sessions(req: BatchRequest, x_api_key: Optional[str] = Heade
 
 
 @app.get('/list', response_model=ListResponse)
-async def list_sessions(x_api_key: Optional[str] = Header(None)):
+def list_sessions(x_api_key: Optional[str] = Header(None)):
     """List all running sandboxes."""
     verify_api_key(x_api_key)
 
@@ -337,7 +337,7 @@ async def list_sessions(x_api_key: Optional[str] = Header(None)):
 
 
 @app.post('/activity')
-async def update_activity(req: ActivityRequest, x_api_key: Optional[str] = Header(None)):
+def update_activity(req: ActivityRequest, x_api_key: Optional[str] = Header(None)):
     """Update last_activity_at timestamp (called by OpenResty on each proxied request)."""
     verify_api_key(x_api_key)
     store.update_activity(req.session_id)

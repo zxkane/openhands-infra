@@ -87,15 +87,17 @@ class DynamoDBStore:
         # DynamoDB batch_get_item limit is 100 keys
         for i in range(0, len(conversation_ids), 100):
             batch = conversation_ids[i:i + 100]
-            response = self._dynamodb.batch_get_item(
-                RequestItems={
-                    self._table_name: {
-                        'Keys': [{'conversation_id': cid} for cid in batch]
-                    }
+            request_items = {
+                self._table_name: {
+                    'Keys': [{'conversation_id': cid} for cid in batch]
                 }
-            )
-            items = response.get('Responses', {}).get(self._table_name, [])
-            records.extend(SandboxRecord(item) for item in items)
+            }
+            # Retry loop for UnprocessedKeys
+            while request_items:
+                response = self._dynamodb.batch_get_item(RequestItems=request_items)
+                items = response.get('Responses', {}).get(self._table_name, [])
+                records.extend(SandboxRecord(item) for item in items)
+                request_items = response.get('UnprocessedKeys', {})
 
         return records
 

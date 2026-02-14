@@ -133,8 +133,6 @@ export interface SandboxStackOutput {
   sandboxTaskSecurityGroupId: string;
   /** Sandbox Orchestrator API URL (internal) */
   orchestratorApiUrl: string;
-  /** Sandbox Orchestrator API key secret name */
-  orchestratorApiKeySecretName: string;
   /** CloudWatch log group for sandbox tasks */
   sandboxLogGroupName: string;
   /** Sandbox Orchestrator Docker image URI (ECR) */
