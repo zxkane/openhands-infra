@@ -53,8 +53,9 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # Extract the section for this version (between this version header and the next version header)
-          sed -n "/^## \[${VERSION}\]/,/^## \[/p" CHANGELOG.md | head -n -1 > /tmp/release_notes.md
+          # Extract the section for this version
+          # Use awk for reliable extraction: from this version header to the next version header (or EOF)
+          awk "/^## \[${VERSION}\]/{found=1} found && /^## \[/ && !/^## \[${VERSION}\]/{exit} found{print}" CHANGELOG.md > /tmp/release_notes.md
 
           # If extraction failed, use a fallback
           if [ ! -s /tmp/release_notes.md ]; then

@@ -212,16 +212,28 @@ jobs:
             COMPARE_LINK="[${VERSION}]: https://github.com/${{ github.repository }}/releases/tag/v${VERSION}"
           fi
 
-          # Create new changelog by inserting after the header (line 6 - after the semver line)
-          {
-            head -n 6 CHANGELOG.md
-            echo ""
-            echo "$GENERATED"
-            echo ""
-            echo "$COMPARE_LINK"
-            echo ""
-            tail -n +7 CHANGELOG.md
-          } > /tmp/new_changelog.md
+          # Find insertion point: line of first version header, or end of file
+          INSERT_LINE=$(grep -n '^## \[' CHANGELOG.md | head -1 | cut -d: -f1)
+          if [ -n "$INSERT_LINE" ]; then
+            # Insert before the first version entry
+            {
+              head -n $((INSERT_LINE - 1)) CHANGELOG.md
+              echo "$GENERATED"
+              echo ""
+              echo "$COMPARE_LINK"
+              echo ""
+              tail -n +"$INSERT_LINE" CHANGELOG.md
+            } > /tmp/new_changelog.md
+          else
+            # No existing version entries, append to end
+            {
+              cat CHANGELOG.md
+              echo ""
+              echo "$GENERATED"
+              echo ""
+              echo "$COMPARE_LINK"
+            } > /tmp/new_changelog.md
+          fi
 
           mv /tmp/new_changelog.md CHANGELOG.md
 
