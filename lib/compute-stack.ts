@@ -508,6 +508,7 @@ export class ComputeStack extends cdk.Stack {
       // RUNTIME=remote delegates sandbox creation to the Sandbox Orchestrator → ECS Fargate
       '      - RUNTIME=remote',
       `      - SANDBOX_REMOTE_RUNTIME_API_URL=${sandboxOutput.orchestratorApiUrl}`,
+      '      - SANDBOX_API_KEY=local',  // Required by RemoteSandboxServiceInjector (not used for auth since orchestrator is localhost)
       // Environment variables injected into sandbox containers at startup
       // When sandboxAwsAccess is enabled, include AWS_SHARED_CREDENTIALS_FILE to use scoped credentials
       // OH_SECRET_KEY enables secret persistence across sandbox restarts (required for conversation resume)

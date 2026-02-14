@@ -1333,6 +1333,7 @@ services:
       - AGENT_ENABLE_MCP=true
       - RUNTIME=remote
       - SANDBOX_REMOTE_RUNTIME_API_URL=http://localhost:8081
+      - SANDBOX_API_KEY=local
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
       - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
       - DB_PORT=5432
