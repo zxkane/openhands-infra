@@ -27,6 +27,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Check tag does not already exist
@@ -97,6 +98,12 @@ jobs:
       - name: Read existing changelog format
         id: format
         run: |
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::warning::CHANGELOG.md not found. Skipping format example."
+            touch /tmp/format_example.txt
+            exit 0
+          fi
+
           # Extract the first version section as a format example
           FIRST_VERSION=$(grep -m1 '^## \[' CHANGELOG.md | sed 's/^## \[\(.*\)\].*/\1/')
           SECOND_VERSION=$(grep '^## \[' CHANGELOG.md | sed -n '2p' | sed 's/^## \[\(.*\)\].*/\1/')
@@ -177,8 +184,19 @@ jobs:
               echo ""
               cat /tmp/commit_data.txt
             } > /tmp/generated_changelog.md
-          else
+          elif jq -e '.choices[0].message.content' /tmp/response.json >/dev/null 2>&1; then
             jq -r '.choices[0].message.content' /tmp/response.json > /tmp/generated_changelog.md
+          else
+            echo "::warning::GitHub Models API returned invalid response structure. Using placeholder changelog."
+            {
+              echo "## [${VERSION}] - ${TODAY}"
+              echo ""
+              echo "> **Note**: Auto-generated changelog failed. Please review the commits and update manually."
+              echo ""
+              echo "### Changes"
+              echo ""
+              cat /tmp/commit_data.txt
+            } > /tmp/generated_changelog.md
           fi
 
       - name: Update CHANGELOG.md
@@ -221,7 +239,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "$BRANCH"
-          git add package.json package-lock.json CHANGELOG.md
+          git add package.json CHANGELOG.md
+          # Only add package-lock.json if it exists
+          if [ -f package-lock.json ]; then
+            git add package-lock.json
+          fi
           git commit -m "chore: release v${VERSION}"
           git push origin "$BRANCH"
 
