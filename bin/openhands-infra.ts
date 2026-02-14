@@ -222,15 +222,11 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   env: mainEnv,
   config,
   networkOutput: networkStack.output,
-  securityOutput: securityStack.output,
   monitoringOutput: monitoringStack.output,
-  sandboxAwsAccess,
-  sandboxRoleArn: securityStack.output.sandboxRoleArn,
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
   crossRegionReferences: true,
 });
 sandboxStack.addDependency(networkStack);
-sandboxStack.addDependency(securityStack);
 sandboxStack.addDependency(monitoringStack);
 
 // 5. Compute Stack - ASG, Launch Template, ALB

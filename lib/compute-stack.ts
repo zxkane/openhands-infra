@@ -155,16 +155,27 @@ export class ComputeStack extends cdk.Stack {
     // Full domain for runtime URL pattern
     const fullDomain = `${config.subDomain}.${config.domainName}`;
 
-    // EC2 → sandbox Fargate task networking and IAM
-    // Done here (not in SandboxStack) to avoid cyclic cross-stack dependency
+    // EC2 ↔ sandbox Fargate task networking
+    // Both ingress and egress rules are placed here (not in SandboxStack) to avoid
+    // cyclic cross-stack dependency between SecurityStack and SandboxStack
     const sandboxTaskSg = ec2.SecurityGroup.fromSecurityGroupId(
       this, 'ImportedSandboxTaskSg', sandboxOutput.sandboxTaskSecurityGroupId
     );
+    // EC2 → sandbox (outbound)
     ec2SecurityGroup.addEgressRule(
       sandboxTaskSg,
       ec2.Port.tcpRange(1, 65535),
       'Allow EC2 to reach sandbox Fargate tasks'
     );
+    // sandbox → EC2 (inbound to sandbox SG from EC2 SG)
+    new ec2.CfnSecurityGroupIngress(this, 'SandboxIngressFromEc2', {
+      groupId: sandboxOutput.sandboxTaskSecurityGroupId,
+      sourceSecurityGroupId: ec2SecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 1,
+      toPort: 65535,
+      description: 'Allow all TCP from EC2 (OpenResty routes to sandbox ports)',
+    });
 
     // EC2 role needs ECS permissions for sandbox orchestrator (runs on EC2)
     ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({

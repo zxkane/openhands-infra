@@ -1603,6 +1603,19 @@ echo "OpenHands setup complete!"",
       },
       "Type": "AWS::SSM::Parameter",
     },
+    "SandboxIngressFromEc2": {
+      "Properties": {
+        "Description": "Allow all TCP from EC2 (OpenResty routes to sandbox ports)",
+        "FromPort": 1,
+        "GroupId": "sg-sandbox123",
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "ToPort": 65535,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
     "SsmUsEast1SecretWriter39004BA6": {
       "DeletionPolicy": "Delete",
       "DependsOn": [

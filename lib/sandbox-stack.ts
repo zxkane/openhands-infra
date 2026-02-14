@@ -16,7 +16,6 @@ import * as path from 'path';
 import {
   OpenHandsConfig,
   NetworkStackOutput,
-  SecurityStackOutput,
   MonitoringStackOutput,
   SandboxStackOutput,
 } from './interfaces.js';
@@ -24,12 +23,7 @@ import {
 export interface SandboxStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   networkOutput: NetworkStackOutput;
-  securityOutput: SecurityStackOutput;
   monitoringOutput: MonitoringStackOutput;
-  /** Enable sandbox AWS access (scoped credentials) */
-  sandboxAwsAccess?: boolean;
-  /** Sandbox IAM role ARN (from SecurityStack, when sandboxAwsAccess is enabled) */
-  sandboxRoleArn?: string;
 }
 
 /**
@@ -49,7 +43,7 @@ export class SandboxStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: SandboxStackProps) {
     super(scope, id, props);
 
-    const { config, networkOutput, securityOutput, monitoringOutput } = props;
+    const { config, networkOutput, monitoringOutput } = props;
     const { vpc } = networkOutput;
     const { alertTopic } = monitoringOutput;
 
@@ -121,32 +115,15 @@ export class SandboxStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    // Allow inbound from EC2 security group (OpenResty proxy routes to sandbox ports)
-    // Use security group ID to avoid cyclic dependency between SecurityStack and SandboxStack
-    const ec2Sg = ec2.SecurityGroup.fromSecurityGroupId(
-      this, 'ImportedEc2Sg', securityOutput.ec2SecurityGroupId
-    );
-    sandboxTaskSg.addIngressRule(
-      ec2Sg,
-      ec2.Port.tcpRange(1, 65535),
-      'Allow all TCP from EC2 instances (OpenResty proxy routes to sandbox ports)'
-    );
-
-    // Allow inbound from sandbox tasks to other sandbox tasks (inter-sandbox, if needed)
+    // Allow inbound from sandbox tasks to other sandbox tasks (inter-sandbox)
     sandboxTaskSg.addIngressRule(
       sandboxTaskSg,
       ec2.Port.tcpRange(1, 65535),
       'Allow inter-sandbox communication'
     );
 
-    // Allow sandbox tasks to reach VPC endpoints (HTTPS)
-    sandboxTaskSg.addEgressRule(
-      networkOutput.vpcEndpointSecurityGroup,
-      ec2.Port.tcp(443),
-      'Allow sandbox to reach VPC endpoints'
-    );
-
-    // NOTE: EC2 → sandbox egress rule is added in ComputeStack to avoid cyclic dependency
+    // NOTE: EC2 ↔ sandbox SG rules (ingress + egress) are added in ComputeStack
+    // to avoid cyclic cross-stack dependency between SecurityStack and SandboxStack
 
     // ========================================
     // Sandbox Task IAM Roles
@@ -162,8 +139,10 @@ export class SandboxStack extends cdk.Stack {
     });
 
     // Grant access to sandbox secret key
+    // Reference sandbox secret key by well-known name (avoids cross-stack token reference)
+    const sandboxSecretKeyName = 'openhands/sandbox-secret-key';
     const sandboxSecretKey = secretsmanager.Secret.fromSecretNameV2(
-      this, 'SandboxSecretKeyRef', securityOutput.sandboxSecretKeyName
+      this, 'SandboxSecretKeyRef', sandboxSecretKeyName
     );
     sandboxSecretKey.grantRead(sandboxExecutionRole);
 
@@ -269,8 +248,8 @@ export class SandboxStack extends cdk.Stack {
       platform: Platform.LINUX_ARM64,
     });
 
-    // Grant EC2 role pull access for orchestrator image
-    orchestratorImage.repository.grantPull(securityOutput.ec2Role);
+    // NOTE: EC2 role pull access for orchestrator image is granted in ComputeStack
+    // to avoid cyclic cross-stack dependency
 
     // ========================================
     // Idle Monitor Lambda

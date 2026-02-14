@@ -760,7 +760,6 @@ describe('OpenHands Infrastructure Stacks', () => {
         env: testEnv,
         config: testConfig,
         networkOutput: networkStack.output,
-        securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
       });
 
@@ -820,7 +819,6 @@ describe('OpenHands Infrastructure Stacks', () => {
         env: testEnv,
         config: testConfig,
         networkOutput: networkStack.output,
-        securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
       });
 
