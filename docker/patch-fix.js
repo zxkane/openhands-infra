@@ -183,7 +183,22 @@
     } catch (e) {}
 
     if (!isCreateConversation || alreadyRetried) {
-      return origFetch.call(this, newUrl, opts);
+      return origFetch.call(this, newUrl, opts).then(function(resp) {
+        // Detect auth redirect: iOS Safari ITP silently blocks SameSite=None cookies,
+        // causing API calls to return HTML (Cognito login page) instead of JSON.
+        if (resp.ok && typeof newUrl === "string" && newUrl.indexOf('/api/') !== -1) {
+          var ct = resp.headers.get('content-type') || '';
+          if (ct.indexOf('text/html') !== -1 && ct.indexOf('application/json') === -1) {
+            console.warn('[Auth redirect] API returned HTML instead of JSON, redirecting to login:', newUrl);
+            window.location.href = '/_logout';
+            return new Response(JSON.stringify({ error: 'auth_redirect', message: 'Session expired' }), {
+              status: 401,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+        }
+        return resp;
+      });
     }
 
     return origFetch.call(this, newUrl, opts).then(function(resp) {
@@ -1120,6 +1135,190 @@
   }
 
   console.log('OpenHands MCP protection patch loaded');
+})();
+
+// TEMPORARY: Remove after upgrading to OpenHands >= version with PR #12821
+// Fix stuck chat-messages-skeleton on narrow viewports (< ~1200px / mobile).
+// Root cause: upstream ConversationMain remounts WebSocket provider when switching
+// mobile/desktop layout at 1024px, resetting loading state. The "history loaded"
+// flag stays false because the isLoadingHistory transition from true->false never
+// fires after remount. This patch detects the stuck state and forces the flag to
+// true via React fiber internals.
+// Upstream fix: All-Hands-AI/OpenHands#12821 (merged, not yet released)
+(function() {
+  var SKELETON_CHECK_DELAY = 3000;
+  var SKELETON_RECHECK_INTERVAL = 2000;
+  var MAX_RETRIES = 5;
+  var SKELETON_SELECTOR = '[data-testid="chat-messages-skeleton"]';
+  var MAX_FIBER_DEPTH = 15;
+  var retryCount = 0;
+  var fixApplied = false;
+  var recheckTimer = null;
+
+  function getConversationId() {
+    var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
+    return match ? match[1] : null;
+  }
+
+  function stopRechecking() {
+    if (recheckTimer) {
+      clearInterval(recheckTimer);
+      recheckTimer = null;
+    }
+  }
+
+  function markDone() {
+    fixApplied = true;
+    stopRechecking();
+  }
+
+  // React stores fiber references on DOM nodes via __reactFiber$ or __reactInternalInstance$ keys
+  function findFiberFromDom(domNode) {
+    var keys = Object.keys(domNode);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i].indexOf('__reactFiber$') === 0 || keys[i].indexOf('__reactInternalInstance$') === 0) {
+        return domNode[keys[i]];
+      }
+    }
+    return null;
+  }
+
+  // Walk the useState hooks linked list to find a stuck boolean false flag with a dispatch queue.
+  // This targets the history-loaded flag: [isLoaded, setIsLoaded] = useState(false)
+  function findAndFixHistoryLoadedHook(fiber) {
+    var hookState = fiber.memoizedState;
+    var hookIndex = 0;
+
+    while (hookState) {
+      if (hookState.memoizedState === false && hookState.queue && typeof hookState.queue.dispatch === 'function') {
+        console.log('[Patch 8] Found stuck history-loaded hook at index', hookIndex, '- forcing to true');
+        hookState.queue.dispatch(true);
+        return true;
+      }
+      hookState = hookState.next;
+      hookIndex++;
+    }
+    return false;
+  }
+
+  // Walk up the fiber tree from the skeleton element, checking each FunctionComponent
+  // (tag === 0) for a stuck useState(false) hook that controls skeleton visibility.
+  function fixStuckFiber(skeleton) {
+    var fiber = findFiberFromDom(skeleton);
+    if (!fiber) {
+      console.warn('[Patch 8] Could not find React fiber on skeleton element');
+      return false;
+    }
+
+    var current = fiber;
+    for (var depth = 0; depth < MAX_FIBER_DEPTH; depth++) {
+      if (!current.return) break;
+      current = current.return;
+      if (current.tag === 0 && current.memoizedState) {
+        if (findAndFixHistoryLoadedHook(current)) {
+          console.log('[Patch 8] Fix applied at fiber depth', depth + 1, 'from skeleton');
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function attemptFix() {
+    if (fixApplied) return;
+
+    var convId = getConversationId();
+    if (!convId) return;
+
+    var skeleton = document.querySelector(SKELETON_SELECTOR);
+    if (!skeleton) {
+      markDone();
+      return;
+    }
+
+    // Verify events are actually loaded before assuming the skeleton is stuck
+    fetch('/api/v1/conversations/' + convId + '/events/search?limit=1')
+      .then(function(resp) {
+        if (!resp.ok) return;
+        return resp.json().then(function(data) {
+          var hasEvents = Array.isArray(data) ? data.length > 0 :
+                          (data && data.results && data.results.length > 0);
+          if (!hasEvents) {
+            console.log('[Patch 8] Skeleton visible but no events yet - waiting');
+            return;
+          }
+
+          console.log('[Patch 8] Stuck skeleton detected with loaded events - attempting fiber fix');
+
+          // Re-check: skeleton may have resolved during the async fetch
+          skeleton = document.querySelector(SKELETON_SELECTOR);
+          if (!skeleton) {
+            markDone();
+            return;
+          }
+
+          if (fixStuckFiber(skeleton)) {
+            markDone();
+          } else {
+            retryCount++;
+            console.log('[Patch 8] Could not find stuck hook (attempt', retryCount + '/' + MAX_RETRIES + ')');
+            if (retryCount >= MAX_RETRIES) {
+              console.warn('[Patch 8] Max retries reached - giving up');
+              stopRechecking();
+            }
+          }
+        });
+      })
+      .catch(function(err) {
+        console.log('[Patch 8] Error checking events:', err);
+      });
+  }
+
+  function init() {
+    if (!getConversationId()) return;
+
+    setTimeout(function() {
+      attemptFix();
+      if (!fixApplied && retryCount < MAX_RETRIES) {
+        recheckTimer = setInterval(function() {
+          if (fixApplied || retryCount >= MAX_RETRIES) {
+            stopRechecking();
+            return;
+          }
+          attemptFix();
+        }, SKELETON_RECHECK_INTERVAL);
+      }
+    }, SKELETON_CHECK_DELAY);
+  }
+
+  function reset() {
+    fixApplied = false;
+    retryCount = 0;
+    stopRechecking();
+    setTimeout(init, 500);
+  }
+
+  window.addEventListener('popstate', reset);
+  var origPushState = history.pushState;
+  var origReplaceState = history.replaceState;
+  history.pushState = function() {
+    var result = origPushState.apply(this, arguments);
+    reset();
+    return result;
+  };
+  history.replaceState = function() {
+    var result = origReplaceState.apply(this, arguments);
+    reset();
+    return result;
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  console.log('[Patch 8] OpenHands stuck skeleton fix loaded (remove after upgrade with PR #12821)');
 })();
 
 // Shared MutationObserver dispatcher - consolidates all MutationObserver callbacks into
