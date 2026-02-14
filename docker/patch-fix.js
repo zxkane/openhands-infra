@@ -186,15 +186,21 @@
       return origFetch.call(this, newUrl, opts).then(function(resp) {
         // Detect auth redirect: iOS Safari ITP silently blocks SameSite=None cookies,
         // causing API calls to return HTML (Cognito login page) instead of JSON.
+        // Only check responses that: (1) are from our domain's /api/ path, (2) returned
+        // 200 OK, and (3) weren't redirected to a different origin (resp.url check).
         if (resp.ok && typeof newUrl === "string" && newUrl.indexOf('/api/') !== -1) {
-          var ct = resp.headers.get('content-type') || '';
-          if (ct.indexOf('text/html') !== -1 && ct.indexOf('application/json') === -1) {
-            console.warn('[Auth redirect] API returned HTML instead of JSON, redirecting to login:', newUrl);
-            window.location.href = '/_logout';
-            return new Response(JSON.stringify({ error: 'auth_redirect', message: 'Session expired' }), {
-              status: 401,
-              headers: { 'Content-Type': 'application/json' }
-            });
+          var respUrl = resp.url || '';
+          var sameOrigin = respUrl.indexOf(window.location.origin) === 0 || respUrl === '';
+          if (sameOrigin) {
+            var ct = resp.headers.get('content-type') || '';
+            if (ct.indexOf('text/html') !== -1 && ct.indexOf('application/json') === -1) {
+              console.warn('[Auth redirect] API returned HTML instead of JSON, redirecting to login:', newUrl);
+              window.location.href = '/_logout';
+              return new Response(JSON.stringify({ error: 'auth_redirect', message: 'Session expired' }), {
+                status: 401,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
           }
         }
         return resp;
@@ -1237,12 +1243,18 @@
     }
 
     // Verify events are actually loaded before assuming the skeleton is stuck
-    fetch('/api/v1/conversations/' + convId + '/events/search?limit=1')
+    // Use app-conversations API to check if conversation has events loaded.
+    // The events/search endpoint is on the agent-server (not main app), so we
+    // check conversation status instead: an ARCHIVED conversation with a title
+    // indicates the agent processed messages (events exist in the DB).
+    fetch('/api/v1/app-conversations?ids=' + convId)
       .then(function(resp) {
         if (!resp.ok) return;
         return resp.json().then(function(data) {
-          var hasEvents = Array.isArray(data) ? data.length > 0 :
-                          (data && data.results && data.results.length > 0);
+          var conv = Array.isArray(data) && data[0];
+          // Conversation has events if it has a title (agent processed messages)
+          // or if its status is not CREATED (i.e., something happened)
+          var hasEvents = conv && (conv.title || conv.status === 'RUNNING' || conv.status === 'ARCHIVED');
           if (!hasEvents) {
             console.log('[Patch 8] Skeleton visible but no events yet - waiting');
             return;
