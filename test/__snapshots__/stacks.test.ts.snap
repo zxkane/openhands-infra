@@ -1255,25 +1255,25 @@ OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbo
 export OH_SECRET_KEY
 echo "Sandbox secret key configured"
 set -x
+SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$(curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$(curl -s http://169.254.169.254/latest/meta-data/mac)/vpc-id)" "Name=tag:aws-cdk:subnet-type,Values=Private" --query "Subnets[].SubnetId" --output text --region $REGION | tr "\\t" ",")
+[ -n "$SUBNETS" ] || SUBNETS="subnet-placeholder"
 cat > /data/openhands/docker-compose.yml << EOF
 services:
   openresty:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:37c6a79b76ecf633887da106303243cb24b25e7e54642c5c9d515a453b98c02a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5b56bdd9ed0cc1dd9a45edf50821d8a59ef2c7105d33ca31715a32516cba6e27",
                   },
                   "
     container_name: openresty-proxy
     restart: always
     ports:
       - "8080:8080"
-    volumes:
-      # SECURITY: Docker socket access required for container discovery (read-only)
-      # OpenResty queries /containers/json to find sandbox container IPs for routing
-      # Mitigations: mounted :ro, only GET requests, no container modifications
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - ORCHESTRATOR_URL=http://localhost:8081
     depends_on:
       - openhands
+      - sandbox-orchestrator
     logging:
       driver: json-file
       options:
@@ -1283,7 +1283,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:08614c37d96d0144174119bbaf888c00e3e08bbc104031ea008e37116a8a8667",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:05c91caaf2b8fac413ec075cc50d79106b12e1a293d1c7b72ffd780b1696b9ca",
                   },
                   "
     container_name: openhands-app
@@ -1332,6 +1332,8 @@ services:
       - AGENT_SERVER_IMAGE_TAG=cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf
       - AGENT_ENABLE_BROWSING=false
       - AGENT_ENABLE_MCP=true
+      - RUNTIME=remote
+      - SANDBOX_REMOTE_RUNTIME_API_URL=http://localhost:8081
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
       - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
       - DB_PORT=5432
@@ -1352,6 +1354,31 @@ services:
       - /data/openhands/config/database.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  sandbox-orchestrator:
+    image: 123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest
+    container_name: sandbox-orchestrator
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      - REGISTRY_TABLE_NAME=openhands-sandbox-registry
+      - ECS_CLUSTER_ARN=arn:aws:ecs:us-west-2:123456789012:cluster/openhands-sandbox
+      - TASK_DEFINITION_ARN=arn:aws:ecs:us-west-2:123456789012:task-definition/openhands-sandbox:1
+      - SUBNETS=\${SUBNETS}
+      - SECURITY_GROUP_ID=sg-sandbox123
+      - AWS_REGION_NAME=$REGION
+      - AWS_DEFAULT_REGION=$REGION
+      - SANDBOX_IMAGE=",
+                  {
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
+                  },
+                  "
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   watchtower:
     image: containrrr/watchtower:1.7.1
@@ -1444,12 +1471,12 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:08614c37d96d0144174119bbaf888c00e3e08bbc104031ea008e37116a8a8667",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:05c91caaf2b8fac413ec075cc50d79106b12e1a293d1c7b72ffd780b1696b9ca",
                   },
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:37c6a79b76ecf633887da106303243cb24b25e7e54642c5c9d515a453b98c02a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5b56bdd9ed0cc1dd9a45edf50821d8a59ef2c7105d33ca31715a32516cba6e27",
                   },
                   ""
 pull_with_retry "",
@@ -1462,10 +1489,10 @@ pull_with_retry "",
                     "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf",
                   },
                   ""
+pull_with_retry "123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest"
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
 systemctl daemon-reload && systemctl enable openhands && systemctl start openhands
-for i in {1..30}; do docker inspect openresty-proxy >/dev/null 2>&1 && break; sleep 2; done
-docker network connect bridge openresty-proxy 2>/dev/null || echo "Already connected to bridge network"
+for i in {1..30}; do docker inspect sandbox-orchestrator >/dev/null 2>&1 && break; sleep 2; done
 echo "OpenHands setup complete!"",
                 ],
               ],
@@ -3648,6 +3675,31 @@ exports[`OpenHands Infrastructure Stacks NetworkStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::VPCEndpoint",
     },
+    "DynamoDbEndpointBF7E74F2": {
+      "Properties": {
+        "RouteTableIds": [
+          "rtb-12345p",
+          "rtb-57890p",
+          "rtb-12345s",
+          "rtb-67890s",
+        ],
+        "ServiceName": {
+          "Fn::Join": [
+            "",
+            [
+              "com.amazonaws.",
+              {
+                "Ref": "AWS::Region",
+              },
+              ".dynamodb",
+            ],
+          ],
+        },
+        "VpcEndpointType": "Gateway",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
     "Ec2MessagesEndpoint440704A5": {
       "Properties": {
         "PrivateDnsEnabled": true,
@@ -3702,6 +3754,48 @@ exports[`OpenHands Infrastructure Stacks NetworkStack matches snapshot 1`] = `
           },
         ],
         "ServiceName": "com.amazonaws.us-west-2.ecr.dkr",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "EcsEndpoint39CB6EC2": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ecs",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "EcsTelemetryEndpoint6E338EB9": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ecs-telemetry",
         "SubnetIds": [
           "p-12345",
           "p-67890",

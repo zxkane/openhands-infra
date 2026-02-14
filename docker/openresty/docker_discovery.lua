@@ -1,172 +1,95 @@
--- Docker container discovery for OpenResty runtime proxy
--- Finds sandbox containers by conversation_id label and returns container IP + port
--- Since OpenResty runs in a container on the same bridge network as sandboxes,
--- it can route directly to container ports without going through host port mappings.
+-- Sandbox discovery for OpenResty runtime proxy
+-- Finds sandbox containers by conversation_id via the Sandbox Orchestrator API
+-- which looks up the sandbox in DynamoDB and returns the Fargate task IP + user_id.
 --
--- SECURITY NOTE: Docker socket access (/var/run/docker.sock)
--- This module requires read-only access to Docker socket to query container metadata.
--- Mitigations in place:
--- 1. Socket mounted read-only (:ro) in docker-compose.yml
--- 2. Only performs GET requests to /containers/json endpoint (read-only operations)
--- 3. Does not create, modify, or delete containers
--- 4. OpenResty container runs with minimal privileges (no --privileged flag)
--- 5. OpenHands app container also requires Docker socket for sandbox management
---
--- PORT ROUTING LOGIC:
--- The URL contains a port number that maps to services inside the container:
--- - System ports (8000=agent-server, 8001=vscode): Docker exposes these on random host ports
--- - User app ports (from WORKER_1/WORKER_2 env): Apps listen on the SAME port as the host port
---
--- We try to route to the requested port directly. If that fails, the app is either:
--- 1. A user app listening on the host port (e.g., Flask on 38013)
--- 2. A system service on a well-known internal port (translate via Docker mapping)
+-- The Orchestrator URL is configured via the ORCHESTRATOR_URL environment variable.
 
 local http = require "resty.http"
 local cjson = require "cjson"
 local _M = {}
 
--- Well-known fixed ports inside sandbox containers.
--- These are the INTERNAL container ports for OpenHands services that do NOT
--- necessarily listen on the externally exposed (PublicPort) value.
---
--- For user apps, OpenHands commonly sets the app to listen on the same port
--- number that is exposed to the host/browser (PublicPort). In that case,
--- proxying directly to container_ip:requested_port is correct even if Docker
--- also exposes internal "worker" ports (8011/8012) that are not actually
--- serving HTTP.
-local FIXED_INTERNAL_PORTS = {
-  ["8000"] = true,  -- agent-server
-  ["8001"] = true,  -- vscode
-}
-
-local function can_connect(ip, port)
-  if not ip or not port then
-    return false
-  end
-  local p = tonumber(port)
-  if not p then
-    return false
-  end
-
-  local sock = ngx.socket.tcp()
-  sock:settimeout(100) -- fast probe; keeps request overhead low
-  local ok = sock:connect(ip, p)
-  if ok then
-    sock:close()
-    return true
-  end
-  sock:close()
-  return false
-end
+-- Configuration
+local ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL") or "http://localhost:8081"
+local ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY") or ""
 
 -- Error types returned by find_container for proper HTTP status mapping
-_M.ERR_SOCKET = "socket_error"      -- Docker socket connection failed (503)
-_M.ERR_LIST = "list_error"          -- Failed to list containers (503)
-_M.ERR_PARSE = "parse_error"        -- Failed to parse Docker response (503)
-_M.ERR_NO_IP = "no_ip_error"        -- Container found but no IP address (502)
-_M.ERR_NOT_FOUND = "not_found"      -- No container with matching conversation_id (404)
+_M.ERR_SOCKET = "socket_error"      -- Orchestrator connection failed (503)
+_M.ERR_LIST = "list_error"          -- Failed to query orchestrator (503)
+_M.ERR_PARSE = "parse_error"        -- Failed to parse response (503)
+_M.ERR_NO_IP = "no_ip_error"        -- Sandbox found but no IP address (502)
+_M.ERR_NOT_FOUND = "not_found"      -- No sandbox with matching conversation_id (404)
 
--- Find container by conversation_id and return its IP, port, user_id, and error type
+-- Find sandbox by conversation_id via the Sandbox Orchestrator API
 -- @param cid: conversation_id to search for
 -- @param tp: target port from URL
--- @return ip, port, user_id, error_type: container IP, port, owner user_id, and error type
+-- @return ip, port, user_id, error_type
 --         On success: ip, port, user_id, nil
 --         On failure: nil, nil, nil, error_type (one of ERR_* constants)
 function _M.find_container(cid, tp)
   local h = http.new()
+  h:set_timeout(5000) -- 5s timeout for orchestrator calls
 
-  -- Connect to Docker socket
-  local ok, err = h:connect("unix:/var/run/docker.sock")
-  if not ok then
-    ngx.log(ngx.ERR, "Failed to connect to Docker socket: ", err)
+  local url = ORCHESTRATOR_URL .. "/sessions/" .. cid
+  local res, err = h:request_uri(url, {
+    method = "GET",
+    headers = {
+      ["X-API-Key"] = ORCHESTRATOR_API_KEY,
+      ["Content-Type"] = "application/json",
+    },
+  })
+
+  if not res then
+    ngx.log(ngx.ERR, "Failed to connect to orchestrator: ", err)
     return nil, nil, nil, _M.ERR_SOCKET
   end
 
-  -- List all containers
-  local res, err = h:request({
-    path = "/containers/json",
-    headers = {["Host"] = "localhost"}
-  })
-  if not res then
-    ngx.log(ngx.ERR, "Failed to list containers: ", err)
+  if res.status == 404 then
+    ngx.log(ngx.DEBUG, "Orchestrator: no sandbox found for ", cid)
+    return nil, nil, nil, _M.ERR_NOT_FOUND
+  end
+
+  if res.status ~= 200 then
+    ngx.log(ngx.ERR, "Orchestrator returned status ", res.status, " for ", cid)
     return nil, nil, nil, _M.ERR_LIST
   end
 
-  local body = res:read_body()
-  local ok2, containers = pcall(cjson.decode, body)
-  if not ok2 then
-    ngx.log(ngx.ERR, "Failed to decode container list: ", containers)
+  local ok, data = pcall(cjson.decode, res.body)
+  if not ok then
+    ngx.log(ngx.ERR, "Failed to decode orchestrator response: ", data)
     return nil, nil, nil, _M.ERR_PARSE
   end
 
-  -- Find container with matching conversation_id label
-  for _, c in ipairs(containers) do
-    local labels = c.Labels or {}
-    if labels["conversation_id"] == cid then
-      -- Get container IP from NetworkSettings.Networks
-      -- Iterate over all networks to find a valid IP (fixes bridge network bug)
-      local ip = nil
-      local networks = c.NetworkSettings and c.NetworkSettings.Networks
-      if networks then
-        for net_name, net_info in pairs(networks) do
-          if net_info.IPAddress and net_info.IPAddress ~= "" then
-            ip = net_info.IPAddress
-            ngx.log(ngx.DEBUG, "Found container IP ", ip, " on network ", net_name)
-            break
-          end
-        end
-      end
-
-      if not ip or ip == "" then
-        ngx.log(ngx.WARN, "Container found but no IP address for conversation: ", cid)
-        return nil, nil, nil, _M.ERR_NO_IP
-      end
-
-      -- Determine the target port to connect to on the container IP.
-      --
-      -- Rule 1: If the container is already listening on the requested port, use it.
-      --         (Common for user apps that bind to the externally exposed port.)
-      -- Rule 2: Otherwise, if Docker exposes a mapping from the requested PublicPort to
-      --         some PrivatePort, translate to that PrivatePort.
-      -- Rule 3: Otherwise, fall back to the requested port.
-      local target_port = tp
-
-      if can_connect(ip, tp) then
-        ngx.log(ngx.INFO, "Direct port reachable on container: ", tp)
-        target_port = tp
-      else
-        local ports = c.Ports or {}
-        local mapped_port = nil
-
-        for _, p in ipairs(ports) do
-          if p.PublicPort and tostring(p.PublicPort) == tp and p.PrivatePort then
-            mapped_port = tostring(p.PrivatePort)
-            break
-          end
-        end
-
-        if mapped_port then
-          if FIXED_INTERNAL_PORTS[mapped_port] then
-            ngx.log(ngx.INFO, "Fixed port translation: host ", tp, " -> container ", mapped_port)
-          else
-            ngx.log(ngx.INFO, "Port translation: host ", tp, " -> container ", mapped_port)
-          end
-          target_port = mapped_port
-        else
-          ngx.log(ngx.INFO, "No mapping found; using requested port: ", tp)
-          target_port = tp
-        end
-      end
-
-      -- Get user_id label for ownership verification
-      local user_id = labels["user_id"] or nil
-      ngx.log(ngx.INFO, "Found container for ", cid, ": IP=", ip, ", port=", target_port, ", user_id=", user_id or "nil", " (requested=", tp, ")")
-      return ip, target_port, user_id, nil  -- Success: no error
-    end
+  local status = data.status or ""
+  if status ~= "RUNNING" then
+    ngx.log(ngx.INFO, "Sandbox not running for ", cid, ": status=", status)
+    return nil, nil, nil, _M.ERR_NOT_FOUND
   end
 
-  ngx.log(ngx.DEBUG, "No container found with conversation_id: ", cid)
-  return nil, nil, nil, _M.ERR_NOT_FOUND
+  -- Extract IP from the url field (format: http://{ip}:{port})
+  local task_url = data.url or ""
+  local ip = task_url:match("http://([%d%.]+)")
+  if not ip or ip == "" then
+    ngx.log(ngx.WARN, "Orchestrator returned no IP for ", cid)
+    return nil, nil, nil, _M.ERR_NO_IP
+  end
+
+  local user_id = data.user_id
+
+  ngx.log(ngx.INFO, "Found sandbox via orchestrator for ", cid, ": IP=", ip, ", port=", tp, ", user_id=", user_id or "nil")
+
+  -- Fire-and-forget activity update (non-blocking)
+  local activity_h = http.new()
+  activity_h:set_timeout(1000)
+  activity_h:request_uri(ORCHESTRATOR_URL .. "/activity", {
+    method = "POST",
+    headers = {
+      ["X-API-Key"] = ORCHESTRATOR_API_KEY,
+      ["Content-Type"] = "application/json",
+    },
+    body = cjson.encode({ session_id = cid }),
+  })
+
+  return ip, tp, user_id, nil
 end
 
 return _M

@@ -23,6 +23,7 @@ import {
   MonitoringStackOutput,
   ComputeStackOutput,
   DatabaseStackOutput,
+  SandboxStackOutput,
 } from './interfaces.js';
 
 /**
@@ -121,6 +122,12 @@ export interface ComputeStackProps extends cdk.StackProps {
    * to route requests to this Lambda function.
    */
   userConfigFunction?: lambda.IFunction;
+  /**
+   * Sandbox infrastructure output (required).
+   * Enables Fargate sandbox mode with RUNTIME=remote env vars
+   * and adds Sandbox Orchestrator to docker-compose.
+   */
+  sandboxOutput: SandboxStackOutput;
 }
 
 /**
@@ -140,12 +147,69 @@ export class ComputeStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxAwsAccess } = props;
+    const { sandboxOutput } = props;
     const { vpc } = networkOutput;
     const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile, sandboxRoleArn, sandboxSecretKeyName } = securityOutput;
     const { alertTopic, dataBucket } = monitoringOutput;
 
     // Full domain for runtime URL pattern
     const fullDomain = `${config.subDomain}.${config.domainName}`;
+
+    // EC2 → sandbox Fargate task networking and IAM
+    // Done here (not in SandboxStack) to avoid cyclic cross-stack dependency
+    const sandboxTaskSg = ec2.SecurityGroup.fromSecurityGroupId(
+      this, 'ImportedSandboxTaskSg', sandboxOutput.sandboxTaskSecurityGroupId
+    );
+    ec2SecurityGroup.addEgressRule(
+      sandboxTaskSg,
+      ec2.Port.tcpRange(1, 65535),
+      'Allow EC2 to reach sandbox Fargate tasks'
+    );
+
+    // EC2 role needs ECS permissions for sandbox orchestrator (runs on EC2)
+    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'EcsSandboxManagement',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ecs:RunTask',
+        'ecs:StopTask',
+        'ecs:DescribeTasks',
+        'ecs:ListTasks',
+      ],
+      resources: ['*'],
+      conditions: {
+        ArnEquals: {
+          'ecs:cluster': sandboxOutput.clusterArn,
+        },
+      },
+    }));
+
+    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'PassSandboxRoles',
+      effect: iam.Effect.ALLOW,
+      actions: ['iam:PassRole'],
+      resources: [
+        sandboxOutput.sandboxExecutionRoleArn,
+        sandboxOutput.sandboxTaskRoleArn,
+      ],
+    }));
+
+    // DynamoDB access for sandbox registry
+    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'SandboxRegistryAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:PutItem',
+        'dynamodb:UpdateItem',
+        'dynamodb:Query',
+        'dynamodb:BatchGetItem',
+      ],
+      resources: [
+        sandboxOutput.registryTableArn,
+        `${sandboxOutput.registryTableArn}/index/*`,
+      ],
+    }));
 
     // Get private subnets for EC2 and internal ALB
     const privateSubnets = vpc.selectSubnets({
@@ -357,6 +421,9 @@ export class ComputeStack extends cdk.Stack {
       'export OH_SECRET_KEY',
       'echo "Sandbox secret key configured"',
       'set -x',
+      // Discover private subnets for ECS Fargate sandbox task placement
+      'SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$(curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$(curl -s http://169.254.169.254/latest/meta-data/mac)/vpc-id)" "Name=tag:aws-cdk:subnet-type,Values=Private" --query "Subnets[].SubnetId" --output text --region $REGION | tr "\\t" ",")',
+      '[ -n "$SUBNETS" ] || SUBNETS="subnet-placeholder"',
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
       // OpenResty reverse proxy - runs as container on Docker bridge network
@@ -367,13 +434,11 @@ export class ComputeStack extends cdk.Stack {
       '    restart: always',
       '    ports:',
       '      - "8080:8080"',  // ALB connects to this port for runtime traffic
-      '    volumes:',
-      '      # SECURITY: Docker socket access required for container discovery (read-only)',
-      '      # OpenResty queries /containers/json to find sandbox container IPs for routing',
-      '      # Mitigations: mounted :ro, only GET requests, no container modifications',
-      '      - /var/run/docker.sock:/var/run/docker.sock:ro',
+      '    environment:',
+      `      - ORCHESTRATOR_URL=${sandboxOutput.orchestratorApiUrl}`,
       '    depends_on:',
       '      - openhands',
+      '      - sandbox-orchestrator',
       '    logging:',
       '      driver: json-file',
       '      options:',
@@ -430,6 +495,9 @@ export class ComputeStack extends cdk.Stack {
       `      - AGENT_SERVER_IMAGE_TAG=${agentServerTag}`,
       '      - AGENT_ENABLE_BROWSING=false',
       '      - AGENT_ENABLE_MCP=true',
+      // RUNTIME=remote delegates sandbox creation to the Sandbox Orchestrator → ECS Fargate
+      '      - RUNTIME=remote',
+      `      - SANDBOX_REMOTE_RUNTIME_API_URL=${sandboxOutput.orchestratorApiUrl}`,
       // Environment variables injected into sandbox containers at startup
       // When sandboxAwsAccess is enabled, include AWS_SHARED_CREDENTIALS_FILE to use scoped credentials
       // OH_SECRET_KEY enables secret persistence across sandbox restarts (required for conversation resume)
@@ -469,6 +537,28 @@ export class ComputeStack extends cdk.Stack {
       ] : []),
       '    extra_hosts:',
       '      - "host.docker.internal:host-gateway"',
+      '',
+      // Sandbox Orchestrator: translates remote runtime API calls to ECS Fargate operations
+      '  sandbox-orchestrator:',
+      `    image: ${sandboxOutput.orchestratorImageUri}`,
+      '    container_name: sandbox-orchestrator',
+      '    restart: always',
+      '    ports:',
+      '      - "8081:8081"',
+      '    environment:',
+      `      - REGISTRY_TABLE_NAME=${sandboxOutput.registryTableName}`,
+      `      - ECS_CLUSTER_ARN=${sandboxOutput.clusterArn}`,
+      `      - TASK_DEFINITION_ARN=${sandboxOutput.taskDefinitionArn}`,
+      '      - SUBNETS=${SUBNETS}',
+      `      - SECURITY_GROUP_ID=${sandboxOutput.sandboxTaskSecurityGroupId}`,
+      '      - AWS_REGION_NAME=$REGION',
+      '      - AWS_DEFAULT_REGION=$REGION',
+      `      - SANDBOX_IMAGE=${customRuntimeImage.imageUri}`,
+      '    logging:',
+      '      driver: json-file',
+      '      options:',
+      '        max-size: "100m"',
+      '        max-file: "3"',
       '',
       '  watchtower:',
       '    image: containrrr/watchtower:1.7.1',
@@ -512,12 +602,11 @@ export class ComputeStack extends cdk.Stack {
       `pull_with_retry "${openrestyImageUri}"`,  // OpenResty runtime proxy
       `pull_with_retry "${customRuntimeImage.imageUri}"`,  // Custom runtime with Chromium for MCP
       `pull_with_retry "${agentServerImageUri}"`,
+      `pull_with_retry "${sandboxOutput.orchestratorImageUri}"`,  // Sandbox orchestrator
       'set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap \'error_handler $LINENO\' ERR',
       'systemctl daemon-reload && systemctl enable openhands && systemctl start openhands',
-      // Connect OpenResty to the Docker bridge network for sandbox container access
-      // Sandbox containers use default bridge, compose network doesn't support external bridge directly
-      'for i in {1..30}; do docker inspect openresty-proxy >/dev/null 2>&1 && break; sleep 2; done',
-      'docker network connect bridge openresty-proxy 2>/dev/null || echo "Already connected to bridge network"',
+      // Wait for sandbox-orchestrator container to be ready
+      'for i in {1..30}; do docker inspect sandbox-orchestrator >/dev/null 2>&1 && break; sleep 2; done',
       'echo "OpenHands setup complete!"',
     );
 

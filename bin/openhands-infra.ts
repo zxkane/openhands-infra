@@ -9,6 +9,7 @@ import { ComputeStack } from '../lib/compute-stack.js';
 import { AuthStack } from '../lib/auth-stack.js';
 import { EdgeStack } from '../lib/edge-stack.js';
 import { UserConfigStack } from '../lib/user-config-stack.js';
+import { SandboxStack } from '../lib/sandbox-stack.js';
 import { OpenHandsConfig } from '../lib/interfaces.js';
 
 const app = new cdk.App();
@@ -214,6 +215,24 @@ const userConfigStack = new UserConfigStack(app, `${prefix}-UserConfig`, {
 userConfigStack.addDependency(monitoringStack);
 userConfigStack.addDependency(securityStack);
 
+// 4.6. Sandbox Stack - ECS Fargate Sandbox Infrastructure
+//      Provides per-conversation sandbox tasks on Fargate with DynamoDB registry
+//      Replaces Docker-socket-based sandbox creation with RUNTIME=remote
+const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
+  env: mainEnv,
+  config,
+  networkOutput: networkStack.output,
+  securityOutput: securityStack.output,
+  monitoringOutput: monitoringStack.output,
+  sandboxAwsAccess,
+  sandboxRoleArn: securityStack.output.sandboxRoleArn,
+  description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
+  crossRegionReferences: true,
+});
+sandboxStack.addDependency(networkStack);
+sandboxStack.addDependency(securityStack);
+sandboxStack.addDependency(monitoringStack);
+
 // 5. Compute Stack - ASG, Launch Template, ALB
 //    Also integrates User Config API Lambda via ALB target group for /api/v1/user-config/*
 const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
@@ -224,6 +243,7 @@ const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   monitoringOutput: monitoringStack.output,
   databaseOutput: databaseStack.output,
   sandboxAwsAccess,
+  sandboxOutput: sandboxStack.output,
   userConfigFunction: userConfigStack.userConfigFunction,  // Lambda for /api/v1/user-config/*
   description: 'OpenHands Compute Infrastructure - EC2 ASG and ALB',
   crossRegionReferences: true,
@@ -233,6 +253,7 @@ computeStack.addDependency(securityStack);
 computeStack.addDependency(monitoringStack);
 computeStack.addDependency(databaseStack);
 computeStack.addDependency(userConfigStack);  // Needs Lambda function from UserConfigStack
+computeStack.addDependency(sandboxStack);
 
 // 6. Edge Stack (us-east-1) - Cognito, Lambda@Edge, CloudFront, WAF, Route 53
 //    This merged stack combines Auth and CDN to avoid cross-stack reference issues

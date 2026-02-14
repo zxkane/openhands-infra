@@ -8,7 +8,8 @@ import { EdgeStack } from '../lib/edge-stack';
 import { DatabaseStack } from '../lib/database-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { UserConfigStack } from '../lib/user-config-stack';
-import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput } from '../lib/interfaces';
+import { SandboxStack } from '../lib/sandbox-stack';
+import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput, SandboxStackOutput } from '../lib/interfaces';
 
 // Test configuration
 const testConfig: OpenHandsConfig = {
@@ -33,6 +34,22 @@ const mockDatabaseOutput: DatabaseStackOutput = {
   databaseUser: 'openhands_proxy',  // Proxy user for RDS Proxy connections
   securityGroupId: 'sg-mock123',
   proxyEndpoint: 'mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com',
+};
+
+// Mock sandbox output for ComputeStack tests (ECS Fargate sandbox)
+const mockSandboxOutput: SandboxStackOutput = {
+  clusterArn: 'arn:aws:ecs:us-west-2:123456789012:cluster/openhands-sandbox',
+  clusterName: 'openhands-sandbox',
+  registryTableName: 'openhands-sandbox-registry',
+  registryTableArn: 'arn:aws:dynamodb:us-west-2:123456789012:table/openhands-sandbox-registry',
+  taskDefinitionArn: 'arn:aws:ecs:us-west-2:123456789012:task-definition/openhands-sandbox:1',
+  sandboxTaskSecurityGroupId: 'sg-sandbox123',
+  orchestratorApiUrl: 'http://localhost:8081',
+  orchestratorApiKeySecretName: 'openhands/sandbox-orchestrator-api-key',
+  sandboxLogGroupName: '/openhands/sandbox',
+  orchestratorImageUri: '123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest',
+  sandboxExecutionRoleArn: 'arn:aws:iam::123456789012:role/mock-execution-role',
+  sandboxTaskRoleArn: 'arn:aws:iam::123456789012:role/mock-task-role',
 };
 
 // Mock auth output for EdgeStack tests (shared Cognito from AuthStack)
@@ -219,6 +236,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
         databaseOutput: mockDatabaseOutput,
+        sandboxOutput: mockSandboxOutput,
       });
 
       const template = Template.fromStack(stack);
@@ -270,6 +288,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
         databaseOutput: mockDatabaseOutput,
+        sandboxOutput: mockSandboxOutput,
       });
 
       const template = Template.fromStack(stack);
@@ -307,6 +326,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
         databaseOutput: mockDatabaseOutput,
+        sandboxOutput: mockSandboxOutput,
       });
 
       const template = Template.fromStack(stack);
@@ -345,6 +365,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
         databaseOutput: mockDatabaseOutput,
+        sandboxOutput: mockSandboxOutput,
       });
     });
 
@@ -711,6 +732,108 @@ describe('OpenHands Infrastructure Stacks', () => {
     });
   });
 
+  describe('SandboxStack', () => {
+    let networkStack: NetworkStack;
+    let securityStack: SecurityStack;
+    let monitoringStack: MonitoringStack;
+
+    beforeEach(() => {
+      networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      monitoringStack = new MonitoringStack(app, 'TestMonitoringStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      securityStack = new SecurityStack(app, 'TestSecurityStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        dataBucket: monitoringStack.output.dataBucket,
+      });
+    });
+
+    test('synthesizes correctly', () => {
+      const stack = new SandboxStack(app, 'TestSandboxStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        securityOutput: securityStack.output,
+        monitoringOutput: monitoringStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify ECS Cluster is created
+      template.hasResourceProperties('AWS::ECS::Cluster', {
+        ClusterName: 'openhands-sandbox',
+      });
+
+      // Verify DynamoDB table is created
+      template.hasResourceProperties('AWS::DynamoDB::Table', {
+        TableName: 'openhands-sandbox-registry',
+        KeySchema: Match.arrayWith([
+          Match.objectLike({
+            AttributeName: 'conversation_id',
+            KeyType: 'HASH',
+          }),
+        ]),
+      });
+
+      // Verify Fargate task definition is created
+      template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+        Family: 'openhands-sandbox',
+        Cpu: '2048',
+        Memory: '4096',
+        RequiresCompatibilities: ['FARGATE'],
+        NetworkMode: 'awsvpc',
+      });
+
+      // Verify security group for sandbox tasks
+      template.hasResourceProperties('AWS::EC2::SecurityGroup', {
+        GroupDescription: Match.stringLikeRegexp('sandbox Fargate'),
+      });
+
+      // Verify Idle Monitor Lambda
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: 'openhands-sandbox-idle-monitor',
+        Runtime: 'nodejs22.x',
+      });
+
+      // Verify EventBridge rule for idle monitor
+      template.hasResourceProperties('AWS::Events::Rule', {
+        ScheduleExpression: 'rate(5 minutes)',
+      });
+
+      // Verify CloudWatch alarm for sandbox creation failures
+      template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        AlarmDescription: 'Sandbox creation failures detected',
+        Namespace: 'OpenHands/Sandbox',
+        MetricName: 'SandboxCreationFailures',
+      });
+    });
+
+    test('outputs are correctly defined', () => {
+      const stack = new SandboxStack(app, 'TestSandboxStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        securityOutput: securityStack.output,
+        monitoringOutput: monitoringStack.output,
+      });
+
+      expect(stack.output).toBeDefined();
+      expect(stack.output.clusterArn).toBeDefined();
+      expect(stack.output.registryTableName).toBeDefined();
+      expect(stack.output.taskDefinitionArn).toBeDefined();
+      expect(stack.output.sandboxTaskSecurityGroupId).toBeDefined();
+      expect(stack.output.orchestratorApiUrl).toBeDefined();
+    });
+  });
+
   describe('Stack Integration', () => {
     test('all stacks can be synthesized together', () => {
       const networkStack = new NetworkStack(app, 'TestNetworkStack', {
@@ -737,6 +860,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
         databaseOutput: mockDatabaseOutput,
+        sandboxOutput: mockSandboxOutput,
       });
 
       // Verify all stacks can be synthesized
