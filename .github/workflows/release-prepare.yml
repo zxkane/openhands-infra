@@ -93,6 +93,13 @@ jobs:
 
           # Write to file for safe handling
           echo -e "$COMMIT_DATA" > /tmp/commit_data.txt
+
+          # Validate we have commits to release
+          if [ ! -s /tmp/commit_data.txt ]; then
+            echo "::error::No commits found since last tag. Nothing to release."
+            exit 1
+          fi
+
           echo "commits_file=/tmp/commit_data.txt" >> "$GITHUB_OUTPUT"
 
       - name: Read existing changelog format
@@ -120,8 +127,6 @@ jobs:
         run: |
           VERSION="${{ inputs.version }}"
           TODAY=$(date +%Y-%m-%d)
-          COMMITS=$(cat /tmp/commit_data.txt)
-          FORMAT_EXAMPLE=$(cat /tmp/format_example.txt)
 
           # Build the prompt in a temp file to avoid shell escaping issues
           cat > /tmp/prompt.txt << 'PROMPT_END'
@@ -210,6 +215,20 @@ jobs:
             COMPARE_LINK="[${VERSION}]: https://github.com/${{ github.repository }}/compare/${LAST_TAG}...v${VERSION}"
           else
             COMPARE_LINK="[${VERSION}]: https://github.com/${{ github.repository }}/releases/tag/v${VERSION}"
+          fi
+
+          # Create CHANGELOG.md with header if it doesn't exist
+          if [ ! -f CHANGELOG.md ]; then
+            cat > CHANGELOG.md << 'HEADER'
+          # Changelog
+
+          All notable changes to this project will be documented in this file.
+
+          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+          HEADER
+            # Remove leading whitespace from heredoc
+            sed -i 's/^          //' CHANGELOG.md
           fi
 
           # Find insertion point: line of first version header, or end of file
