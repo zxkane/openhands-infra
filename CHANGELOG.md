@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-14
+
+### Added
+
+#### OpenHands Upgrade
+- **Upgrade OpenHands to v1.3.0** (#22)
+  - CORS support via `OH_ALLOW_CORS_ORIGINS_0` env var
+  - Host network mode via `OH_SANDBOX_USE_HOST_NETWORK=true`
+  - SDK bump to 1.10.0
+  - Multi-tenant conversation isolation (per-user filtering in SQL queries)
+  - Webhook callback UUID fix and secret re-injection on resume
+
+### Changed
+
+#### Patch Architecture
+- **Replace runtime regex patching with fork-based patches** (#23)
+  - 83% reduction in patch code (2046 → ~280 lines)
+  - Upstream file modifications now live as clean git commits in `zxkane/openhands` fork
+  - Each patch is a readable git diff instead of fragile regex transformations
+  - Faster container startup (no runtime regex matching)
+  - Fork ref pinned to commit SHA for reproducible builds
+
+### Fixed
+
+#### Frontend
+- **iPhone historical conversation messages not displaying** (#24)
+  - Root cause: upstream React component remounts WebSocket provider on mobile/desktop layout switch at 1024px, leaving "history loaded" flag stuck
+  - Consolidated 3 independent MutationObservers into a single shared dispatcher
+  - Replaced synchronous recursive DOM walking with `requestIdleCallback`-based batched processing
+  - Added React fiber patch to detect and fix stuck skeleton loader
+  - Added fetch auth redirect detection for iOS Safari ITP cookie blocking
+
+#### Security & Infrastructure
+- **Sandbox secret key managed via IaC** - Reference existing Secrets Manager secret instead of dynamic creation in EC2 user data (c5606cd)
+
+### Documentation
+- **Sandbox secret key prerequisite** - Added setup instructions for first-time deployment (#21)
+
+[0.3.0]: https://github.com/zxkane/openhands-infra/compare/v0.2.0...v0.3.0
+
 ## [0.2.0] - 2026-02-02
 
 ### Added
