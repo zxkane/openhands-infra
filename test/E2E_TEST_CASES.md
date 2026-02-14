@@ -2619,3 +2619,133 @@ Resumed Conversation (with Patch 29):
 # Delete test secret via /settings/secrets page
 # Delete test conversation if needed
 ```
+
+---
+
+## TC-023: Verify Mobile Historical Conversation Messages Display
+
+### Description
+
+Verify that historical conversation messages display correctly on mobile/narrow viewports.
+This test covers the upstream bug (All-Hands-AI/OpenHands#12704) where conversation history
+skeleton gets stuck on viewports narrower than ~1200px due to WebSocket provider remounting.
+The bug is fixed by Patch 8 in `docker/patch-fix.js` (temporary React fiber fix).
+
+### Prerequisites
+
+- A conversation with 10+ messages already exists (create on desktop if needed)
+- Chrome DevTools MCP server connected
+- Cognito user logged in
+
+### Steps
+
+1. **Create test conversation on desktop** (skip if existing conversation has 10+ messages)
+
+   a. Navigate to the application at desktop viewport
+   ```javascript
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}", type: "url" })
+   ```
+
+   b. Start a new conversation and generate multiple exchanges
+   ```javascript
+   // Send a prompt, wait for response, repeat 5+ times to build history
+   mcp__chrome-devtools__fill({ uid: "<chat-input>", value: "List 5 programming languages and their creators" })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   mcp__chrome-devtools__wait_for({ text: "Python", timeout: 60000 })
+   ```
+
+   c. Note the conversation URL path (e.g., `/conversations/{uuid}`)
+
+2. **Switch to mobile viewport (iPhone 14 Pro Max emulation)**
+
+   ```javascript
+   mcp__chrome-devtools__emulate({
+     viewport: {
+       width: 430,
+       height: 932,
+       deviceScaleFactor: 3,
+       isMobile: true,
+       hasTouch: true
+     },
+     userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+   })
+   ```
+
+3. **Navigate to the historical conversation**
+
+   ```javascript
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}/conversations/<conv-uuid>", type: "url" })
+   ```
+
+4. **Wait for messages to load** (Patch 8 should activate within 3-5 seconds if skeleton is stuck)
+
+   ```javascript
+   // Wait for actual message content - not the skeleton
+   mcp__chrome-devtools__wait_for({ text: "Python", timeout: 15000 })
+   ```
+
+5. **Take screenshot for verification**
+
+   ```javascript
+   mcp__chrome-devtools__take_screenshot({})
+   ```
+
+6. **Verify no stuck skeleton**
+
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: "() => { var s = document.querySelector('[data-testid=\"chat-messages-skeleton\"]'); return { skeletonVisible: !!s, messageCount: document.querySelectorAll('[data-testid^=\"message-\"]').length }; }"
+   })
+   ```
+
+7. **Verify Patch 8 log output** (check console for activation)
+
+   ```javascript
+   mcp__chrome-devtools__list_console_messages({ types: ["log", "warn"] })
+   // Look for "[Patch 8]" messages
+   ```
+
+8. **Test at additional narrow widths** (768px tablet, 375px iPhone SE)
+
+   ```javascript
+   mcp__chrome-devtools__emulate({
+     viewport: { width: 768, height: 1024, deviceScaleFactor: 2, isMobile: true, hasTouch: true }
+   })
+   mcp__chrome-devtools__navigate_page({ type: "reload" })
+   mcp__chrome-devtools__wait_for({ text: "Python", timeout: 15000 })
+   ```
+
+9. **Reset to desktop viewport**
+
+   ```javascript
+   mcp__chrome-devtools__emulate({ viewport: null, userAgent: null })
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Messages visible at 430px width within 5s | `wait_for` succeeds for message content |
+| 2 | No stuck skeleton after page load | `evaluate_script` returns `skeletonVisible: false` |
+| 3 | Message count matches conversation history | `messageCount > 0` in evaluate_script result |
+| 4 | Patch 8 log visible if skeleton was stuck | Console shows `[Patch 8]` messages |
+| 5 | Messages visible at 768px width | Reload at tablet width shows messages |
+| 6 | Messages visible at 375px width | Reload at narrow phone width shows messages |
+| 7 | Desktop viewport still works after reset | Messages display at full width |
+
+### Troubleshooting
+
+| Issue | Possible Cause | Resolution |
+|-------|----------------|------------|
+| Skeleton stuck > 15s | Patch 8 not injected | Check `docker logs openhands-app` for "Patch 8" |
+| Messages load on desktop but not mobile | Upstream bug not patched | Verify `patch-fix.js` includes skeleton fix IIFE |
+| "[Patch 8] Could not find React fiber" | React DOM structure changed | Upstream version may have changed component tree |
+| "[Patch 8] Max retries reached" | Fiber hook search failing | May need to adjust hook detection logic |
+| API returns HTML on mobile | iOS ITP blocking cookies | Check console for "[Auth redirect detected]" |
+
+### Cleanup
+
+```bash
+# Reset viewport to desktop in Chrome DevTools
+# No infrastructure cleanup needed
+```

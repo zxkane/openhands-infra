@@ -183,7 +183,28 @@
     } catch (e) {}
 
     if (!isCreateConversation || alreadyRetried) {
-      return origFetch.call(this, newUrl, opts);
+      return origFetch.call(this, newUrl, opts).then(function(resp) {
+        // Detect auth redirect: iOS Safari ITP silently blocks SameSite=None cookies,
+        // causing API calls to return HTML (Cognito login page) instead of JSON.
+        // Only check responses that: (1) are from our domain's /api/ path, (2) returned
+        // 200 OK, and (3) weren't redirected to a different origin (resp.url check).
+        if (resp.ok && typeof newUrl === "string" && newUrl.indexOf('/api/') !== -1) {
+          var respUrl = resp.url || '';
+          var sameOrigin = respUrl.indexOf(window.location.origin) === 0 || respUrl === '';
+          if (sameOrigin) {
+            var ct = resp.headers.get('content-type') || '';
+            if (ct.indexOf('text/html') !== -1 && ct.indexOf('application/json') === -1) {
+              console.warn('[Auth redirect] API returned HTML instead of JSON, redirecting to login:', newUrl);
+              window.location.href = '/_logout';
+              return new Response(JSON.stringify({ error: 'auth_redirect', message: 'Session expired' }), {
+                status: 401,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+        }
+        return resp;
+      });
     }
 
     return origFetch.call(this, newUrl, opts).then(function(resp) {
@@ -724,6 +745,11 @@
 // The AI agent outputs URLs like "http://localhost:51745" which users cannot access
 // Also handles main domain with port (VS Code URLs): http://{subdomain}.{domain}:49955
 // This rewrites them to runtime subdomain URLs: https://{port}-{convId}.runtime.{subdomain}.{domain}/
+//
+// MOBILE OPTIMIZATION: Uses requestIdleCallback-based batched processing instead of
+// synchronous recursive DOM walking. The previous implementation processed every added
+// DOM node synchronously in the MutationObserver callback, which blocked the main thread
+// on mobile Safari (iPhone) during large conversation loads, preventing messages from rendering.
 (function() {
   // Pattern for localhost/host.docker.internal URLs
   var urlPattern = /https?:\/\/(localhost|host\.docker\.internal):(\d+)(\/[^\s<>"')\]]*)?/gi;
@@ -737,14 +763,34 @@
   // our runtime subdomain, never to external domains.
   var mainDomainPortPattern = /https?:\/\/(?!\d+-[a-f0-9]+\.runtime\.)([a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(\d+)(\/[^\s<>"')\]]*)?/gi;
 
+  // Cache conversation ID to avoid repeated regex matching on every DOM mutation.
+  // Invalidated on navigation (popstate) so it re-checks on SPA route changes.
+  var cachedConvId = null;
+  var convIdChecked = false;
+
   // Extract conversation_id from URL (UUID format, remove hyphens to get hex)
   function getConversationId() {
+    if (convIdChecked) return cachedConvId;
     var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
-    if (match) {
-      return match[1].replace(/-/g, '');
-    }
-    return null;
+    cachedConvId = match ? match[1].replace(/-/g, '') : null;
+    convIdChecked = true;
+    return cachedConvId;
   }
+
+  // Invalidate cache on navigation to handle SPA route changes.
+  // popstate fires on browser back/forward; pushState/replaceState are used by React Router.
+  function invalidateConvIdCache() { convIdChecked = false; }
+  window.addEventListener('popstate', invalidateConvIdCache);
+  var origPushState = history.pushState;
+  var origReplaceState = history.replaceState;
+  history.pushState = function() {
+    invalidateConvIdCache();
+    return origPushState.apply(this, arguments);
+  };
+  history.replaceState = function() {
+    invalidateConvIdCache();
+    return origReplaceState.apply(this, arguments);
+  };
 
   // Check if URL host matches the main domain (ignoring port)
   function isMainDomainUrl(urlHost) {
@@ -825,27 +871,71 @@
     }
   }
 
+  // Batched, non-blocking node processing for MutationObserver.
+  // Instead of processing every DOM node synchronously (which blocks the main thread
+  // on mobile during large conversation loads), we collect pending nodes and process
+  // them in the next idle callback or animation frame.
+  var pendingNodes = [];
+  var idleCallbackScheduled = false;
+  var MAX_PENDING_NODES = 10000;  // Prevent unbounded growth in background tabs
+
+  function processPendingNodes() {
+    var nodes = pendingNodes;
+    pendingNodes = [];
+    idleCallbackScheduled = false;
+
+    // Reset cache at the start of each batch so it re-reads the current URL.
+    // This handles SPA navigation via pushState/replaceState which does not
+    // fire popstate events. The cache still benefits within a single batch
+    // (multiple rewriteTextUrls calls during processNode share the cached value).
+    convIdChecked = false;
+
+    // Skip all processing if not on a conversation page
+    if (!getConversationId()) return;
+
+    for (var i = 0; i < nodes.length; i++) {
+      processNode(nodes[i]);
+    }
+  }
+
+  function scheduleProcessing() {
+    if (idleCallbackScheduled) return;
+    idleCallbackScheduled = true;
+    // Use requestIdleCallback for non-blocking processing when available (most modern browsers).
+    // Falls back to requestAnimationFrame which runs before the next paint.
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(processPendingNodes, { timeout: 500 });
+    } else {
+      requestAnimationFrame(processPendingNodes);
+    }
+  }
+
+  // Register with shared MutationObserver dispatcher (see bottom of file)
+  window.__ohMutationHandlers = window.__ohMutationHandlers || [];
+  window.__ohMutationHandlers.push(function(mutations) {
+    // Skip if not on a conversation page (early exit before iterating mutations)
+    if (!getConversationId()) return;
+
+    for (var i = 0; i < mutations.length; i++) {
+      var addedNodes = mutations[i].addedNodes;
+      for (var j = 0; j < addedNodes.length; j++) {
+        var node = addedNodes[j];
+        if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
+          if (pendingNodes.length < MAX_PENDING_NODES) {
+            pendingNodes.push(node);
+          }
+        }
+      }
+    }
+    if (pendingNodes.length > 0) {
+      scheduleProcessing();
+    }
+  });
+
   // Process existing content after DOM is ready
   function init() {
     if (document.body) {
       processNode(document.body);
-
-      // Observe future DOM changes
-      var observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-          mutation.addedNodes.forEach(function(node) {
-            if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-              processNode(node);
-            }
-          });
-        });
-      });
-
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-
       console.log('OpenHands localhost URL text rewriter loaded');
     }
   }
@@ -909,10 +999,13 @@
   // Scan initially
   scanForLogoutButtons();
 
-  // Watch for new buttons added to DOM
-  var observer = new MutationObserver(function(mutations) {
-    mutations.forEach(function(mutation) {
-      mutation.addedNodes.forEach(function(node) {
+  // Register with shared MutationObserver dispatcher (see bottom of file)
+  window.__ohMutationHandlers = window.__ohMutationHandlers || [];
+  window.__ohMutationHandlers.push(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var addedNodes = mutations[i].addedNodes;
+      for (var j = 0; j < addedNodes.length; j++) {
+        var node = addedNodes[j];
         if (node.nodeType === Node.ELEMENT_NODE) {
           if (node.tagName === 'BUTTON' && isLogoutButton(node)) {
             patchLogoutButton(node);
@@ -925,13 +1018,8 @@
             }
           });
         }
-      });
-    });
-  });
-
-  observer.observe(document.body || document.documentElement, {
-    childList: true,
-    subtree: true
+      }
+    }
   });
 
   // Also add document-level backup handler on mousedown (fires before React click)
@@ -1031,17 +1119,13 @@
     // Initial check
     setTimeout(protectGlobalMcpServers, 500);
 
-    // Watch for DOM changes (for SPA page transitions)
-    var observer = new MutationObserver(function(mutations) {
+    // Register with shared MutationObserver dispatcher (see bottom of file)
+    var mcpDebounceTimer = null;
+    window.__ohMutationHandlers = window.__ohMutationHandlers || [];
+    window.__ohMutationHandlers.push(function() {
       // Debounce - only run once per batch of mutations
-      clearTimeout(observer._timeout);
-      observer._timeout = setTimeout(protectGlobalMcpServers, 200);
-    });
-
-    // Start observing
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
+      clearTimeout(mcpDebounceTimer);
+      mcpDebounceTimer = setTimeout(protectGlobalMcpServers, 200);
     });
 
     // Also handle URL changes (popstate for back/forward)
@@ -1057,5 +1141,231 @@
   }
 
   console.log('OpenHands MCP protection patch loaded');
+})();
+
+// TEMPORARY: Remove after upgrading to OpenHands >= version with PR #12821
+// Fix stuck chat-messages-skeleton on narrow viewports (< ~1200px / mobile).
+// Root cause: upstream ConversationMain remounts WebSocket provider when switching
+// mobile/desktop layout at 1024px, resetting loading state. The "history loaded"
+// flag stays false because the isLoadingHistory transition from true->false never
+// fires after remount. This patch detects the stuck state and forces the flag to
+// true via React fiber internals.
+// Upstream fix: All-Hands-AI/OpenHands#12821 (merged, not yet released)
+(function() {
+  var SKELETON_CHECK_DELAY = 3000;
+  var SKELETON_RECHECK_INTERVAL = 2000;
+  var MAX_RETRIES = 5;
+  var SKELETON_SELECTOR = '[data-testid="chat-messages-skeleton"]';
+  var MAX_FIBER_DEPTH = 15;
+  var retryCount = 0;
+  var fixApplied = false;
+  var recheckTimer = null;
+
+  function getConversationId() {
+    var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
+    return match ? match[1] : null;
+  }
+
+  function stopRechecking() {
+    if (recheckTimer) {
+      clearInterval(recheckTimer);
+      recheckTimer = null;
+    }
+  }
+
+  function markDone() {
+    fixApplied = true;
+    stopRechecking();
+  }
+
+  // React stores fiber references on DOM nodes via __reactFiber$ or __reactInternalInstance$ keys
+  function findFiberFromDom(domNode) {
+    var keys = Object.keys(domNode);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i].indexOf('__reactFiber$') === 0 || keys[i].indexOf('__reactInternalInstance$') === 0) {
+        return domNode[keys[i]];
+      }
+    }
+    return null;
+  }
+
+  // Walk the useState hooks linked list to find a stuck boolean false flag with a dispatch queue.
+  // This targets the history-loaded flag: [isLoaded, setIsLoaded] = useState(false)
+  function findAndFixHistoryLoadedHook(fiber) {
+    var hookState = fiber.memoizedState;
+    var hookIndex = 0;
+
+    while (hookState) {
+      if (hookState.memoizedState === false && hookState.queue && typeof hookState.queue.dispatch === 'function') {
+        console.log('[Patch 8] Found stuck history-loaded hook at index', hookIndex, '- forcing to true');
+        hookState.queue.dispatch(true);
+        return true;
+      }
+      hookState = hookState.next;
+      hookIndex++;
+    }
+    return false;
+  }
+
+  // Walk up the fiber tree from the skeleton element, checking each FunctionComponent
+  // (tag === 0) for a stuck useState(false) hook that controls skeleton visibility.
+  function fixStuckFiber(skeleton) {
+    var fiber = findFiberFromDom(skeleton);
+    if (!fiber) {
+      console.warn('[Patch 8] Could not find React fiber on skeleton element');
+      return false;
+    }
+
+    var current = fiber;
+    for (var depth = 0; depth < MAX_FIBER_DEPTH; depth++) {
+      if (!current.return) break;
+      current = current.return;
+      if (current.tag === 0 && current.memoizedState) {
+        if (findAndFixHistoryLoadedHook(current)) {
+          console.log('[Patch 8] Fix applied at fiber depth', depth + 1, 'from skeleton');
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function attemptFix() {
+    if (fixApplied) return;
+
+    var convId = getConversationId();
+    if (!convId) return;
+
+    var skeleton = document.querySelector(SKELETON_SELECTOR);
+    if (!skeleton) {
+      markDone();
+      return;
+    }
+
+    // Verify events are actually loaded before assuming the skeleton is stuck
+    // Use app-conversations API to check if conversation has events loaded.
+    // The events/search endpoint is on the agent-server (not main app), so we
+    // check conversation status instead: an ARCHIVED conversation with a title
+    // indicates the agent processed messages (events exist in the DB).
+    fetch('/api/v1/app-conversations?ids=' + convId)
+      .then(function(resp) {
+        if (!resp.ok) return;
+        return resp.json().then(function(data) {
+          var conv = Array.isArray(data) && data[0];
+          // Conversation has events if it has a title (agent processed messages)
+          // or if its status is not CREATED (i.e., something happened)
+          var hasEvents = conv && (conv.title || conv.status === 'RUNNING' || conv.status === 'ARCHIVED');
+          if (!hasEvents) {
+            console.log('[Patch 8] Skeleton visible but no events yet - waiting');
+            return;
+          }
+
+          console.log('[Patch 8] Stuck skeleton detected with loaded events - attempting fiber fix');
+
+          // Re-check: skeleton may have resolved during the async fetch
+          skeleton = document.querySelector(SKELETON_SELECTOR);
+          if (!skeleton) {
+            markDone();
+            return;
+          }
+
+          if (fixStuckFiber(skeleton)) {
+            markDone();
+          } else {
+            retryCount++;
+            console.log('[Patch 8] Could not find stuck hook (attempt', retryCount + '/' + MAX_RETRIES + ')');
+            if (retryCount >= MAX_RETRIES) {
+              console.warn('[Patch 8] Max retries reached - giving up');
+              stopRechecking();
+            }
+          }
+        });
+      })
+      .catch(function(err) {
+        console.log('[Patch 8] Error checking events:', err);
+      });
+  }
+
+  function init() {
+    if (!getConversationId()) return;
+
+    setTimeout(function() {
+      attemptFix();
+      if (!fixApplied && retryCount < MAX_RETRIES) {
+        recheckTimer = setInterval(function() {
+          if (fixApplied || retryCount >= MAX_RETRIES) {
+            stopRechecking();
+            return;
+          }
+          attemptFix();
+        }, SKELETON_RECHECK_INTERVAL);
+      }
+    }, SKELETON_CHECK_DELAY);
+  }
+
+  function reset() {
+    fixApplied = false;
+    retryCount = 0;
+    stopRechecking();
+    setTimeout(init, 500);
+  }
+
+  window.addEventListener('popstate', reset);
+  var origPushState = history.pushState;
+  var origReplaceState = history.replaceState;
+  history.pushState = function() {
+    var result = origPushState.apply(this, arguments);
+    reset();
+    return result;
+  };
+  history.replaceState = function() {
+    var result = origReplaceState.apply(this, arguments);
+    reset();
+    return result;
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  console.log('[Patch 8] OpenHands stuck skeleton fix loaded (remove after upgrade with PR #12821)');
+})();
+
+// Shared MutationObserver dispatcher - consolidates all MutationObserver callbacks into
+// a single observer to reduce overhead on mobile devices.
+// Previously, 3 independent MutationObservers on document.body with {childList: true,
+// subtree: true} meant the browser invoked 3 separate JavaScript callbacks for every
+// single DOM mutation. On mobile Safari (iPhone) with limited CPU, this tripled the
+// callback overhead during large conversation loads, blocking message rendering.
+// Now a single observer dispatches to all registered handlers.
+(function() {
+  var observer = new MutationObserver(function(mutations) {
+    // Re-read handlers on each callback to support late registration
+    // (e.g., MCP protection handler registers on 'load' event)
+    var currentHandlers = window.__ohMutationHandlers || [];
+    for (var i = 0; i < currentHandlers.length; i++) {
+      try {
+        currentHandlers[i](mutations);
+      } catch (e) {
+        console.error('Shared MutationObserver handler error:', e);
+      }
+    }
+  });
+
+  function startObserving() {
+    var target = document.body || document.documentElement;
+    if (target) {
+      observer.observe(target, { childList: true, subtree: true });
+      console.log('Shared MutationObserver started with', (window.__ohMutationHandlers || []).length, 'handler(s)');
+    }
+  }
+
+  if (document.body) {
+    startObserving();
+  } else {
+    document.addEventListener('DOMContentLoaded', startObserving);
+  }
 })();
 </script>
