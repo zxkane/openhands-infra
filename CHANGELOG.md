@@ -44,8 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated README.md to include a required step for configuring the `sandbox secret key`.
   - Prerequisites documented in `CLAUDE.md` with accompanying CLI command examples.
 
-[0.3.0]: https://github.com/zxkane/openhands-infra/releases/tag/v0.3.0
-
 [0.3.0]: https://github.com/zxkane/openhands-infra/compare/v0.2.0...v0.3.0
 
 ## [0.2.0] - 2026-02-02
