@@ -353,7 +353,8 @@ export class SandboxStack extends cdk.Stack {
       registryTableArn: registryTable.tableArn,
       taskDefinitionArn: sandboxTaskDefinition.taskDefinitionArn,
       sandboxTaskSecurityGroupId: sandboxTaskSg.securityGroupId,
-      orchestratorApiUrl: 'http://localhost:8081', // Orchestrator runs as sidecar on EC2
+      // Use Docker Compose service name for inter-container communication
+      orchestratorApiUrl: 'http://sandbox-orchestrator:8081',
       sandboxLogGroupName: sandboxLogGroup.logGroupName,
       orchestratorImageUri: orchestratorImage.imageUri,
       sandboxExecutionRoleArn: sandboxExecutionRole.roleArn,

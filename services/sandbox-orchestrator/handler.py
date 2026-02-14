@@ -124,6 +124,9 @@ def start_sandbox(req: StartRequest):
 
 
     session_id = req.session_id
+    if not session_id or not session_id.strip():
+        raise HTTPException(status_code=400, detail='Invalid session_id')
+
     image = req.image or SANDBOX_IMAGE
     environment = req.environment or {}
 
@@ -335,6 +338,9 @@ def list_sessions():
 @app.post('/activity')
 def update_activity(req: ActivityRequest):
     """Update last_activity_at timestamp (called by OpenResty on each proxied request)."""
-
-    store.update_activity(req.session_id)
+    try:
+        store.update_activity(req.session_id)
+    except Exception as e:
+        # Activity tracking is non-critical — don't break request routing on failure
+        logger.warning('Failed to update activity for %s: %s', req.session_id, e)
     return {'status': 'ok'}
