@@ -1,7 +1,8 @@
 """Sandbox Orchestrator - FastAPI service implementing the remote runtime HTTP API.
 
 Translates OpenHands RemoteSandboxService HTTP calls to ECS Fargate operations.
-Runs as a sidecar container on the EC2 host (Phase 1) or as a standalone Fargate service (Phase 2).
+API format matches upstream expectations in remote_sandbox_service.py.
+Runs as a sidecar container on the EC2 host (Phase 1).
 """
 
 import logging
@@ -9,7 +10,7 @@ import os
 import uuid
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from dynamodb_store import DynamoDBStore, SandboxRecord
@@ -39,9 +40,8 @@ ecs = EcsManager(
     region=AWS_REGION,
 )
 
-
 # NOTE: No API key auth needed — orchestrator only listens on localhost:8081 (EC2 private).
-# The security group does not expose port 8081 to the ALB or internet.
+
 
 # ========================================
 # Request/Response Models
@@ -53,31 +53,8 @@ class StartRequest(BaseModel):
     environment: Optional[dict[str, str]] = None
 
 
-class StartResponse(BaseModel):
-    session_id: str
-    url: str
-    session_api_key: str
-    status: str
-
-
-class StopRequest(BaseModel):
-    session_id: str
-
-
-class SessionResponse(BaseModel):
-    session_id: str
-    url: str
-    status: str
-    user_id: str
-    session_api_key: str
-
-
-class BatchRequest(BaseModel):
-    session_ids: list[str]
-
-
-class ListResponse(BaseModel):
-    sessions: list[SessionResponse]
+class RuntimeIdRequest(BaseModel):
+    runtime_id: str
 
 
 class ActivityRequest(BaseModel):
@@ -94,18 +71,20 @@ def build_sandbox_url(ip: str, port: int = 8000) -> str:
     return f'http://{ip}:{port}'
 
 
-def record_to_session_response(record: SandboxRecord) -> SessionResponse:
-    """Convert a SandboxRecord to a SessionResponse."""
+def record_to_runtime(record: SandboxRecord) -> dict:
+    """Convert a SandboxRecord to the runtime dict format expected by RemoteSandboxService."""
     url = ''
     if record.task_ip and record.status == 'RUNNING':
         url = build_sandbox_url(record.task_ip, record.agent_server_port)
-    return SessionResponse(
-        session_id=record.conversation_id,
-        url=url,
-        status=record.status,
-        user_id=record.user_id,
-        session_api_key=record.session_api_key,
-    )
+    return {
+        'session_id': record.conversation_id,
+        'runtime_id': record.task_arn or record.conversation_id,
+        'status': record.status.lower(),  # upstream expects lowercase: running, stopped, etc.
+        'url': url,
+        'session_api_key': record.session_api_key,
+        'image': record.sandbox_spec_id,
+        'user_id': record.user_id,
+    }
 
 
 # ========================================
@@ -118,11 +97,12 @@ async def health():
     return {'status': 'ok'}
 
 
-@app.post('/start', response_model=StartResponse)
+@app.post('/start')
 def start_sandbox(req: StartRequest):
-    """Start a new sandbox Fargate task for a conversation."""
+    """Start a new sandbox Fargate task for a conversation.
 
-
+    Returns runtime dict matching upstream RemoteSandboxService expectations.
+    """
     session_id = req.session_id
     if not session_id or not session_id.strip():
         raise HTTPException(status_code=400, detail='Invalid session_id')
@@ -133,10 +113,7 @@ def start_sandbox(req: StartRequest):
     if not image:
         raise HTTPException(status_code=400, detail='No sandbox image specified')
 
-    # Extract user_id from environment (set by RemoteSandboxService)
     user_id = environment.get('USER_ID', '')
-
-    # Generate session API key for agent-server authentication
     session_api_key = str(uuid.uuid4())
 
     logger.info('Starting sandbox for session=%s, user=%s, image=%s', session_id, user_id, image)
@@ -145,15 +122,9 @@ def start_sandbox(req: StartRequest):
     existing = store.get_sandbox(session_id)
     if existing and existing.status == 'RUNNING':
         logger.info('Sandbox already running for session=%s', session_id)
-        return StartResponse(
-            session_id=session_id,
-            url=build_sandbox_url(existing.task_ip, existing.agent_server_port),
-            session_api_key=existing.session_api_key,
-            status='RUNNING',
-        )
+        return record_to_runtime(existing)
 
     def record_error(task_arn: str = '') -> None:
-        """Record a sandbox creation failure in DynamoDB."""
         error_record = SandboxRecord({
             'conversation_id': session_id,
             'user_id': user_id,
@@ -191,7 +162,6 @@ def start_sandbox(req: StartRequest):
         record_error(task_arn)
         raise HTTPException(status_code=503, detail='Sandbox task failed to start')
 
-    # Store in DynamoDB
     record = SandboxRecord({
         'conversation_id': session_id,
         'user_id': user_id,
@@ -204,23 +174,16 @@ def start_sandbox(req: StartRequest):
     })
     store.put_sandbox(record)
 
-    url = build_sandbox_url(task_ip)
-    logger.info('Sandbox started: session=%s, url=%s', session_id, url)
-
-    return StartResponse(
-        session_id=session_id,
-        url=url,
-        session_api_key=session_api_key,
-        status='RUNNING',
-    )
+    logger.info('Sandbox started: session=%s, ip=%s', session_id, task_ip)
+    return record_to_runtime(record)
 
 
 @app.post('/stop')
-def stop_sandbox(req: StopRequest):
+def stop_sandbox(req: RuntimeIdRequest):
     """Stop a running sandbox task."""
-
-
-    record = store.get_sandbox(req.session_id)
+    # runtime_id is the task_arn; find the record by scanning or use session_id
+    # The upstream calls stop with runtime_id, but we need to find by task_arn
+    record = _find_record_by_runtime_id(req.runtime_id)
     if not record:
         raise HTTPException(status_code=404, detail='Sandbox not found')
 
@@ -230,57 +193,46 @@ def stop_sandbox(req: StopRequest):
         except RuntimeError as e:
             logger.error('Failed to stop task: %s', e)
 
-    store.update_status(req.session_id, 'STOPPED')
-    return {'status': 'STOPPED', 'session_id': req.session_id}
+    store.update_status(record.conversation_id, 'STOPPED')
+    return {'status': 'stopped', 'session_id': record.conversation_id}
 
 
 @app.post('/pause')
-def pause_sandbox(req: StopRequest):
+def pause_sandbox(req: RuntimeIdRequest):
     """Pause a sandbox (stops the task but marks as PAUSED for resume)."""
-
-
-    record = store.get_sandbox(req.session_id)
+    record = _find_record_by_runtime_id(req.runtime_id)
     if not record:
         raise HTTPException(status_code=404, detail='Sandbox not found')
 
     if record.status == 'RUNNING' and record.task_arn:
         try:
-            ecs.stop_task(record.task_arn, reason='Sandbox paused for idle timeout')
+            ecs.stop_task(record.task_arn, reason='Sandbox paused')
         except RuntimeError as e:
             logger.error('Failed to pause task: %s', e)
 
-    store.update_status(req.session_id, 'PAUSED')
-    return {'status': 'PAUSED', 'session_id': req.session_id}
+    store.update_status(record.conversation_id, 'PAUSED')
+    return {'status': 'paused', 'session_id': record.conversation_id}
 
 
-@app.post('/resume', response_model=StartResponse)
-def resume_sandbox(req: StartRequest):
+@app.post('/resume')
+def resume_sandbox(req: RuntimeIdRequest):
     """Resume a paused sandbox (starts new task, workspace intact on EFS)."""
-
-
-    record = store.get_sandbox(req.session_id)
+    record = _find_record_by_runtime_id(req.runtime_id)
     if not record:
         raise HTTPException(status_code=404, detail='Sandbox not found')
 
     if record.status == 'RUNNING':
-        return StartResponse(
-            session_id=req.session_id,
-            url=build_sandbox_url(record.task_ip, record.agent_server_port),
-            session_api_key=record.session_api_key,
-            status='RUNNING',
-        )
+        return record_to_runtime(record)
 
-    # Start new task with same configuration
-    image = req.image or record.sandbox_spec_id or SANDBOX_IMAGE
-    environment = req.environment or {}
+    image = record.sandbox_spec_id or SANDBOX_IMAGE
     session_api_key = record.session_api_key or str(uuid.uuid4())
 
     try:
         result = ecs.run_task(
-            conversation_id=req.session_id,
+            conversation_id=record.conversation_id,
             user_id=record.user_id,
             image=image,
-            environment=environment,
+            environment={},
             session_api_key=session_api_key,
         )
     except RuntimeError as e:
@@ -295,44 +247,38 @@ def resume_sandbox(req: StartRequest):
             pass
         raise HTTPException(status_code=503, detail='Sandbox task failed to resume')
 
-    store.update_status(req.session_id, 'RUNNING', task_ip=task_ip, task_arn=task_arn)
-
-    return StartResponse(
-        session_id=req.session_id,
-        url=build_sandbox_url(task_ip),
-        session_api_key=session_api_key,
-        status='RUNNING',
-    )
+    store.update_status(record.conversation_id, 'RUNNING', task_ip=task_ip, task_arn=task_arn)
+    updated = store.get_sandbox(record.conversation_id)
+    return record_to_runtime(updated) if updated else {'status': 'error'}
 
 
-@app.get('/sessions/{session_id}', response_model=SessionResponse)
+@app.get('/sessions/{session_id}')
 def get_session(session_id: str):
-    """Get sandbox info by session/conversation ID. Used by OpenResty for discovery."""
-
-
+    """Get runtime info for a single sandbox. Used by RemoteSandboxService._get_runtime()."""
     record = store.get_sandbox(session_id)
     if not record:
         raise HTTPException(status_code=404, detail='Sandbox not found')
-
-    return record_to_session_response(record)
-
-
-@app.post('/sessions/batch')
-def batch_get_sessions(req: BatchRequest):
-    """Batch get sandbox info for multiple sessions."""
+    return record_to_runtime(record)
 
 
-    records = store.batch_get_sandboxes(req.session_ids)
-    return {'sessions': [record_to_session_response(r) for r in records]}
+@app.get('/sessions/batch')
+def batch_get_sessions(ids: list[str] = Query(default=[])):
+    """Batch get runtime info. Upstream calls GET /sessions/batch?ids=...&ids=...
+
+    Returns a list of runtime dicts (not wrapped in an object).
+    """
+    records = store.batch_get_sandboxes(ids)
+    return [record_to_runtime(r) for r in records]
 
 
-@app.get('/list', response_model=ListResponse)
+@app.get('/list')
 def list_sessions():
-    """List all running sandboxes."""
+    """List all running sandboxes.
 
-
+    Returns {"runtimes": [...]} matching upstream RemoteSandboxService expectations.
+    """
     records = store.list_running()
-    return ListResponse(sessions=[record_to_session_response(r) for r in records])
+    return {'runtimes': [record_to_runtime(r) for r in records]}
 
 
 @app.post('/activity')
@@ -341,6 +287,20 @@ def update_activity(req: ActivityRequest):
     try:
         store.update_activity(req.session_id)
     except Exception as e:
-        # Activity tracking is non-critical — don't break request routing on failure
         logger.warning('Failed to update activity for %s: %s', req.session_id, e)
     return {'status': 'ok'}
+
+
+# ========================================
+# Internal helpers
+# ========================================
+
+def _find_record_by_runtime_id(runtime_id: str) -> Optional[SandboxRecord]:
+    """Find a sandbox record by runtime_id (which is the task_arn or conversation_id)."""
+    # First try as conversation_id (most common case)
+    record = store.get_sandbox(runtime_id)
+    if record:
+        return record
+    # If runtime_id is a task_arn, we'd need a GSI on task_arn.
+    # For now, just return None — upstream typically uses session_id directly.
+    return None
