@@ -1364,7 +1364,7 @@ services:
     environment:
       - REGISTRY_TABLE_NAME=openhands-sandbox-registry
       - ECS_CLUSTER_ARN=arn:aws:ecs:us-west-2:123456789012:cluster/openhands-sandbox
-      - TASK_DEFINITION_ARN=arn:aws:ecs:us-west-2:123456789012:task-definition/openhands-sandbox:1
+      - TASK_DEFINITION_ARN=openhands-sandbox
       - SUBNETS=\${SUBNETS}
       - SECURITY_GROUP_ID=sg-sandbox123
       - AWS_REGION_NAME=$REGION

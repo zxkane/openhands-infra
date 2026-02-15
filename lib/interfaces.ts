@@ -127,8 +127,8 @@ export interface SandboxStackOutput {
   registryTableName: string;
   /** DynamoDB table ARN for sandbox registry */
   registryTableArn: string;
-  /** Sandbox task definition ARN */
-  taskDefinitionArn: string;
+  /** Sandbox task definition family name (use with :LATEST for RunTask) */
+  taskDefinitionFamily: string;
   /** Security group ID for sandbox Fargate tasks */
   sandboxTaskSecurityGroupId: string;
   /** Sandbox Orchestrator API URL (internal) */

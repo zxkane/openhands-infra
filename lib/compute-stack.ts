@@ -559,7 +559,7 @@ export class ComputeStack extends cdk.Stack {
       '    environment:',
       `      - REGISTRY_TABLE_NAME=${sandboxOutput.registryTableName}`,
       `      - ECS_CLUSTER_ARN=${sandboxOutput.clusterArn}`,
-      `      - TASK_DEFINITION_ARN=${sandboxOutput.taskDefinitionArn}`,
+      `      - TASK_DEFINITION_ARN=${sandboxOutput.taskDefinitionFamily}`,
       '      - SUBNETS=${SUBNETS}',
       `      - SECURITY_GROUP_ID=${sandboxOutput.sandboxTaskSecurityGroupId}`,
       '      - AWS_REGION_NAME=$REGION',

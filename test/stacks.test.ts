@@ -42,7 +42,7 @@ const mockSandboxOutput: SandboxStackOutput = {
   clusterName: 'openhands-sandbox',
   registryTableName: 'openhands-sandbox-registry',
   registryTableArn: 'arn:aws:dynamodb:us-west-2:123456789012:table/openhands-sandbox-registry',
-  taskDefinitionArn: 'arn:aws:ecs:us-west-2:123456789012:task-definition/openhands-sandbox:1',
+  taskDefinitionFamily: 'openhands-sandbox',
   sandboxTaskSecurityGroupId: 'sg-sandbox123',
   orchestratorApiUrl: 'http://localhost:8081',
   sandboxLogGroupName: '/openhands/sandbox',
@@ -825,7 +825,7 @@ describe('OpenHands Infrastructure Stacks', () => {
       expect(stack.output).toBeDefined();
       expect(stack.output.clusterArn).toBeDefined();
       expect(stack.output.registryTableName).toBeDefined();
-      expect(stack.output.taskDefinitionArn).toBeDefined();
+      expect(stack.output.taskDefinitionFamily).toBeDefined();
       expect(stack.output.sandboxTaskSecurityGroupId).toBeDefined();
       expect(stack.output.orchestratorApiUrl).toBeDefined();
     });

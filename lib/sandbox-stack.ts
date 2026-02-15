@@ -332,7 +332,7 @@ export class SandboxStack extends cdk.Stack {
       clusterName: cluster.clusterName,
       registryTableName: registryTable.tableName,
       registryTableArn: registryTable.tableArn,
-      taskDefinitionArn: sandboxTaskDefinition.taskDefinitionArn,
+      taskDefinitionFamily: 'openhands-sandbox',  // Matches family in task definition
       sandboxTaskSecurityGroupId: sandboxTaskSg.securityGroupId,
       // Use Docker Compose service name for inter-container communication
       orchestratorApiUrl: 'http://sandbox-orchestrator:8081',
@@ -352,9 +352,9 @@ export class SandboxStack extends cdk.Stack {
       description: 'DynamoDB table for sandbox registry',
     });
 
-    new cdk.CfnOutput(this, 'TaskDefinitionArn', {
-      value: sandboxTaskDefinition.taskDefinitionArn,
-      description: 'Sandbox Fargate task definition ARN',
+    new cdk.CfnOutput(this, 'TaskDefinitionFamily', {
+      value: 'openhands-sandbox',
+      description: 'Sandbox Fargate task definition family name',
     });
 
     new cdk.CfnOutput(this, 'SandboxTaskSecurityGroupId', {
