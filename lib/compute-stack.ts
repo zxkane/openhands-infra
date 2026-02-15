@@ -186,6 +186,7 @@ export class ComputeStack extends cdk.Stack {
         'ecs:StopTask',
         'ecs:DescribeTasks',
         'ecs:ListTasks',
+        'ecs:TagResource',
       ],
       resources: ['*'],
       conditions: {
