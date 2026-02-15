@@ -7,6 +7,7 @@ Runs as a sidecar container on the EC2 host (Phase 1).
 
 import logging
 import os
+import threading
 import uuid
 from typing import Optional
 
@@ -76,10 +77,23 @@ def record_to_runtime(record: SandboxRecord) -> dict:
     url = ''
     if record.task_ip and record.status == 'RUNNING':
         url = build_sandbox_url(record.task_ip, record.agent_server_port)
+
+    # Map internal status to upstream expectations
+    # Upstream POD_STATUS_MAPPING: ready→RUNNING, pending/running→STARTING, failed→ERROR
+    status_map = {
+        'RUNNING': 'ready',
+        'STARTING': 'pending',
+        'PAUSED': 'stopped',
+        'STOPPED': 'stopped',
+        'ERROR': 'failed',
+    }
+    status = status_map.get(record.status, record.status.lower())
+
     return {
         'session_id': record.conversation_id,
         'runtime_id': record.task_arn or record.conversation_id,
-        'status': record.status.lower(),  # upstream expects lowercase: running, stopped, etc.
+        'status': status,
+        'pod_status': status,  # upstream also reads pod_status
         'url': url,
         'session_api_key': record.session_api_key,
         'image': record.sandbox_spec_id,
@@ -137,7 +151,7 @@ def start_sandbox(req: StartRequest):
         })
         store.put_sandbox(error_record)
 
-    # Start ECS Fargate task
+    # Start ECS Fargate task (non-blocking — RunTask returns immediately)
     try:
         result = ecs.run_task(
             conversation_id=session_id,
@@ -153,30 +167,37 @@ def start_sandbox(req: StartRequest):
 
     task_arn = result['task_arn']
 
-    # Wait for task to become RUNNING and get its IP
-    task_ip = ecs.wait_for_running(task_arn, timeout_seconds=120)
-    if not task_ip:
-        logger.error('Sandbox task failed to reach RUNNING state: %s', task_arn)
-        try:
-            ecs.stop_task(task_arn, reason='Failed to start')
-        except RuntimeError:
-            pass
-        record_error(task_arn)
-        raise HTTPException(status_code=503, detail='Sandbox task failed to start')
-
+    # Store record immediately with STARTING status (return fast, don't block on polling)
+    # The upstream RemoteSandboxService has a short HTTP timeout — we must respond quickly.
     record = SandboxRecord({
         'conversation_id': session_id,
         'user_id': user_id,
         'task_arn': task_arn,
-        'task_ip': task_ip,
-        'status': 'RUNNING',
+        'task_ip': '',
+        'status': 'STARTING',
         'session_api_key': session_api_key,
         'agent_server_port': 8000,
         'sandbox_spec_id': image,
     })
     store.put_sandbox(record)
 
-    logger.info('Sandbox started: session=%s, ip=%s', session_id, task_ip)
+    # Background thread: poll until task gets IP, then update DynamoDB
+    def _wait_and_update():
+        task_ip = ecs.wait_for_running(task_arn, timeout_seconds=180)
+        if task_ip:
+            store.update_status(session_id, 'RUNNING', task_ip=task_ip)
+            logger.info('Sandbox ready: session=%s, ip=%s', session_id, task_ip)
+        else:
+            logger.error('Sandbox task failed to start: %s', task_arn)
+            try:
+                ecs.stop_task(task_arn, reason='Failed to start')
+            except RuntimeError:
+                pass
+            store.update_status(session_id, 'ERROR')
+
+    threading.Thread(target=_wait_and_update, daemon=True).start()
+
+    logger.info('Sandbox task submitted: session=%s, task=%s', session_id, task_arn)
     return record_to_runtime(record)
 
 
