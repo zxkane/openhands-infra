@@ -212,7 +212,9 @@ export class SandboxStack extends cdk.Stack {
     // Image will be overridden at RunTask time via container overrides
     sandboxTaskDefinition.addContainer('agent-server', {
       containerName: 'agent-server',
-      image: ecs.ContainerImage.fromRegistry('public.ecr.aws/docker/library/busybox:latest'),
+      image: ecs.ContainerImage.fromAsset(path.join(__dirname, '..', 'docker', 'agent-server-custom'), {
+        platform: Platform.LINUX_ARM64,
+      }),
       essential: true,
       portMappings: [
         { containerPort: 8000, protocol: ecs.Protocol.TCP },

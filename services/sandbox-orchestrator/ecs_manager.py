@@ -55,9 +55,11 @@ class EcsManager:
             {'name': 'OH_SESSION_API_KEYS_0', 'value': session_api_key},
         ])
 
+        # Note: 'image' is not a valid containerOverride field.
+        # The sandbox image is set in the task definition. If a different image is needed,
+        # a new task definition revision must be registered.
         container_overrides = [{
             'name': 'agent-server',
-            'image': image,
             'environment': env_overrides,
         }]
 
