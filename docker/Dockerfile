@@ -25,8 +25,9 @@ RUN pip install --no-cache-dir boto3
 # Replaces the old apply-patch.sh (2000+ line regex patching at startup).
 # The fork (zxkane/openhands) has clean per-feature commits against the release tag.
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
-# Pin to commit SHA for reproducible builds (tag: custom-v1.3.0-r1)
-ARG FORK_REF=1b8ad60abcfe5609127be0d503030aeee57d6003
+# Pin to commit SHA for reproducible builds (tag: custom-v1.3.0-fargate-r1)
+# Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
+ARG FORK_REF=d9c7622f173763e7e6e7d6e8b73b36e4c13c28d9
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
