@@ -209,13 +209,19 @@ export class SandboxStack extends cdk.Stack {
     });
 
     // Agent-server container (main sandbox container)
-    // Image will be overridden at RunTask time via container overrides
     sandboxTaskDefinition.addContainer('agent-server', {
       containerName: 'agent-server',
       image: ecs.ContainerImage.fromAsset(path.join(__dirname, '..', 'docker', 'agent-server-custom'), {
         platform: Platform.LINUX_ARM64,
       }),
       essential: true,
+      // Override entrypoint: skip /sbin/docker-init (not available in Fargate)
+      // Fargate uses initProcessEnabled instead for PID 1 signal handling
+      entryPoint: ['/usr/local/bin/openhands-agent-server'],
+      command: ['--port', '8000'],
+      linuxParameters: new ecs.LinuxParameters(this, 'SandboxLinuxParams', {
+        initProcessEnabled: true,  // Replaces Docker's --init flag
+      }),
       portMappings: [
         { containerPort: 8000, protocol: ecs.Protocol.TCP },
       ],
