@@ -113,7 +113,9 @@ def start_sandbox(req: StartRequest):
     if not image:
         raise HTTPException(status_code=400, detail='No sandbox image specified')
 
-    user_id = environment.get('USER_ID', '')
+    # user_id may come from environment vars or be empty
+    # DynamoDB GSI key cannot be empty string — use 'anonymous' as fallback
+    user_id = environment.get('USER_ID', '') or 'anonymous'
     session_api_key = str(uuid.uuid4())
 
     logger.info('Starting sandbox for session=%s, user=%s, image=%s', session_id, user_id, image)
