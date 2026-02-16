@@ -1,13 +1,15 @@
 <script>
-// OpenHands localhost URL fix - rewrites localhost/host.docker.internal URLs to runtime subdomains
-// Handles both localhost:{port} and host.docker.internal:{port} patterns
+// OpenHands URL fix - rewrites sandbox URLs to runtime subdomains
+// Handles: localhost, host.docker.internal, and VPC private IPs (Fargate sandbox ENIs)
 // Also handles main domain with port: {subdomain}.{domain}:{port} (VS Code editor)
 // Uses runtime subdomain format: {port}-{convId}.runtime.{subdomain}.{domain}
-// This allows apps to run at domain root, fixing internal routing issues
 (function() {
-  // Pattern matches localhost or host.docker.internal with port
-  var wsPattern = /^wss?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
-  var httpPattern = /^https?:\/\/(localhost|host\.docker\.internal):(\d+)(.*)/;
+  // Pattern matches localhost, host.docker.internal, or VPC private IPs with port
+  // VPC private IPs: 10.x.x.x, 172.16-31.x.x, 192.168.x.x (Fargate task ENIs)
+  var privateHost = '(?:localhost|host\\.docker\\.internal|10\\.\\d+\\.\\d+\\.\\d+|172\\.(?:1[6-9]|2\\d|3[01])\\.\\d+\\.\\d+|192\\.168\\.\\d+\\.\\d+)';
+  var wsPattern = new RegExp('^wss?:\\/\\/(' + privateHost + '):(\\d+)(.*)');
+  var httpPattern = new RegExp('^https?:\\/\\/(' + privateHost + '):(\\d+)(.*)');
+
   // Pattern matches main domain with port (for VS Code URLs like {subdomain}.{domain}:{port})
   // Captures: (1) host without port, (2) port, (3) path+query (optional)
   var mainDomainPortPattern = /^https?:\/\/([^:\/]+):(\d+)(\/.*)?$/;
