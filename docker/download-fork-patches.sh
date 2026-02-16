@@ -12,11 +12,12 @@ set -e
 FORK_REPO="${FORK_REPO:-zxkane/openhands}"
 # Pin to commit SHA for reproducible builds (tag: custom-v1.3.0-fargate-r1)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
-FORK_REF="${FORK_REF:-471efc50184f9d204a750b596a05bec8251f4e2b}"
+FORK_REF="${FORK_REF:-8ad819b5483a19d482d720de4b707a0f2dae7289}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
-# 8 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
+# 9 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
 FILES="
+openhands/app_server/sandbox/remote_sandbox_service.py
 openhands/app_server/app_conversation/live_status_app_conversation_service.py
 openhands/app_server/app_conversation/app_conversation_router.py
 openhands/app_server/event_callback/webhook_router.py

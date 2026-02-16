@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir boto3
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
 # Pin to commit SHA for reproducible builds (tag: custom-v1.3.0-fargate-r1)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
-ARG FORK_REF=471efc50184f9d204a750b596a05bec8251f4e2b
+ARG FORK_REF=8ad819b5483a19d482d720de4b707a0f2dae7289
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
