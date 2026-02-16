@@ -1375,6 +1375,7 @@ services:
                     "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
                   },
                   "
+      - WARM_POOL_SIZE=2
     logging:
       driver: json-file
       options:

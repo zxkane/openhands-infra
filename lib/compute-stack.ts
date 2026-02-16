@@ -567,6 +567,7 @@ export class ComputeStack extends cdk.Stack {
       '      - AWS_REGION_NAME=$REGION',
       '      - AWS_DEFAULT_REGION=$REGION',
       `      - SANDBOX_IMAGE=${customRuntimeImage.imageUri}`,
+      '      - WARM_POOL_SIZE=2',
       '    logging:',
       '      driver: json-file',
       '      options:',

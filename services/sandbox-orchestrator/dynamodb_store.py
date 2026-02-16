@@ -146,6 +146,16 @@ class DynamoDBStore:
             ExpressionAttributeNames={'#ttl': 'ttl'},
         )
 
+    def query_by_status(self, status: str) -> list[SandboxRecord]:
+        """Query sandboxes by status (via status GSI)."""
+        response = self._table.query(
+            IndexName='status-index',
+            KeyConditionExpression='#status = :s',
+            ExpressionAttributeValues={':s': status},
+            ExpressionAttributeNames={'#status': 'status'},
+        )
+        return [SandboxRecord(item) for item in response.get('Items', [])]
+
     def list_running(self) -> list[SandboxRecord]:
         """List all running sandboxes (via status GSI)."""
         response = self._table.query(

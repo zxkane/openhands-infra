@@ -137,6 +137,8 @@ export interface SandboxStackOutput {
   sandboxLogGroupName: string;
   /** Sandbox Orchestrator Docker image URI (ECR) */
   orchestratorImageUri: string;
+  /** Warm pool size (number of pre-started tasks) */
+  warmPoolSize: number;
   /** Sandbox execution role ARN (for iam:PassRole) */
   sandboxExecutionRoleArn: string;
   /** Sandbox task role ARN (for iam:PassRole) */

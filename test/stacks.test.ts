@@ -46,6 +46,7 @@ const mockSandboxOutput: SandboxStackOutput = {
   sandboxTaskSecurityGroupId: 'sg-sandbox123',
   orchestratorApiUrl: 'http://localhost:8081',
   sandboxLogGroupName: '/openhands/sandbox',
+  warmPoolSize: 2,
   orchestratorImageUri: '123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest',
   sandboxExecutionRoleArn: 'arn:aws:iam::123456789012:role/mock-execution-role',
   sandboxTaskRoleArn: 'arn:aws:iam::123456789012:role/mock-task-role',

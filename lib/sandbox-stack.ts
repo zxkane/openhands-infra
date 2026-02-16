@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as efs from 'aws-cdk-lib/aws-efs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -20,12 +21,20 @@ import {
   SandboxStackOutput,
 } from './interfaces.js';
 
+const WARM_POOL_SIZE_DEFAULT = 2;
+
 export interface SandboxStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   networkOutput: NetworkStackOutput;
   monitoringOutput: MonitoringStackOutput;
   /** Enable sandbox AWS access — Bedrock and S3 permissions on task role */
   sandboxAwsAccess?: boolean;
+  /** EFS file system ID for workspace persistence (from ComputeStack) */
+  workspaceFileSystemId?: string;
+  /** EFS access point ID for workspace (from ComputeStack) */
+  workspaceAccessPointId?: string;
+  /** Number of warm pool tasks to keep pre-started (default: 2) */
+  warmPoolSize?: number;
 }
 
 /**
@@ -157,6 +166,23 @@ export class SandboxStack extends cdk.Stack {
       description: 'Task role for sandbox Fargate tasks (runtime permissions)',
     });
 
+    // EFS access for workspace persistence
+    if (props.workspaceFileSystemId) {
+      sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'EfsWorkspaceAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'elasticfilesystem:ClientMount',
+          'elasticfilesystem:ClientWrite',
+          'elasticfilesystem:ClientRootAccess',
+        ],
+        resources: ['*'],
+        conditions: {
+          Bool: { 'elasticfilesystem:AccessedViaMountTarget': 'true' },
+        },
+      }));
+    }
+
     // AWS permissions for sandbox containers (gated by sandboxAwsAccess context flag)
     if (props.sandboxAwsAccess) {
       sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
@@ -214,8 +240,24 @@ export class SandboxStack extends cdk.Stack {
       taskRole: sandboxTaskRole,
     });
 
+    // Mount EFS workspace volume for persistent storage across conversation resume
+    // Shares the same EFS as the EC2 host — sandbox tasks can access previous workspace files
+    if (props.workspaceFileSystemId && props.workspaceAccessPointId) {
+      sandboxTaskDefinition.addVolume({
+        name: 'workspace',
+        efsVolumeConfiguration: {
+          fileSystemId: props.workspaceFileSystemId,
+          transitEncryption: 'ENABLED',
+          authorizationConfig: {
+            accessPointId: props.workspaceAccessPointId,
+            iam: 'ENABLED',
+          },
+        },
+      });
+    }
+
     // Agent-server container (main sandbox container)
-    sandboxTaskDefinition.addContainer('agent-server', {
+    const agentServerContainer = sandboxTaskDefinition.addContainer('agent-server', {
       containerName: 'agent-server',
       image: ecs.ContainerImage.fromAsset(path.join(__dirname, '..', 'docker', 'agent-server-custom'), {
         platform: Platform.LINUX_ARM64,
@@ -249,6 +291,15 @@ export class SandboxStack extends cdk.Stack {
         OH_SECRET_KEY: ecs.Secret.fromSecretsManager(sandboxSecretKey),
       },
     });
+
+    // Mount EFS workspace into the container at /workspace
+    if (props.workspaceFileSystemId) {
+      agentServerContainer.addMountPoints({
+        sourceVolume: 'workspace',
+        containerPath: '/workspace',
+        readOnly: false,
+      });
+    }
 
     // NOTE: Orchestrator runs as a docker-compose sidecar on EC2 — it inherits the
     // EC2 instance role. ECS/DynamoDB permissions are added to EC2 role in ComputeStack
@@ -351,6 +402,7 @@ export class SandboxStack extends cdk.Stack {
       // Use Docker Compose service name for inter-container communication
       orchestratorApiUrl: 'http://sandbox-orchestrator:8081',
       sandboxLogGroupName: sandboxLogGroup.logGroupName,
+      warmPoolSize: props.warmPoolSize ?? WARM_POOL_SIZE_DEFAULT,
       orchestratorImageUri: orchestratorImage.imageUri,
       sandboxExecutionRoleArn: sandboxExecutionRole.roleArn,
       sandboxTaskRoleArn: sandboxTaskRole.roleArn,
