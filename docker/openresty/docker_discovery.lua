@@ -58,8 +58,8 @@ function _M.find_container(cid, tp)
     return nil, nil, nil, _M.ERR_PARSE
   end
 
-  local status = data.status or ""
-  if status ~= "RUNNING" then
+  local status = (data.status or ""):lower()
+  if status ~= "running" then
     ngx.log(ngx.INFO, "Sandbox not running for ", cid, ": status=", status)
     return nil, nil, nil, _M.ERR_NOT_FOUND
   end
