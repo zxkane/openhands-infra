@@ -1282,7 +1282,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:ac7da65edffdb997cdc59e2659b26fd7b79a3933335725d0dfdb0199b12a4326",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:773c1c33423b5ec82a94baada540895ff2027357c7626f18b23289b23416702e",
                   },
                   "
     container_name: openhands-app
@@ -1334,6 +1334,7 @@ services:
       - RUNTIME=remote
       - SANDBOX_REMOTE_RUNTIME_API_URL=http://localhost:8081
       - SANDBOX_API_KEY=local
+      - SANDBOX_START_TIMEOUT=300
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
       - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
       - DB_PORT=5432
@@ -1471,7 +1472,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:ac7da65edffdb997cdc59e2659b26fd7b79a3933335725d0dfdb0199b12a4326",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:773c1c33423b5ec82a94baada540895ff2027357c7626f18b23289b23416702e",
                   },
                   ""
 pull_with_retry "",
