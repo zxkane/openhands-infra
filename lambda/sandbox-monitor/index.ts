@@ -5,6 +5,7 @@
  * Idle sandboxes are those with status=RUNNING and last_activity_at older than IDLE_TIMEOUT_MINUTES.
  */
 
+import { Logger } from '@aws-lambda-powertools/logger';
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { ECSClient, StopTaskCommand } from '@aws-sdk/client-ecs';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
@@ -17,6 +18,7 @@ const REGION = process.env.AWS_REGION_NAME || process.env.AWS_REGION || 'us-east
 /** Time-to-live: 7 days from last activity (matches dynamodb_store.py TTL_SECONDS) */
 const TTL_SECONDS = 7 * 24 * 3600;
 
+const logger = new Logger({ serviceName: 'sandbox-idle-monitor' });
 const dynamodb = new DynamoDBClient({ region: REGION });
 const ecs = new ECSClient({ region: REGION });
 const cloudwatch = new CloudWatchClient({ region: REGION });
@@ -60,7 +62,7 @@ async function stopTask(taskArn: string, reason: string): Promise<void> {
       reason,
     }));
   } catch (error) {
-    console.error(`Failed to stop task ${taskArn}:`, error);
+    logger.error('Failed to stop task', { taskArn, error: String(error) });
     throw error;
   }
 }
@@ -109,22 +111,22 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - (IDLE_TIMEOUT_MINUTES * 60);
 
-  console.log(`Checking for idle sandboxes (idle > ${IDLE_TIMEOUT_MINUTES} min, cutoff=${cutoff})`);
+  logger.info('Checking for idle sandboxes', { idleTimeoutMinutes: IDLE_TIMEOUT_MINUTES, cutoff });
 
-  // Query idle sandboxes
   const idleSandboxes = await queryIdleSandboxes(cutoff);
-  console.log(`Found ${idleSandboxes.length} idle sandbox(es)`);
+  logger.info('Idle sandboxes found', { count: idleSandboxes.length });
 
   let stoppedCount = 0;
   const errors: string[] = [];
 
-  // Stop each idle sandbox
   for (const sandbox of idleSandboxes) {
     const idleMinutes = Math.round((now - sandbox.last_activity_at) / 60);
-    console.log(
-      `Stopping idle sandbox: conversation=${sandbox.conversation_id}, ` +
-      `user=${sandbox.user_id}, idle=${idleMinutes}min, task=${sandbox.task_arn}`
-    );
+    logger.info('Stopping idle sandbox', {
+      conversationId: sandbox.conversation_id,
+      userId: sandbox.user_id,
+      idleMinutes,
+      taskArn: sandbox.task_arn,
+    });
 
     try {
       if (sandbox.task_arn) {
@@ -134,12 +136,11 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
       stoppedCount++;
     } catch (error) {
       const msg = `Failed to stop sandbox ${sandbox.conversation_id}: ${error}`;
-      console.error(msg);
+      logger.error(msg);
       errors.push(msg);
     }
   }
 
-  // Query total running for metrics
   let runningCount = 0;
   try {
     const runningResponse = await dynamodb.send(new QueryCommand({
@@ -156,10 +157,9 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
     }));
     runningCount = runningResponse.Count || 0;
   } catch (error) {
-    console.error('Failed to count running sandboxes:', error);
+    logger.error('Failed to count running sandboxes', { error: String(error) });
   }
 
-  // Publish CloudWatch metrics
   await publishMetrics(stoppedCount, runningCount);
 
   const summary = {
@@ -168,7 +168,7 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
     running_total: runningCount,
     errors: errors.length,
   };
-  console.log('Idle monitor complete:', JSON.stringify(summary));
+  logger.info('Idle monitor complete', summary);
 
   return {
     statusCode: 200,

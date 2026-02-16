@@ -280,6 +280,17 @@ def resume_sandbox(req: RuntimeIdRequest):
     return record_to_runtime(updated) if updated else {'status': 'error'}
 
 
+@app.get('/sessions/batch')
+def batch_get_sessions(ids: list[str] = Query(default=[])):
+    """Batch get runtime info. Upstream calls GET /sessions/batch?ids=...&ids=...
+
+    Returns a list of runtime dicts (not wrapped in an object).
+    NOTE: Must be declared BEFORE /sessions/{session_id} to avoid route conflict.
+    """
+    records = store.batch_get_sandboxes(ids)
+    return [record_to_runtime(r) for r in records]
+
+
 @app.get('/sessions/{session_id}')
 def get_session(session_id: str):
     """Get runtime info for a single sandbox. Used by RemoteSandboxService._get_runtime()."""
@@ -287,16 +298,6 @@ def get_session(session_id: str):
     if not record:
         raise HTTPException(status_code=404, detail='Sandbox not found')
     return record_to_runtime(record)
-
-
-@app.get('/sessions/batch')
-def batch_get_sessions(ids: list[str] = Query(default=[])):
-    """Batch get runtime info. Upstream calls GET /sessions/batch?ids=...&ids=...
-
-    Returns a list of runtime dicts (not wrapped in an object).
-    """
-    records = store.batch_get_sandboxes(ids)
-    return [record_to_runtime(r) for r in records]
 
 
 @app.get('/list')

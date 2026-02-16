@@ -24,6 +24,8 @@ export interface SandboxStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   networkOutput: NetworkStackOutput;
   monitoringOutput: MonitoringStackOutput;
+  /** Enable sandbox AWS access — Bedrock and S3 permissions on task role */
+  sandboxAwsAccess?: boolean;
 }
 
 /**
@@ -59,6 +61,9 @@ export class SandboxStack extends cdk.Stack {
       clusterName: `${namePrefix}-sandbox`,
       containerInsightsV2: ecs.ContainerInsights.ENABLED,
     });
+    // Enable tag propagation: CDK app-level tags (Project, STAGE, Purpose, ManagedBy)
+    // are propagated to ECS tasks via the cluster's defaultCloudMapNamespace and task tags
+    cdk.Tags.of(cluster).add('Component', 'sandbox');
 
     // ========================================
     // DynamoDB Sandbox Registry
@@ -152,37 +157,38 @@ export class SandboxStack extends cdk.Stack {
       description: 'Task role for sandbox Fargate tasks (runtime permissions)',
     });
 
-    // Bedrock access for sandbox containers
-    sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'BedrockAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'bedrock:InvokeModel',
-        'bedrock:InvokeModelWithResponseStream',
-      ],
-      resources: [
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-        'arn:aws:bedrock:*::foundation-model/us.anthropic.claude-*',
-        `arn:aws:bedrock:${config.region}:${this.account}:inference-profile/*anthropic.claude*`,
-        `arn:aws:bedrock:*:${this.account}:inference-profile/global.anthropic.claude*`,
-      ],
-    }));
+    // AWS permissions for sandbox containers (gated by sandboxAwsAccess context flag)
+    if (props.sandboxAwsAccess) {
+      sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'BedrockAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock:InvokeModel',
+          'bedrock:InvokeModelWithResponseStream',
+        ],
+        resources: [
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+          'arn:aws:bedrock:*::foundation-model/us.anthropic.claude-*',
+          `arn:aws:bedrock:${config.region}:${this.account}:inference-profile/*anthropic.claude*`,
+          `arn:aws:bedrock:*:${this.account}:inference-profile/global.anthropic.claude*`,
+        ],
+      }));
 
-    // S3 access for sandbox (file store)
-    sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'S3DataBucketAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        's3:GetObject',
-        's3:PutObject',
-        's3:DeleteObject',
-        's3:ListBucket',
-      ],
-      resources: [
-        monitoringOutput.dataBucket.bucketArn,
-        `${monitoringOutput.dataBucket.bucketArn}/*`,
-      ],
-    }));
+      sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'S3DataBucketAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          's3:GetObject',
+          's3:PutObject',
+          's3:DeleteObject',
+          's3:ListBucket',
+        ],
+        resources: [
+          monitoringOutput.dataBucket.bucketArn,
+          `${monitoringOutput.dataBucket.bucketArn}/*`,
+        ],
+      }));
+    }
 
     // ========================================
     // Sandbox CloudWatch Log Group
@@ -275,6 +281,8 @@ export class SandboxStack extends cdk.Stack {
         ECS_CLUSTER_ARN: cluster.clusterArn,
         IDLE_TIMEOUT_MINUTES: '30',
         AWS_REGION_NAME: config.region,
+        LOG_LEVEL: 'INFO',
+        POWERTOOLS_SERVICE_NAME: 'sandbox-idle-monitor',
       },
     });
 

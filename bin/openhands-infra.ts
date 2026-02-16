@@ -223,6 +223,7 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   config,
   networkOutput: networkStack.output,
   monitoringOutput: monitoringStack.output,
+  sandboxAwsAccess,
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
   crossRegionReferences: true,
 });

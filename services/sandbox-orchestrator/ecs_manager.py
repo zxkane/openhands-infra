@@ -87,6 +87,7 @@ class EcsManager:
                 },
                 tags=tags,
                 propagateTags='TASK_DEFINITION',
+                enableECSManagedTags=True,
                 enableExecuteCommand=False,
             )
         except ClientError as e:
