@@ -158,51 +158,69 @@ def start_sandbox(req: StartRequest):
         })
         store.put_sandbox(error_record)
 
-    # Store record immediately with STARTING status — we'll launch the task in background.
-    # The upstream RemoteSandboxService has a short HTTP timeout, so we MUST respond fast.
-    record = SandboxRecord({
-        'conversation_id': session_id,
-        'user_id': user_id,
-        'task_arn': '',
-        'task_ip': '',
-        'status': 'STARTING',
-        'session_api_key': session_api_key,
-        'agent_server_port': 8000,
-        'sandbox_spec_id': image,
-    })
-    store.put_sandbox(record)
+    # Start ECS Fargate task synchronously (RunTask is fast ~2-3s)
+    try:
+        result = ecs.run_task(
+            conversation_id=session_id,
+            user_id=user_id,
+            image=image,
+            environment=environment,
+            session_api_key=session_api_key,
+        )
+    except RuntimeError as e:
+        logger.error('Failed to start sandbox: %s', e)
+        record_error()
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
-    # Background thread: RunTask + poll until IP, then update DynamoDB
-    def _launch_and_wait():
-        try:
-            result = ecs.run_task(
-                conversation_id=session_id,
-                user_id=user_id,
-                image=image,
-                environment=environment,
-                session_api_key=session_api_key,
-            )
-            task_arn = result['task_arn']
-            store.update_status(session_id, 'STARTING', task_arn=task_arn)
+    task_arn = result['task_arn']
 
-            task_ip = ecs.wait_for_running(task_arn, timeout_seconds=180)
-            if task_ip:
-                store.update_status(session_id, 'RUNNING', task_ip=task_ip)
-                logger.info('Sandbox ready: session=%s, ip=%s', session_id, task_ip)
+    # Try to get IP quickly (8s timeout, fits within upstream's 15s httpx timeout)
+    task_ip = ecs.wait_for_running(task_arn, timeout_seconds=8)
+
+    if task_ip:
+        # Task started fast enough — return RUNNING immediately
+        record = SandboxRecord({
+            'conversation_id': session_id,
+            'user_id': user_id,
+            'task_arn': task_arn,
+            'task_ip': task_ip,
+            'status': 'RUNNING',
+            'session_api_key': session_api_key,
+            'agent_server_port': 8000,
+            'sandbox_spec_id': image,
+        })
+        store.put_sandbox(record)
+        logger.info('Sandbox ready: session=%s, ip=%s', session_id, task_ip)
+    else:
+        # Task still provisioning — return STARTING, background thread will update
+        record = SandboxRecord({
+            'conversation_id': session_id,
+            'user_id': user_id,
+            'task_arn': task_arn,
+            'task_ip': '',
+            'status': 'STARTING',
+            'session_api_key': session_api_key,
+            'agent_server_port': 8000,
+            'sandbox_spec_id': image,
+        })
+        store.put_sandbox(record)
+
+        def _wait_and_update():
+            ip = ecs.wait_for_running(task_arn, timeout_seconds=180)
+            if ip:
+                store.update_status(session_id, 'RUNNING', task_ip=ip)
+                logger.info('Sandbox ready (bg): session=%s, ip=%s', session_id, ip)
             else:
-                logger.error('Sandbox task failed to start: %s', task_arn)
+                logger.error('Sandbox failed to start: %s', task_arn)
                 try:
                     ecs.stop_task(task_arn, reason='Failed to start')
                 except RuntimeError:
                     pass
                 store.update_status(session_id, 'ERROR')
-        except Exception as e:
-            logger.error('Failed to launch sandbox %s: %s', session_id, e)
-            store.update_status(session_id, 'ERROR')
 
-    threading.Thread(target=_launch_and_wait, daemon=True).start()
+        threading.Thread(target=_wait_and_update, daemon=True).start()
+        logger.info('Sandbox provisioning: session=%s, task=%s', session_id, task_arn)
 
-    logger.info('Sandbox launch initiated: session=%s', session_id)
     return record_to_runtime(record)
 
 
