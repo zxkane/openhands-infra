@@ -78,22 +78,29 @@ def record_to_runtime(record: SandboxRecord) -> dict:
     if record.task_ip and record.status == 'RUNNING':
         url = build_sandbox_url(record.task_ip, record.agent_server_port)
 
-    # Map internal status to upstream expectations
-    # Upstream POD_STATUS_MAPPING: ready→RUNNING, pending/running→STARTING, failed→ERROR
+    # Upstream has two status fields with different conventions:
+    # - 'status': used by poll_agent_servers (expects 'running' for active)
+    # - 'pod_status': used by _get_sandbox_status_from_runtime (expects 'ready' for active)
     status_map = {
+        'RUNNING': 'running',
+        'STARTING': 'pending',
+        'PAUSED': 'stopped',
+        'STOPPED': 'stopped',
+        'ERROR': 'failed',
+    }
+    pod_status_map = {
         'RUNNING': 'ready',
         'STARTING': 'pending',
         'PAUSED': 'stopped',
         'STOPPED': 'stopped',
         'ERROR': 'failed',
     }
-    status = status_map.get(record.status, record.status.lower())
 
     return {
         'session_id': record.conversation_id,
         'runtime_id': record.task_arn or record.conversation_id,
-        'status': status,
-        'pod_status': status,  # upstream also reads pod_status
+        'status': status_map.get(record.status, record.status.lower()),
+        'pod_status': pod_status_map.get(record.status, record.status.lower()),
         'url': url,
         'session_api_key': record.session_api_key,
         'image': record.sandbox_spec_id,
