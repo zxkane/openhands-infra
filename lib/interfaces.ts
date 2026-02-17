@@ -139,6 +139,8 @@ export interface SandboxStackOutput {
   orchestratorImageUri: string;
   /** Warm pool size (number of pre-started tasks) */
   warmPoolSize: number;
+  /** ECS Service name for warm pool (used by orchestrator to discover tasks) */
+  warmPoolServiceName: string;
   /** Sandbox execution role ARN (for iam:PassRole) */
   sandboxExecutionRoleArn: string;
   /** Sandbox task role ARN (for iam:PassRole) */

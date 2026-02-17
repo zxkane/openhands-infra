@@ -1261,7 +1261,7 @@ services:
   openresty:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:53ece8b81cf3b9a312b607924f27dcb148d4ec4ad1c7d8f6eab60234b384e478",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c5615578c95436dc0178b9a9e54319e9460b66803f3a1304eb4b62eea5f2a96b",
                   },
                   "
     container_name: openresty-proxy
@@ -1282,7 +1282,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:773c1c33423b5ec82a94baada540895ff2027357c7626f18b23289b23416702e",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:90ff9bdcd0fb0d27ab94e2d5c06923737fc8621b2c41996f36be85c991bcdf2e",
                   },
                   "
     container_name: openhands-app
@@ -1375,7 +1375,7 @@ services:
                     "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
                   },
                   "
-      - WARM_POOL_SIZE=2
+      - WARM_POOL_SERVICE_NAME=openhands-example-com-sandbox-warm-pool
     logging:
       driver: json-file
       options:
@@ -1473,12 +1473,12 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:773c1c33423b5ec82a94baada540895ff2027357c7626f18b23289b23416702e",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:90ff9bdcd0fb0d27ab94e2d5c06923737fc8621b2c41996f36be85c991bcdf2e",
                   },
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:53ece8b81cf3b9a312b607924f27dcb148d4ec4ad1c7d8f6eab60234b384e478",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c5615578c95436dc0178b9a9e54319e9460b66803f3a1304eb4b62eea5f2a96b",
                   },
                   ""
 pull_with_retry "",

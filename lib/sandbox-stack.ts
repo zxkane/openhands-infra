@@ -301,6 +301,28 @@ export class SandboxStack extends cdk.Stack {
       });
     }
 
+    // ========================================
+    // Warm Pool ECS Service
+    // ========================================
+    // ECS Service maintains desiredCount of pre-started sandbox tasks.
+    // Built-in replenishment: when a task is stopped (conversation ended or idle timeout),
+    // ECS automatically starts a replacement — no custom background thread needed.
+    const warmPoolSize = props.warmPoolSize ?? WARM_POOL_SIZE_DEFAULT;
+    const warmPoolService = new ecs.FargateService(this, 'WarmPoolService', {
+      cluster,
+      serviceName: `${namePrefix}-sandbox-warm-pool`,
+      taskDefinition: sandboxTaskDefinition,
+      desiredCount: warmPoolSize,
+      minHealthyPercent: 0,    // Allow all tasks to be replaced during deployments
+      maxHealthyPercent: 200,  // Allow temporary doubling during rolling update
+      vpcSubnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }),
+      securityGroups: [sandboxTaskSg],
+      assignPublicIp: false,
+      enableECSManagedTags: true,
+      propagateTags: ecs.PropagatedTagSource.TASK_DEFINITION,
+    });
+    cdk.Tags.of(warmPoolService).add('Component', 'sandbox-warm-pool');
+
     // NOTE: Orchestrator runs as a docker-compose sidecar on EC2 — it inherits the
     // EC2 instance role. ECS/DynamoDB permissions are added to EC2 role in ComputeStack
     // to avoid cyclic cross-stack references between SecurityStack and SandboxStack.
@@ -402,7 +424,8 @@ export class SandboxStack extends cdk.Stack {
       // Use Docker Compose service name for inter-container communication
       orchestratorApiUrl: 'http://sandbox-orchestrator:8081',
       sandboxLogGroupName: sandboxLogGroup.logGroupName,
-      warmPoolSize: props.warmPoolSize ?? WARM_POOL_SIZE_DEFAULT,
+      warmPoolSize: warmPoolSize,
+      warmPoolServiceName: warmPoolService.serviceName,
       orchestratorImageUri: orchestratorImage.imageUri,
       sandboxExecutionRoleArn: sandboxExecutionRole.roleArn,
       sandboxTaskRoleArn: sandboxTaskRole.roleArn,
