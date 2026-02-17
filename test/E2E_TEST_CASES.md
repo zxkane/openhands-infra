@@ -322,17 +322,45 @@ Start a new conversation and verify it becomes ready for chatting within accepta
    mcp__chrome-devtools__take_snapshot({})
    ```
 
-5. Click "Changes" panel button to verify git integration
+5. Verify git Changes API returns 200 (workspace must be a git repo)
    ```javascript
-   mcp__chrome-devtools__click({ uid: "<changes-button-uid>" })
-   mcp__chrome-devtools__take_snapshot({})
+   // Call the git changes endpoint via the runtime proxy
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+       const r = await fetch('/runtime/' + convId + '/8000/api/git/changes/');
+       return { status: r.status, ok: r.ok };
+     }`
+   })
+   // Expected: { status: 200, ok: true }
    ```
 
-6. Check network requests for git API
+6. Ask agent to create a file and verify it appears in Changes
    ```javascript
-   mcp__chrome-devtools__list_network_requests({
-     resourceTypes: ["xhr", "fetch"]
+   // Type and submit a prompt to create a file
+   mcp__chrome-devtools__evaluate_script({
+     function: `() => {
+       const el = document.querySelector('[contenteditable], textarea');
+       if (el) { el.focus(); document.execCommand('insertText', false, 'Create a file called hello.txt with content "Hello World"'); }
+       return 'typed';
+     }`
    })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   // Wait for agent to complete
+   mcp__chrome-devtools__wait_for({ text: "Waiting for task", timeout: 60000 })
+   ```
+
+7. Verify the file appears in git changes
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+       const r = await fetch('/runtime/' + convId + '/8000/api/git/changes/');
+       const data = await r.json();
+       return { status: r.status, hasChanges: data.length > 0 };
+     }`
+   })
+   // Expected: { status: 200, hasChanges: true }
    ```
 
 ### Acceptance Criteria
@@ -342,9 +370,10 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 | 1 | Conversation page loads | URL contains `/conversations/<uuid>` |
 | 2 | Chatbox is connected | "What do you want to build?" prompt visible |
 | 3 | Agent is ready | "Waiting for task" status within 3 minutes |
-| 4 | Changes panel loads | No 500 errors on `/api/conversations/.../git/changes` |
-| 5 | Workspace files visible | Changes panel shows workspace files |
-| 6 | No console errors | No error-level console messages |
+| 4 | Git Changes API returns 200 | `GET /runtime/{convId}/8000/api/git/changes/` returns 200 (not 500) |
+| 5 | Workspace is a git repo | No "Not a git repository" error |
+| 6 | File creation visible in Changes | After agent creates a file, Changes API shows it |
+| 7 | No console errors | No error-level console messages |
 
 ### Timeout Configuration
 
@@ -352,7 +381,8 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 |-------|-------------------|
 | Conversation page load | 30 seconds |
 | Agent ready ("Waiting for task") | 3 minutes |
-| Changes panel load | 10 seconds |
+| Changes API response | 10 seconds |
+| Agent file creation | 60 seconds |
 
 ---
 
