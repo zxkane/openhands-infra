@@ -218,12 +218,15 @@ userConfigStack.addDependency(securityStack);
 // 4.6. Sandbox Stack - ECS Fargate Sandbox Infrastructure
 //      Provides per-conversation sandbox tasks on Fargate with DynamoDB registry
 //      Replaces Docker-socket-based sandbox creation with RUNTIME=remote
+const warmPoolSize = parseInt(app.node.tryGetContext('warmPoolSize') || '2', 10);
+
 const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   env: mainEnv,
   config,
   networkOutput: networkStack.output,
   monitoringOutput: monitoringStack.output,
   sandboxAwsAccess,
+  warmPoolSize,
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
   crossRegionReferences: true,
 });
