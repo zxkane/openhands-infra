@@ -330,8 +330,8 @@ app.get<{ Params: { session_id: string } }>(
       return reply.code(404).send({ detail: 'Sandbox not found' });
     }
     // Verify single RUNNING record against ECS
-    const [verified] = await verifyRunningRecords([record]);
-    return recordToRuntime(verified);
+    const verified = await verifyRunningRecords([record]);
+    return recordToRuntime(verified[0] ?? record);
   },
 );
 
