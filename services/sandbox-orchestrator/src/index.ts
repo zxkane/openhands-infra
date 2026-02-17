@@ -413,11 +413,10 @@ async function main(): Promise<void> {
 
   // Graceful shutdown — ECS sends SIGTERM before killing tasks
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, async () => {
+    process.on(signal, () => {
       app.log.info(`Received ${signal}, shutting down gracefully`);
       if (warmPoolTimer) clearInterval(warmPoolTimer);
-      await app.close();
-      process.exit(0);
+      app.close().then(() => process.exit(0)).catch(() => process.exit(1));
     });
   }
 
