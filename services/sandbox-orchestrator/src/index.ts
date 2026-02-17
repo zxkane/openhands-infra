@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { DynamoDBStore } from './dynamodb-store.js';
 import { EcsManager } from './ecs-manager.js';
-import { startWarmPoolSync } from './warm-pool-sync.js';
+// warm-pool-sync removed — all sandboxes use RunTask for per-conversation EFS workspace isolation
 import type {
   SandboxRecord,
   SandboxStatus,
@@ -156,52 +156,8 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     return recordToRuntime(existing);
   }
 
-  // Try to claim a warm task from ECS Service (atomic conditional update)
-  const warmTasks = await store.queryByStatus('WARM');
-  let warm: SandboxRecord | null = null;
-  for (const candidate of warmTasks) {
-    if (!candidate.task_ip || !candidate.task_arn) continue;
-    const taskInfo = await ecs.describeTask(candidate.task_arn);
-    if (taskInfo && taskInfo.last_status === 'RUNNING') {
-      // Atomic claim — prevents two concurrent /start requests from getting the same task
-      const claimed = await store.claimWarmTask(candidate.conversation_id);
-      if (claimed) {
-        warm = candidate;
-        break;
-      }
-      // Another request already claimed it — try next candidate
-      request.log.info(`Warm task ${candidate.conversation_id} already claimed, trying next`);
-    } else {
-      // Task no longer running - clean up stale record
-      await store.updateStatus(candidate.conversation_id, 'STOPPED');
-      request.log.info(`Cleaned stale warm task: ${candidate.conversation_id}`);
-    }
-  }
-
-  if (warm) {
-    request.log.info(
-      `Claimed warm task ${warm.conversation_id} for session=${session_id} (ip=${warm.task_ip})`,
-    );
-
-    // Create the real conversation record
-    const record: SandboxRecord = {
-      conversation_id: session_id,
-      user_id: userId,
-      task_arn: warm.task_arn,
-      task_ip: warm.task_ip,
-      status: 'RUNNING',
-      session_api_key: warm.session_api_key,
-      agent_server_port: 8000,
-      sandbox_spec_id: sandboxImage,
-      last_activity_at: 0,
-      created_at: 0,
-    };
-    await store.putSandbox(record);
-    return recordToRuntime(record);
-  }
-
-  // No warm task available - launch a standalone task (async fallback)
-  request.log.info(`No warm tasks, launching standalone for session=${session_id}`);
+  // Launch a new Fargate task with correct CONVERSATION_ID for per-conversation EFS workspace
+  request.log.info(`Launching sandbox task for session=${session_id}`);
   const sessionApiKey = randomUUID();
 
   let result;
@@ -401,21 +357,11 @@ app.post<{ Body: ActivityRequest }>('/activity', async (request, reply) => {
 // Start server
 // ========================================
 
-let warmPoolTimer: NodeJS.Timeout | undefined;
-
 async function main(): Promise<void> {
-  if (config.warmPoolServiceName && config.ecsClusterArn) {
-    warmPoolTimer = startWarmPoolSync(ecs, store, config.warmPoolServiceName, config.sandboxImage, (level, msg) => {
-      if (level === 'error') app.log.error(msg);
-      else app.log.info(msg);
-    });
-  }
-
   // Graceful shutdown — ECS sends SIGTERM before killing tasks
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
       app.log.info(`Received ${signal}, shutting down gracefully`);
-      if (warmPoolTimer) clearInterval(warmPoolTimer);
       app.close().then(() => process.exit(0)).catch(() => process.exit(1));
     });
   }

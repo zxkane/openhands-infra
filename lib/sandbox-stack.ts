@@ -320,12 +320,14 @@ export class SandboxStack extends cdk.Stack {
     }
 
     // ========================================
-    // Warm Pool ECS Service
+    // Warm Pool ECS Service (disabled — desiredCount=0)
     // ========================================
-    // ECS Service maintains desiredCount of pre-started sandbox tasks.
-    // Built-in replenishment: when a task is stopped (conversation ended or idle timeout),
-    // ECS automatically starts a replacement — no custom background thread needed.
-    const warmPoolSize = props.warmPoolSize ?? WARM_POOL_SIZE_DEFAULT;
+    // Warm pool disabled: sandbox tasks now use RunTask with CONVERSATION_ID for
+    // per-conversation EFS workspace isolation. Warm pool tasks can't mount the
+    // correct workspace because CONVERSATION_ID isn't known at startup.
+    // The Service construct is retained (desiredCount=0) to avoid CloudFormation
+    // deletion issues with cross-stack exports.
+    const warmPoolSize = 0;
     const warmPoolService = new ecs.FargateService(this, 'WarmPoolService', {
       cluster,
       serviceName: `${namePrefix}-sandbox-warm-pool`,
