@@ -825,6 +825,14 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
         "Ref": "OpenHandsAsgASG16C624EA",
       },
     },
+    "SandboxExecutionRoleArn": {
+      "Description": "Sandbox execution role ARN (preserved for export compatibility)",
+      "Value": "arn:aws:iam::123456789012:role/mock-execution-role",
+    },
+    "SandboxTaskRoleArn": {
+      "Description": "Sandbox task role ARN (preserved for export compatibility)",
+      "Value": "arn:aws:iam::123456789012:role/mock-task-role",
+    },
     "WorkspaceEfsFileSystemId": {
       "Description": "EFS file system ID for persistent OpenHands workspaces",
       "Value": {

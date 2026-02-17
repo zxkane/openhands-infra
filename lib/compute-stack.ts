@@ -181,6 +181,18 @@ export class ComputeStack extends cdk.Stack {
     // Fargate task role (in SandboxStack), not the EC2 role. The orchestrator runs as
     // a standalone ECS Fargate service, not as a docker-compose sidecar on EC2.
 
+    // Preserve cross-stack exports for sandbox role ARNs to avoid CloudFormation
+    // "Cannot delete export" errors. These were previously referenced by IAM:PassRole
+    // policy. A future cleanup deploy can remove these once no deployed stack imports them.
+    new cdk.CfnOutput(this, 'SandboxExecutionRoleArn', {
+      value: sandboxOutput.sandboxExecutionRoleArn,
+      description: 'Sandbox execution role ARN (preserved for export compatibility)',
+    });
+    new cdk.CfnOutput(this, 'SandboxTaskRoleArn', {
+      value: sandboxOutput.sandboxTaskRoleArn,
+      description: 'Sandbox task role ARN (preserved for export compatibility)',
+    });
+
     // Get private subnets for EC2 and internal ALB
     const privateSubnets = vpc.selectSubnets({
       subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
