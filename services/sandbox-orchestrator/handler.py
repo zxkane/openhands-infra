@@ -138,9 +138,16 @@ def _sync_warm_pool():
             tasks=service_task_arns,
         )
 
-        # Get all current DynamoDB records indexed by task_arn
-        existing_records = {r.task_arn: r for r in store.query_by_status('WARM')}
+        # Get all current DynamoDB WARM records indexed by task_arn
+        existing_warm = {r.task_arn: r for r in store.query_by_status('WARM')}
         claimed_records = {r.task_arn: r for r in store.list_running()}
+        service_task_arn_set = set(service_task_arns)
+
+        # Clean up stale WARM records (task no longer in Service)
+        for task_arn, record in existing_warm.items():
+            if task_arn and task_arn not in service_task_arn_set:
+                store.update_status(record.conversation_id, 'STOPPED')
+                logger.info('Cleaned stale warm record: %s', record.conversation_id)
 
         for task in desc_response.get('tasks', []):
             task_arn = task['taskArn']
@@ -151,7 +158,7 @@ def _sync_warm_pool():
                 continue
 
             # Skip tasks already registered as WARM
-            if task_arn in existing_records:
+            if task_arn in existing_warm:
                 continue
 
             # New task — register as WARM if it has an IP
