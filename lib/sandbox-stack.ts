@@ -267,7 +267,12 @@ export class SandboxStack extends cdk.Stack {
       // Fargate uses initProcessEnabled instead for PID 1 signal handling
       // Init git repo in workspace (required by /api/git/changes endpoint)
       entryPoint: ['/bin/sh', '-c'],
-      command: ['git init /workspace 2>/dev/null; git init /workspace/project 2>/dev/null; exec /usr/local/bin/openhands-agent-server --port 8000'],
+      command: [
+        'git init /workspace 2>/dev/null;' +
+        'printf "bash_events/\\nconversations/\\n*.pyc\\n__pycache__/\\n" > /workspace/.gitignore;' +
+        'git init /workspace/project 2>/dev/null;' +
+        'exec /usr/local/bin/openhands-agent-server --port 8000'
+      ],
       linuxParameters: new ecs.LinuxParameters(this, 'SandboxLinuxParams', {
         initProcessEnabled: true,  // Replaces Docker's --init flag
       }),
