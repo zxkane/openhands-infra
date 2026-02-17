@@ -386,6 +386,84 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 
 ---
 
+## TC-005a: Load Existing Conversation and Verify History
+
+### Description
+Navigate to an existing conversation (created in TC-005) and verify that chat history messages are displayed. This catches issues with stale sandbox records, event storage, and conversation resume flow.
+
+### Prerequisites
+- TC-005 completed (at least one conversation with messages exists)
+
+### Steps
+
+1. Navigate to the home page and identify an existing conversation
+   ```javascript
+   mcp__chrome-devtools__navigate_page({ url: "https://<subdomain>.<domain>/", type: "url" })
+   mcp__chrome-devtools__take_snapshot({})
+   // Find a conversation link in "Recent Conversations" section
+   ```
+
+2. Click on the existing conversation
+   ```javascript
+   mcp__chrome-devtools__click({ uid: "<conversation-link-uid>" })
+   ```
+
+3. Wait for conversation page to load and verify history
+   ```javascript
+   // Wait for the page to show the conversation
+   mcp__chrome-devtools__wait_for({
+     text: "<expected-message-text>",  // e.g., text from the original prompt or agent response
+     timeout: 30000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+4. Verify the conversations API responds within acceptable time
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const start = performance.now();
+       const res = await fetch('/api/conversations?limit=10');
+       const elapsed = Math.round(performance.now() - start);
+       return { status: res.status, elapsed_ms: elapsed };
+     }`
+   })
+   // Expected: status 200, elapsed_ms < 5000
+   ```
+
+5. Verify the events API returns conversation history
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+       const res = await fetch('/api/v1/conversation/' + convId + '/events/search?limit=100');
+       const data = await res.json();
+       return { status: res.status, eventCount: Array.isArray(data) ? data.length : data.events?.length ?? 0 };
+     }`
+   })
+   // Expected: status 200, eventCount > 0
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Conversation page loads | URL contains `/conversations/<uuid>` |
+| 2 | Chat history visible | Previous user messages and agent responses displayed |
+| 3 | Conversations API fast | `GET /api/conversations?limit=10` returns 200 in < 5s |
+| 4 | Events API returns history | `GET /api/v1/conversation/{id}/events/search` returns events |
+| 5 | No console errors | No error-level console messages related to sandbox/orchestrator |
+
+### Timeout Configuration
+
+| Stage | Maximum Wait Time |
+|-------|-------------------|
+| Conversation page load | 30 seconds |
+| Conversations API response | 5 seconds |
+| Events API response | 10 seconds |
+
+---
+
 ## TC-006: Execute Flask Todo App Prompt
 
 ### Description

@@ -25,6 +25,7 @@ CORE_TESTS=(
     "TC-003:Login via Chrome DevTools"
     "TC-004:Verify Conversation List"
     "TC-005:Start New Conversation"
+    "TC-005a:Load Existing Conversation History"
 )
 
 # Additional tests based on change categories
