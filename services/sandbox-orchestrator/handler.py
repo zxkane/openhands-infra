@@ -234,8 +234,20 @@ def start_sandbox(req: StartRequest):
         return record_to_runtime(existing)
 
     # Try to claim a warm task from ECS Service
+    # Verify the task is still running in ECS before claiming (prevents stale claims)
     warm_tasks = store.query_by_status('WARM')
-    warm = next((t for t in warm_tasks if t.task_ip), None)
+    warm = None
+    for candidate in warm_tasks:
+        if not candidate.task_ip or not candidate.task_arn:
+            continue
+        task_info = ecs.describe_task(candidate.task_arn)
+        if task_info and task_info['last_status'] == 'RUNNING':
+            warm = candidate
+            break
+        else:
+            # Task no longer running — clean up stale record
+            store.update_status(candidate.conversation_id, 'STOPPED')
+            logger.info('Cleaned stale warm task: %s', candidate.conversation_id)
 
     if warm:
         logger.info('Claimed warm task %s for session=%s (ip=%s)',
