@@ -177,8 +177,14 @@ export class ComputeStack extends cdk.Stack {
       description: 'Allow all TCP from EC2 (OpenResty routes to sandbox ports)',
     });
 
-    // EC2 → orchestrator Fargate service (port 8081 for sandbox API)
-    // Inbound rule added here (not in SandboxStack) to avoid cyclic cross-stack dependency
+    // EC2 ↔ orchestrator Fargate service (port 8081 for sandbox API)
+    // Both egress (EC2 → orchestrator) and ingress (orchestrator ← EC2) rules needed.
+    // Placed here (not in SandboxStack) to avoid cyclic cross-stack dependency.
+    ec2SecurityGroup.addEgressRule(
+      ec2.SecurityGroup.fromSecurityGroupId(this, 'ImportedOrchestratorSg', sandboxOutput.orchestratorSecurityGroupId),
+      ec2.Port.tcp(8081),
+      'Allow EC2 to reach sandbox orchestrator Fargate service'
+    );
     new ec2.CfnSecurityGroupIngress(this, 'OrchestratorIngressFromEc2', {
       groupId: sandboxOutput.orchestratorSecurityGroupId,
       sourceSecurityGroupId: ec2SecurityGroup.securityGroupId,
