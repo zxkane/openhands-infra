@@ -273,9 +273,11 @@ export class SandboxStack extends cdk.Stack {
       //   4. If CONVERSATION_ID not set (warm pool), use a temp workspace
       entryPoint: ['/bin/sh', '-c'],
       command: [
-        'if [ -n "$CONVERSATION_ID" ]; then ' +
-          'mkdir -p /mnt/efs/$CONVERSATION_ID/project;' +
-          'ln -sfn /mnt/efs/$CONVERSATION_ID /workspace;' +
+        // Sanitize CONVERSATION_ID to alphanumeric/hyphen only (defense-in-depth against injection)
+        'CID=$(echo "$CONVERSATION_ID" | tr -cd "a-zA-Z0-9-");' +
+        'if [ -n "$CID" ]; then ' +
+          'mkdir -p /mnt/efs/$CID/project;' +
+          'ln -sfn /mnt/efs/$CID /workspace;' +
         'else ' +
           'mkdir -p /workspace/project;' +
         'fi;' +
