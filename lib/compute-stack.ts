@@ -387,7 +387,10 @@ export class ComputeStack extends cdk.Stack {
       'retry dnf install -y docker',
       'retry dnf install -y amazon-efs-utils',
       'mkdir -p /etc/docker',
-      'echo \'{"default-address-pools":[{"base":"172.17.0.0/12","size":24}],"log-driver":"json-file","log-opts":{"max-size":"100m","max-file":"3"}}\' > /etc/docker/daemon.json',
+      // Docker DNS: use VPC DNS resolver so containers can resolve Cloud Map private DNS
+      // (e.g., orchestrator.openhands.local for the sandbox orchestrator Fargate service)
+      'VPC_DNS=$(grep "^nameserver" /etc/resolv.conf | head -1 | awk \'{print $2}\')',
+      'echo "{\\\"dns\\\":[\\\"$VPC_DNS\\\"],\\\"default-address-pools\\\":[{\\\"base\\\":\\\"172.17.0.0/12\\\",\\\"size\\\":24}],\\\"log-driver\\\":\\\"json-file\\\",\\\"log-opts\\\":{\\\"max-size\\\":\\\"100m\\\",\\\"max-file\\\":\\\"3\\\"}}" > /etc/docker/daemon.json',
       'systemctl enable --now docker',
       'usermod -aG docker ec2-user',
       'chmod 666 /var/run/docker.sock',
