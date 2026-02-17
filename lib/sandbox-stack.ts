@@ -266,9 +266,19 @@ export class SandboxStack extends cdk.Stack {
       essential: true,
       // Override entrypoint: skip /sbin/docker-init (not available in Fargate)
       // Fargate uses initProcessEnabled instead for PID 1 signal handling
-      // Init git repo in workspace (required by /api/git/changes endpoint)
+      // Per-conversation workspace isolation:
+      //   1. CONVERSATION_ID is injected by orchestrator via container override
+      //   2. Create /mnt/efs/<CONVERSATION_ID>/ on EFS (persists across task restarts)
+      //   3. Symlink /workspace → /mnt/efs/<CONVERSATION_ID>/ for agent-server
+      //   4. If CONVERSATION_ID not set (warm pool), use a temp workspace
       entryPoint: ['/bin/sh', '-c'],
       command: [
+        'if [ -n "$CONVERSATION_ID" ]; then ' +
+          'mkdir -p /mnt/efs/$CONVERSATION_ID/project;' +
+          'ln -sfn /mnt/efs/$CONVERSATION_ID /workspace;' +
+        'else ' +
+          'mkdir -p /workspace/project;' +
+        'fi;' +
         'git init /workspace 2>/dev/null;' +
         'printf "bash_events/\\nconversations/\\n*.pyc\\n__pycache__/\\n" > /workspace/.gitignore;' +
         'git init /workspace/project 2>/dev/null;' +
@@ -299,11 +309,12 @@ export class SandboxStack extends cdk.Stack {
       },
     });
 
-    // Mount EFS workspace into the container at /workspace
+    // Mount EFS at /mnt/efs (not /workspace directly) so the entrypoint can
+    // create per-conversation subdirectories: /mnt/efs/<CONVERSATION_ID> → /workspace
     if (props.workspaceFileSystemId) {
       agentServerContainer.addMountPoints({
         sourceVolume: 'workspace',
-        containerPath: '/workspace',
+        containerPath: '/mnt/efs',
         readOnly: false,
       });
     }
