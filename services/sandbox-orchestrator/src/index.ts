@@ -215,7 +215,7 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     });
   } catch (err) {
     request.log.error(`Failed to start sandbox: ${err}`);
-    return reply.code(503).send({ detail: String(err) });
+    return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
 
   const taskArn = result.task_arn;
@@ -264,7 +264,11 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
 });
 
 app.post<{ Body: RuntimeIdRequest }>('/stop', async (request, reply) => {
-  const record = await store.getSandbox(request.body.runtime_id);
+  const runtimeId = request.body.runtime_id;
+  if (!runtimeId?.trim() || runtimeId.length > MAX_ID_LENGTH) {
+    return reply.code(400).send({ detail: 'Invalid runtime_id' });
+  }
+  const record = await store.getSandbox(runtimeId);
   if (!record) {
     return reply.code(404).send({ detail: 'Sandbox not found' });
   }
@@ -280,7 +284,11 @@ app.post<{ Body: RuntimeIdRequest }>('/stop', async (request, reply) => {
 });
 
 app.post<{ Body: RuntimeIdRequest }>('/pause', async (request, reply) => {
-  const record = await store.getSandbox(request.body.runtime_id);
+  const runtimeId = request.body.runtime_id;
+  if (!runtimeId?.trim() || runtimeId.length > MAX_ID_LENGTH) {
+    return reply.code(400).send({ detail: 'Invalid runtime_id' });
+  }
+  const record = await store.getSandbox(runtimeId);
   if (!record) {
     return reply.code(404).send({ detail: 'Sandbox not found' });
   }
@@ -296,7 +304,11 @@ app.post<{ Body: RuntimeIdRequest }>('/pause', async (request, reply) => {
 });
 
 app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
-  const record = await store.getSandbox(request.body.runtime_id);
+  const runtimeId = request.body.runtime_id;
+  if (!runtimeId?.trim() || runtimeId.length > MAX_ID_LENGTH) {
+    return reply.code(400).send({ detail: 'Invalid runtime_id' });
+  }
+  const record = await store.getSandbox(runtimeId);
   if (!record) {
     return reply.code(404).send({ detail: 'Sandbox not found' });
   }
@@ -317,7 +329,7 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
       sessionApiKey,
     });
   } catch (err) {
-    return reply.code(503).send({ detail: String(err) });
+    return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
 
   const taskArn = result.task_arn;
@@ -372,11 +384,15 @@ app.get('/list', async () => {
   return { runtimes: records.map(recordToRuntime) };
 });
 
-app.post<{ Body: ActivityRequest }>('/activity', async (request) => {
+app.post<{ Body: ActivityRequest }>('/activity', async (request, reply) => {
+  const sessionId = request.body.session_id;
+  if (!sessionId?.trim() || sessionId.length > MAX_ID_LENGTH) {
+    return reply.code(400).send({ detail: 'Invalid session_id' });
+  }
   try {
-    await store.updateActivity(request.body.session_id);
+    await store.updateActivity(sessionId);
   } catch (err) {
-    app.log.warn(`Failed to update activity for ${request.body.session_id}: ${err}`);
+    app.log.warn(`Failed to update activity for ${sessionId}: ${err}`);
   }
   return { status: 'ok' };
 });

@@ -28,7 +28,6 @@
   "exclude": [
     "node_modules",
     "cdk.out",
-    "lambda",
     "services"
   ]
 }

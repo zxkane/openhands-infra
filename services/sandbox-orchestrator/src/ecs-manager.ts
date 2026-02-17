@@ -100,8 +100,11 @@ export class EcsManager {
     }
 
     const task = tasks[0];
+    if (!task.taskArn) {
+      throw new Error('ECS RunTask returned task without ARN');
+    }
     return {
-      task_arn: task.taskArn!,
+      task_arn: task.taskArn,
       last_status: task.lastStatus ?? 'PROVISIONING',
     };
   }
@@ -128,8 +131,9 @@ export class EcsManager {
     if (!tasks.length) return null;
 
     const task = tasks[0];
+    if (!task.taskArn) return null;
     return {
-      task_arn: task.taskArn!,
+      task_arn: task.taskArn,
       last_status: task.lastStatus ?? 'UNKNOWN',
       desired_status: task.desiredStatus ?? 'UNKNOWN',
       task_ip: EcsManager.extractTaskIp(task),

@@ -43,7 +43,8 @@ export function startWarmPoolSync(
       }
 
       for (const task of tasks) {
-        const taskArn = task.taskArn!;
+        const taskArn = task.taskArn;
+        if (!taskArn) continue;
         const taskStatus = task.lastStatus ?? '';
 
         // Skip tasks that are already claimed (RUNNING in DynamoDB)
