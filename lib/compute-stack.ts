@@ -181,16 +181,28 @@ export class ComputeStack extends cdk.Stack {
     // Fargate task role (in SandboxStack), not the EC2 role. The orchestrator runs as
     // a standalone ECS Fargate service, not as a docker-compose sidecar on EC2.
 
-    // Preserve cross-stack exports for sandbox role ARNs to avoid CloudFormation
-    // "Cannot delete export" errors. These were previously referenced by IAM:PassRole
-    // policy. A future cleanup deploy can remove these once no deployed stack imports them.
+    // Preserve cross-stack exports to avoid CloudFormation "Cannot delete export"
+    // errors. These were previously referenced by docker-compose env vars and IAM
+    // policies. A future cleanup deploy can remove these once no deployed stack
+    // imports them. CDK auto-generates exports when sandbox output fields are used;
+    // referencing them here keeps those exports alive during the migration.
+    new cdk.CfnOutput(this, 'SandboxClusterArn', {
+      value: sandboxOutput.clusterArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxRegistryTableName', {
+      value: sandboxOutput.registryTableName,
+    });
+    new cdk.CfnOutput(this, 'SandboxRegistryTableArn', {
+      value: sandboxOutput.registryTableArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxWarmPoolServiceName', {
+      value: sandboxOutput.warmPoolServiceName,
+    });
     new cdk.CfnOutput(this, 'SandboxExecutionRoleArn', {
       value: sandboxOutput.sandboxExecutionRoleArn,
-      description: 'Sandbox execution role ARN (preserved for export compatibility)',
     });
     new cdk.CfnOutput(this, 'SandboxTaskRoleArn', {
       value: sandboxOutput.sandboxTaskRoleArn,
-      description: 'Sandbox task role ARN (preserved for export compatibility)',
     });
 
     // Get private subnets for EC2 and internal ALB
