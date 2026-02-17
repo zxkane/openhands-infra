@@ -1550,6 +1550,19 @@ echo "OpenHands setup complete!"",
       },
       "Type": "AWS::SSM::Parameter",
     },
+    "OrchestratorIngressFromEc2": {
+      "Properties": {
+        "Description": "Allow EC2 to reach sandbox orchestrator Fargate service",
+        "FromPort": 8081,
+        "GroupId": "sg-orchestrator123",
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "ToPort": 8081,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
     "OriginVerifyParam9FCB2131": {
       "Properties": {
         "Description": "Secret header value for CloudFront origin verification",

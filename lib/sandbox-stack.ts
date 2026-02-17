@@ -556,6 +556,7 @@ export class SandboxStack extends cdk.Stack {
       // Cloud Map private DNS for orchestrator Fargate service
       orchestratorApiUrl: `http://${orchestratorFqdn}:8081`,
       orchestratorDnsName: orchestratorFqdn,
+      orchestratorSecurityGroupId: orchestratorSg.securityGroupId,
       sandboxLogGroupName: sandboxLogGroup.logGroupName,
       warmPoolSize,
       warmPoolServiceName: warmPoolService.serviceName,

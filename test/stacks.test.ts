@@ -46,6 +46,7 @@ const mockSandboxOutput: SandboxStackOutput = {
   sandboxTaskSecurityGroupId: 'sg-sandbox123',
   orchestratorApiUrl: 'http://orchestrator.openhands.local:8081',
   orchestratorDnsName: 'orchestrator.openhands.local',
+  orchestratorSecurityGroupId: 'sg-orchestrator123',
   sandboxLogGroupName: '/openhands/sandbox',
   warmPoolSize: 2,
   warmPoolServiceName: 'openhands-example-com-sandbox-warm-pool',

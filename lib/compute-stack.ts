@@ -177,6 +177,17 @@ export class ComputeStack extends cdk.Stack {
       description: 'Allow all TCP from EC2 (OpenResty routes to sandbox ports)',
     });
 
+    // EC2 → orchestrator Fargate service (port 8081 for sandbox API)
+    // Inbound rule added here (not in SandboxStack) to avoid cyclic cross-stack dependency
+    new ec2.CfnSecurityGroupIngress(this, 'OrchestratorIngressFromEc2', {
+      groupId: sandboxOutput.orchestratorSecurityGroupId,
+      sourceSecurityGroupId: ec2SecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 8081,
+      toPort: 8081,
+      description: 'Allow EC2 to reach sandbox orchestrator Fargate service',
+    });
+
     // NOTE: ECS/DynamoDB permissions for sandbox orchestrator are on the orchestrator
     // Fargate task role (in SandboxStack), not the EC2 role. The orchestrator runs as
     // a standalone ECS Fargate service, not as a docker-compose sidecar on EC2.
