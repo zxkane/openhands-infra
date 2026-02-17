@@ -64,6 +64,51 @@ function buildSandboxUrl(ip: string, port = 8000): string {
 /** Max length for session_id / runtime_id to prevent DynamoDB item size abuse. */
 const MAX_ID_LENGTH = 256;
 
+/**
+ * Verify RUNNING records against ECS — mark stopped tasks as STOPPED in DynamoDB.
+ * This prevents the upstream OpenHands app from trying to connect to dead task IPs
+ * (which causes 5s httpx timeouts per stale sandbox, accumulating to 15s+ for /api/conversations).
+ */
+async function verifyRunningRecords(records: SandboxRecord[]): Promise<SandboxRecord[]> {
+  const running = records.filter((r) => r.status === 'RUNNING' && r.task_arn);
+  if (!running.length) return records;
+
+  // Batch describe all RUNNING tasks in a single ECS API call
+  const taskArns = running.map((r) => r.task_arn);
+  const tasks = await ecs.describeTasks(taskArns);
+  const taskStatusMap = new Map<string, string>();
+  for (const task of tasks) {
+    if (task.taskArn) {
+      taskStatusMap.set(task.taskArn, task.lastStatus ?? 'UNKNOWN');
+    }
+  }
+
+  // Update stale records in parallel
+  const updates: Promise<void>[] = [];
+  const result = records.map((record) => {
+    if (record.status !== 'RUNNING' || !record.task_arn) return record;
+
+    const ecsStatus = taskStatusMap.get(record.task_arn);
+    if (!ecsStatus || ecsStatus === 'STOPPED' || ecsStatus === 'DEPROVISIONING') {
+      // Task is gone — mark as STOPPED and return corrected record
+      updates.push(
+        store.updateStatus(record.conversation_id, 'STOPPED').catch((err) => {
+          app.log.warn(`Failed to mark stale record ${record.conversation_id}: ${err}`);
+        }),
+      );
+      return { ...record, status: 'STOPPED' as const, task_ip: '' };
+    }
+    return record;
+  });
+
+  if (updates.length) {
+    await Promise.all(updates);
+    app.log.info(`Marked ${updates.length} stale RUNNING record(s) as STOPPED`);
+  }
+
+  return result;
+}
+
 function recordToRuntime(record: SandboxRecord): RuntimeInfo {
   const url = record.task_ip && record.status === 'RUNNING'
     ? buildSandboxUrl(record.task_ip, record.agent_server_port)
@@ -303,7 +348,9 @@ app.get<{ Querystring: { ids?: string | string[] } }>(
       ids = raw.split(',').filter(Boolean);
     }
     const records = await store.batchGetSandboxes(ids);
-    return records.map(recordToRuntime);
+    // Verify RUNNING records against ECS to prevent stale data causing upstream timeouts
+    const verified = await verifyRunningRecords(records);
+    return verified.map(recordToRuntime);
   },
 );
 
@@ -314,7 +361,9 @@ app.get<{ Params: { session_id: string } }>(
     if (!record) {
       return reply.code(404).send({ detail: 'Sandbox not found' });
     }
-    return recordToRuntime(record);
+    // Verify single RUNNING record against ECS
+    const [verified] = await verifyRunningRecords([record]);
+    return recordToRuntime(verified);
   },
 );
 

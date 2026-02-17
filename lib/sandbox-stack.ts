@@ -525,6 +525,44 @@ export class SandboxStack extends cdk.Stack {
     });
 
     // ========================================
+    // Task State Change Handler (Event-Driven)
+    // ========================================
+    // When an ECS task stops (crash, OOM, idle timeout), EventBridge fires an event.
+    // This Lambda updates DynamoDB immediately so the orchestrator returns accurate
+    // status — preventing the upstream OpenHands app from connecting to dead task IPs.
+    const taskStateHandler = new lambda.Function(this, 'TaskStateHandler', {
+      functionName: 'openhands-sandbox-task-state',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'sandbox-task-state')),
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 128,
+      architecture: lambda.Architecture.ARM_64,
+      environment: {
+        REGISTRY_TABLE_NAME: registryTable.tableName,
+        AWS_REGION_NAME: config.region,
+        LOG_LEVEL: 'INFO',
+        POWERTOOLS_SERVICE_NAME: 'sandbox-task-state',
+      },
+    });
+
+    registryTable.grantReadWriteData(taskStateHandler);
+
+    // EventBridge rule: ECS task stopped in sandbox cluster
+    new events.Rule(this, 'TaskStateChangeRule', {
+      eventPattern: {
+        source: ['aws.ecs'],
+        detailType: ['ECS Task State Change'],
+        detail: {
+          clusterArn: [cluster.clusterArn],
+          lastStatus: ['STOPPED'],
+        },
+      },
+      targets: [new eventsTargets.LambdaFunction(taskStateHandler)],
+      description: 'Update DynamoDB when sandbox ECS tasks stop',
+    });
+
+    // ========================================
     // CloudWatch Alarms
     // ========================================
     const sandboxCreationFailureAlarm = new cloudwatch.Alarm(this, 'SandboxCreationFailureAlarm', {
