@@ -1,12 +1,24 @@
-FROM public.ecr.aws/docker/library/python:3.12-slim
+FROM public.ecr.aws/docker/library/node:24-alpine AS builder
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY package.json package-lock.json* ./
+RUN npm ci --ignore-scripts
 
-COPY . .
+COPY tsconfig.json ./
+COPY src/ ./src/
+RUN npx tsc
+
+# Production stage
+FROM public.ecr.aws/docker/library/node:24-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
+COPY --from=builder /app/dist ./dist
 
 EXPOSE 8081
 
-CMD ["uvicorn", "handler:app", "--host", "0.0.0.0", "--port", "8081", "--log-level", "info"]
+CMD ["node", "dist/index.js"]

@@ -131,8 +131,10 @@ export interface SandboxStackOutput {
   taskDefinitionFamily: string;
   /** Security group ID for sandbox Fargate tasks */
   sandboxTaskSecurityGroupId: string;
-  /** Sandbox Orchestrator API URL (internal) */
+  /** Sandbox Orchestrator API URL (internal, Cloud Map DNS) */
   orchestratorApiUrl: string;
+  /** Sandbox Orchestrator DNS name (Cloud Map private DNS) */
+  orchestratorDnsName: string;
   /** CloudWatch log group for sandbox tasks */
   sandboxLogGroupName: string;
   /** Sandbox Orchestrator Docker image URI (ECR) */

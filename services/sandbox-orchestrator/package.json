@@ -1,0 +1,36 @@
+{
+  "name": "sandbox-orchestrator",
+  "version": "1.0.0",
+  "description": "Sandbox Orchestrator - translates OpenHands remote runtime API calls to ECS Fargate operations",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --passWithNoTests"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.700.0",
+    "@aws-sdk/client-ecs": "^3.700.0",
+    "@aws-sdk/lib-dynamodb": "^3.700.0",
+    "@smithy/node-http-handler": "^3.3.3",
+    "fastify": "^5.3.3"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.0.0",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.0",
+    "typescript": "~5.9.3"
+  },
+  "jest": {
+    "extensionsToTreatAsEsm": [".ts"],
+    "transform": {
+      "^.+\\.ts$": ["ts-jest", { "useESM": true }]
+    },
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "testMatch": ["**/test/**/*.test.ts"]
+  }
+}

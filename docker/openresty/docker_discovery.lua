@@ -9,7 +9,7 @@ local cjson = require "cjson"
 local _M = {}
 
 -- Configuration
-local ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL") or "http://localhost:8081"
+local ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL") or "http://orchestrator.openhands.local:8081"
 
 -- Error types returned by find_container for proper HTTP status mapping
 _M.ERR_SOCKET = "socket_error"      -- Orchestrator connection failed (503)

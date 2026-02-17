@@ -177,51 +177,9 @@ export class ComputeStack extends cdk.Stack {
       description: 'Allow all TCP from EC2 (OpenResty routes to sandbox ports)',
     });
 
-    // EC2 role needs ECS permissions for sandbox orchestrator (runs on EC2)
-    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
-      sid: 'EcsSandboxManagement',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'ecs:RunTask',
-        'ecs:StopTask',
-        'ecs:DescribeTasks',
-        'ecs:ListTasks',
-        'ecs:TagResource',
-      ],
-      resources: ['*'],
-      conditions: {
-        ArnEquals: {
-          'ecs:cluster': sandboxOutput.clusterArn,
-        },
-      },
-    }));
-
-    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
-      sid: 'PassSandboxRoles',
-      effect: iam.Effect.ALLOW,
-      actions: ['iam:PassRole'],
-      resources: [
-        sandboxOutput.sandboxExecutionRoleArn,
-        sandboxOutput.sandboxTaskRoleArn,
-      ],
-    }));
-
-    // DynamoDB access for sandbox registry
-    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
-      sid: 'SandboxRegistryAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'dynamodb:GetItem',
-        'dynamodb:PutItem',
-        'dynamodb:UpdateItem',
-        'dynamodb:Query',
-        'dynamodb:BatchGetItem',
-      ],
-      resources: [
-        sandboxOutput.registryTableArn,
-        `${sandboxOutput.registryTableArn}/index/*`,
-      ],
-    }));
+    // NOTE: ECS/DynamoDB permissions for sandbox orchestrator are on the orchestrator
+    // Fargate task role (in SandboxStack), not the EC2 role. The orchestrator runs as
+    // a standalone ECS Fargate service, not as a docker-compose sidecar on EC2.
 
     // Get private subnets for EC2 and internal ALB
     const privateSubnets = vpc.selectSubnets({
@@ -433,8 +391,6 @@ export class ComputeStack extends cdk.Stack {
       'export OH_SECRET_KEY',
       'echo "Sandbox secret key configured"',
       'set -x',
-      // Pass private subnet IDs from CDK (known at synth time from VPC lookup)
-      `SUBNETS="${privateSubnets.subnetIds.join(',')}"`,
       'cat > /data/openhands/docker-compose.yml << EOF',
       'services:',
       // OpenResty reverse proxy - runs as container on Docker bridge network
@@ -446,10 +402,9 @@ export class ComputeStack extends cdk.Stack {
       '    ports:',
       '      - "8080:8080"',  // ALB connects to this port for runtime traffic
       '    environment:',
-      `      - ORCHESTRATOR_URL=${sandboxOutput.orchestratorApiUrl}`,
+      `      - ORCHESTRATOR_URL=http://${sandboxOutput.orchestratorDnsName}:8081`,
       '    depends_on:',
       '      - openhands',
-      '      - sandbox-orchestrator',
       '    logging:',
       '      driver: json-file',
       '      options:',
@@ -551,28 +506,8 @@ export class ComputeStack extends cdk.Stack {
       '    extra_hosts:',
       '      - "host.docker.internal:host-gateway"',
       '',
-      // Sandbox Orchestrator: translates remote runtime API calls to ECS Fargate operations
-      '  sandbox-orchestrator:',
-      `    image: ${sandboxOutput.orchestratorImageUri}`,
-      '    container_name: sandbox-orchestrator',
-      '    restart: always',
-      '    ports:',
-      '      - "8081:8081"',
-      '    environment:',
-      `      - REGISTRY_TABLE_NAME=${sandboxOutput.registryTableName}`,
-      `      - ECS_CLUSTER_ARN=${sandboxOutput.clusterArn}`,
-      `      - TASK_DEFINITION_ARN=${sandboxOutput.taskDefinitionFamily}`,
-      '      - SUBNETS=${SUBNETS}',
-      `      - SECURITY_GROUP_ID=${sandboxOutput.sandboxTaskSecurityGroupId}`,
-      '      - AWS_REGION_NAME=$REGION',
-      '      - AWS_DEFAULT_REGION=$REGION',
-      `      - SANDBOX_IMAGE=${customRuntimeImage.imageUri}`,
-      `      - WARM_POOL_SERVICE_NAME=${sandboxOutput.warmPoolServiceName}`,
-      '    logging:',
-      '      driver: json-file',
-      '      options:',
-      '        max-size: "100m"',
-      '        max-file: "3"',
+      // NOTE: Sandbox Orchestrator now runs as a standalone ECS Fargate service
+      // with Cloud Map DNS (orchestrator.openhands.local:8081), not as a docker-compose sidecar.
       '',
       '  watchtower:',
       '    image: containrrr/watchtower:1.7.1',
@@ -616,10 +551,10 @@ export class ComputeStack extends cdk.Stack {
       `pull_with_retry "${openrestyImageUri}"`,  // OpenResty runtime proxy
       `pull_with_retry "${customRuntimeImage.imageUri}"`,  // Custom runtime with Chromium for MCP
       `pull_with_retry "${agentServerImageUri}"`,
-      `pull_with_retry "${sandboxOutput.orchestratorImageUri}"`,  // Sandbox orchestrator
+      // NOTE: Sandbox orchestrator runs as ECS Fargate service, no image pull needed on EC2
       'set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap \'error_handler $LINENO\' ERR',
       'systemctl daemon-reload && systemctl enable openhands && systemctl start openhands',
-      'for i in {1..30}; do docker inspect sandbox-orchestrator >/dev/null 2>&1 && break; sleep 2; done',
+      'for i in {1..30}; do docker inspect openhands-app >/dev/null 2>&1 && break; sleep 2; done',
       'echo "OpenHands setup complete!"',
     );
 
@@ -673,10 +608,6 @@ export class ComputeStack extends cdk.Stack {
       updatePolicy: autoscaling.UpdatePolicy.rollingUpdate(),
       newInstancesProtectedFromScaleIn: false,
     });
-
-    // Add data volume via Block Device Mapping in Launch Template
-    // Note: Additional EBS volume needs to be added separately
-    const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
 
     // Internet-facing Application Load Balancer (required for WebSocket support)
     // CloudFront VPC Origin does NOT support WebSocket connections, so we use

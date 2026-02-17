@@ -44,7 +44,8 @@ const mockSandboxOutput: SandboxStackOutput = {
   registryTableArn: 'arn:aws:dynamodb:us-west-2:123456789012:table/openhands-sandbox-registry',
   taskDefinitionFamily: 'openhands-sandbox',
   sandboxTaskSecurityGroupId: 'sg-sandbox123',
-  orchestratorApiUrl: 'http://localhost:8081',
+  orchestratorApiUrl: 'http://orchestrator.openhands.local:8081',
+  orchestratorDnsName: 'orchestrator.openhands.local',
   sandboxLogGroupName: '/openhands/sandbox',
   warmPoolSize: 2,
   warmPoolServiceName: 'openhands-example-com-sandbox-warm-pool',
@@ -830,6 +831,7 @@ describe('OpenHands Infrastructure Stacks', () => {
       expect(stack.output.taskDefinitionFamily).toBeDefined();
       expect(stack.output.sandboxTaskSecurityGroupId).toBeDefined();
       expect(stack.output.orchestratorApiUrl).toBeDefined();
+      expect(stack.output.orchestratorDnsName).toContain('openhands.local');
     });
   });
 

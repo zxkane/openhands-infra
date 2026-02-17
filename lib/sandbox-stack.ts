@@ -11,6 +11,7 @@ import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -329,9 +330,14 @@ export class SandboxStack extends cdk.Stack {
     });
     cdk.Tags.of(warmPoolService).add('Component', 'sandbox-warm-pool');
 
-    // NOTE: Orchestrator runs as a docker-compose sidecar on EC2 — it inherits the
-    // EC2 instance role. ECS/DynamoDB permissions are added to EC2 role in ComputeStack
-    // to avoid cyclic cross-stack references between SecurityStack and SandboxStack.
+    // ========================================
+    // Cloud Map Private DNS Namespace
+    // ========================================
+    const namespace = new servicediscovery.PrivateDnsNamespace(this, 'OrchestratorNamespace', {
+      name: 'openhands.local',
+      vpc,
+      description: 'Private DNS for OpenHands sandbox orchestrator',
+    });
 
     // ========================================
     // Sandbox Orchestrator Docker Image
@@ -341,8 +347,120 @@ export class SandboxStack extends cdk.Stack {
       platform: Platform.LINUX_ARM64,
     });
 
-    // NOTE: EC2 role pull access for orchestrator image is granted in ComputeStack
-    // to avoid cyclic cross-stack dependency
+    // ========================================
+    // Orchestrator Security Group
+    // ========================================
+    const orchestratorSg = new ec2.SecurityGroup(this, 'OrchestratorSg', {
+      vpc,
+      description: 'Security group for sandbox orchestrator Fargate service',
+      allowAllOutbound: true,
+    });
+    // NOTE: Inbound rule from EC2 SG is added in ComputeStack to avoid cyclic dependency
+
+    // ========================================
+    // Orchestrator Fargate Task Definition
+    // ========================================
+    const orchestratorTaskDef = new ecs.FargateTaskDefinition(this, 'OrchestratorTaskDef', {
+      family: 'openhands-sandbox-orchestrator',
+      cpu: 512,      // 0.5 vCPU
+      memoryLimitMiB: 1024,  // 1 GB
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
+    });
+
+    // Orchestrator task role needs ECS + DynamoDB permissions
+    orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'EcsSandboxManagement',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ecs:RunTask',
+        'ecs:StopTask',
+        'ecs:DescribeTasks',
+        'ecs:ListTasks',
+        'ecs:TagResource',
+      ],
+      resources: ['*'],
+      conditions: {
+        ArnEquals: {
+          'ecs:cluster': cluster.clusterArn,
+        },
+      },
+    }));
+
+    orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'PassSandboxRoles',
+      effect: iam.Effect.ALLOW,
+      actions: ['iam:PassRole'],
+      resources: [
+        sandboxExecutionRole.roleArn,
+        sandboxTaskRole.roleArn,
+      ],
+    }));
+
+    registryTable.grantReadWriteData(orchestratorTaskDef.taskRole);
+
+    // Orchestrator container
+    orchestratorTaskDef.addContainer('orchestrator', {
+      containerName: 'orchestrator',
+      image: ecs.ContainerImage.fromDockerImageAsset(orchestratorImage),
+      essential: true,
+      portMappings: [
+        { containerPort: 8081, protocol: ecs.Protocol.TCP },
+      ],
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'orchestrator',
+        logGroup: new logs.LogGroup(this, 'OrchestratorLogGroup', {
+          logGroupName: '/openhands/sandbox-orchestrator',
+          retention: logs.RetentionDays.TWO_WEEKS,
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        }),
+      }),
+      healthCheck: {
+        command: ['CMD-SHELL', 'wget -qO- http://localhost:8081/health || exit 1'],
+        interval: cdk.Duration.seconds(15),
+        timeout: cdk.Duration.seconds(5),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(30),
+      },
+      environment: {
+        REGISTRY_TABLE_NAME: registryTable.tableName,
+        ECS_CLUSTER_ARN: cluster.clusterArn,
+        TASK_DEFINITION_ARN: 'openhands-sandbox',
+        SUBNETS: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds.join(','),
+        SECURITY_GROUP_ID: sandboxTaskSg.securityGroupId,
+        AWS_REGION_NAME: config.region,
+        AWS_DEFAULT_REGION: config.region,
+        SANDBOX_IMAGE: '', // Set by ComputeStack via CDK output
+        WARM_POOL_SERVICE_NAME: warmPoolService.serviceName,
+      },
+    });
+
+    // ========================================
+    // Orchestrator Fargate Service (with Cloud Map)
+    // ========================================
+    const orchestratorDnsName = 'orchestrator';
+    const orchestratorService = new ecs.FargateService(this, 'OrchestratorService', {
+      cluster,
+      serviceName: `${namePrefix}-sandbox-orchestrator`,
+      taskDefinition: orchestratorTaskDef,
+      desiredCount: 1,
+      minHealthyPercent: 100,
+      maxHealthyPercent: 200,
+      vpcSubnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }),
+      securityGroups: [orchestratorSg],
+      assignPublicIp: false,
+      enableECSManagedTags: true,
+      propagateTags: ecs.PropagatedTagSource.TASK_DEFINITION,
+      cloudMapOptions: {
+        name: orchestratorDnsName,
+        cloudMapNamespace: namespace,
+        dnsRecordType: servicediscovery.DnsRecordType.A,
+        dnsTtl: cdk.Duration.seconds(10),
+      },
+    });
+    cdk.Tags.of(orchestratorService).add('Component', 'sandbox-orchestrator');
 
     // ========================================
     // Idle Monitor Lambda
@@ -420,6 +538,7 @@ export class SandboxStack extends cdk.Stack {
     // ========================================
     // Outputs
     // ========================================
+    const orchestratorFqdn = `${orchestratorDnsName}.openhands.local`;
     this.output = {
       clusterArn: cluster.clusterArn,
       clusterName: cluster.clusterName,
@@ -427,10 +546,11 @@ export class SandboxStack extends cdk.Stack {
       registryTableArn: registryTable.tableArn,
       taskDefinitionFamily: 'openhands-sandbox',  // Matches family in task definition
       sandboxTaskSecurityGroupId: sandboxTaskSg.securityGroupId,
-      // Use Docker Compose service name for inter-container communication
-      orchestratorApiUrl: 'http://sandbox-orchestrator:8081',
+      // Cloud Map private DNS for orchestrator Fargate service
+      orchestratorApiUrl: `http://${orchestratorFqdn}:8081`,
+      orchestratorDnsName: orchestratorFqdn,
       sandboxLogGroupName: sandboxLogGroup.logGroupName,
-      warmPoolSize: warmPoolSize,
+      warmPoolSize,
       warmPoolServiceName: warmPoolService.serviceName,
       orchestratorImageUri: orchestratorImage.imageUri,
       sandboxExecutionRoleArn: sandboxExecutionRole.roleArn,

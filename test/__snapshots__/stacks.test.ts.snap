@@ -1255,13 +1255,12 @@ OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbo
 export OH_SECRET_KEY
 echo "Sandbox secret key configured"
 set -x
-SUBNETS="p-12345,p-67890"
 cat > /data/openhands/docker-compose.yml << EOF
 services:
   openresty:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c5615578c95436dc0178b9a9e54319e9460b66803f3a1304eb4b62eea5f2a96b",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:7c52df33ad3765b8f21ae8f6375ebeffa2f3d07c63c2e4d1ec0c4757e976fa25",
                   },
                   "
     container_name: openresty-proxy
@@ -1269,10 +1268,9 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - ORCHESTRATOR_URL=http://localhost:8081
+      - ORCHESTRATOR_URL=http://orchestrator.openhands.local:8081
     depends_on:
       - openhands
-      - sandbox-orchestrator
     logging:
       driver: json-file
       options:
@@ -1282,7 +1280,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:90ff9bdcd0fb0d27ab94e2d5c06923737fc8621b2c41996f36be85c991bcdf2e",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:e444f72250e2beefe00b49292ec6b81cbbf64fe542037eaa3dc7a7c3a757b18f",
                   },
                   "
     container_name: openhands-app
@@ -1332,7 +1330,7 @@ services:
       - AGENT_ENABLE_BROWSING=false
       - AGENT_ENABLE_MCP=true
       - RUNTIME=remote
-      - SANDBOX_REMOTE_RUNTIME_API_URL=http://localhost:8081
+      - SANDBOX_REMOTE_RUNTIME_API_URL=http://orchestrator.openhands.local:8081
       - SANDBOX_API_KEY=local
       - SANDBOX_START_TIMEOUT=300
       - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
@@ -1356,31 +1354,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  sandbox-orchestrator:
-    image: 123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest
-    container_name: sandbox-orchestrator
-    restart: always
-    ports:
-      - "8081:8081"
-    environment:
-      - REGISTRY_TABLE_NAME=openhands-sandbox-registry
-      - ECS_CLUSTER_ARN=arn:aws:ecs:us-west-2:123456789012:cluster/openhands-sandbox
-      - TASK_DEFINITION_ARN=openhands-sandbox
-      - SUBNETS=\${SUBNETS}
-      - SECURITY_GROUP_ID=sg-sandbox123
-      - AWS_REGION_NAME=$REGION
-      - AWS_DEFAULT_REGION=$REGION
-      - SANDBOX_IMAGE=",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
-                  },
-                  "
-      - WARM_POOL_SERVICE_NAME=openhands-example-com-sandbox-warm-pool
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "3"
 
   watchtower:
     image: containrrr/watchtower:1.7.1
@@ -1473,12 +1446,12 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:90ff9bdcd0fb0d27ab94e2d5c06923737fc8621b2c41996f36be85c991bcdf2e",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:e444f72250e2beefe00b49292ec6b81cbbf64fe542037eaa3dc7a7c3a757b18f",
                   },
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c5615578c95436dc0178b9a9e54319e9460b66803f3a1304eb4b62eea5f2a96b",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:7c52df33ad3765b8f21ae8f6375ebeffa2f3d07c63c2e4d1ec0c4757e976fa25",
                   },
                   ""
 pull_with_retry "",
@@ -1491,10 +1464,9 @@ pull_with_retry "",
                     "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf",
                   },
                   ""
-pull_with_retry "123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest"
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
 systemctl daemon-reload && systemctl enable openhands && systemctl start openhands
-for i in {1..30}; do docker inspect sandbox-orchestrator >/dev/null 2>&1 && break; sleep 2; done
+for i in {1..30}; do docker inspect openhands-app >/dev/null 2>&1 && break; sleep 2; done
 echo "OpenHands setup complete!"",
                 ],
               ],
