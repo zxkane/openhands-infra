@@ -3,7 +3,7 @@
 export const config = {
   registryTableName: process.env.REGISTRY_TABLE_NAME || 'openhands-sandbox-registry',
   ecsClusterArn: process.env.ECS_CLUSTER_ARN || '',
-  taskDefinitionArn: process.env.TASK_DEFINITION_ARN || '',
+  taskDefinitionFamily: process.env.TASK_DEFINITION_FAMILY || process.env.TASK_DEFINITION_ARN || '',
   subnets: (process.env.SUBNETS || '').split(',').filter((s) => s.trim()),
   securityGroupId: process.env.SECURITY_GROUP_ID || '',
   region: process.env.AWS_REGION_NAME || process.env.AWS_DEFAULT_REGION || 'us-east-1',

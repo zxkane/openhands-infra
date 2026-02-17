@@ -25,7 +25,7 @@ const app = Fastify({ logger: true });
 const store = new DynamoDBStore(config.registryTableName, config.region);
 const ecs = new EcsManager({
   clusterArn: config.ecsClusterArn,
-  taskDefinitionArn: config.taskDefinitionArn,
+  taskDefinitionArn: config.taskDefinitionFamily,
   subnets: config.subnets,
   securityGroupId: config.securityGroupId,
   region: config.region,
@@ -61,6 +61,9 @@ function buildSandboxUrl(ip: string, port = 8000): string {
   return `http://${ip}:${port}`;
 }
 
+/** Max length for session_id / runtime_id to prevent DynamoDB item size abuse. */
+const MAX_ID_LENGTH = 256;
+
 function recordToRuntime(record: SandboxRecord): RuntimeInfo {
   const url = record.task_ip && record.status === 'RUNNING'
     ? buildSandboxUrl(record.task_ip, record.agent_server_port)
@@ -68,7 +71,10 @@ function recordToRuntime(record: SandboxRecord): RuntimeInfo {
 
   return {
     session_id: record.conversation_id,
-    runtime_id: record.task_arn || record.conversation_id,
+    // Use conversation_id as runtime_id — the upstream RemoteSandboxService
+    // sends this value back on /stop, /pause, /resume and we look it up by
+    // conversation_id (DynamoDB partition key).
+    runtime_id: record.conversation_id,
     status: STATUS_MAP[record.status] ?? record.status.toLowerCase(),
     pod_status: POD_STATUS_MAP[record.status] ?? record.status.toLowerCase(),
     url,
@@ -88,7 +94,7 @@ app.get('/health', async () => {
 
 app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
   const { session_id, image, environment } = request.body;
-  if (!session_id?.trim()) {
+  if (!session_id?.trim() || session_id.length > MAX_ID_LENGTH) {
     return reply.code(400).send({ detail: 'Invalid session_id' });
   }
 
@@ -105,15 +111,21 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     return recordToRuntime(existing);
   }
 
-  // Try to claim a warm task from ECS Service
+  // Try to claim a warm task from ECS Service (atomic conditional update)
   const warmTasks = await store.queryByStatus('WARM');
   let warm: SandboxRecord | null = null;
   for (const candidate of warmTasks) {
     if (!candidate.task_ip || !candidate.task_arn) continue;
     const taskInfo = await ecs.describeTask(candidate.task_arn);
     if (taskInfo && taskInfo.last_status === 'RUNNING') {
-      warm = candidate;
-      break;
+      // Atomic claim — prevents two concurrent /start requests from getting the same task
+      const claimed = await store.claimWarmTask(candidate.conversation_id);
+      if (claimed) {
+        warm = candidate;
+        break;
+      }
+      // Another request already claimed it — try next candidate
+      request.log.info(`Warm task ${candidate.conversation_id} already claimed, trying next`);
     } else {
       // Task no longer running - clean up stale record
       await store.updateStatus(candidate.conversation_id, 'STOPPED');
@@ -125,9 +137,6 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     request.log.info(
       `Claimed warm task ${warm.conversation_id} for session=${session_id} (ip=${warm.task_ip})`,
     );
-
-    // Mark warm record as claimed
-    await store.updateStatus(warm.conversation_id, 'CLAIMED');
 
     // Create the real conversation record
     const record: SandboxRecord = {
@@ -200,7 +209,7 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
         }
         await store.updateStatus(session_id, 'ERROR');
       }
-    })();
+    })().catch((err) => app.log.error(`Background sandbox setup failed: ${err}`));
     request.log.info(`Sandbox provisioning: session=${session_id}`);
   } else {
     request.log.info(`Sandbox ready: session=${session_id}, ip=${taskIp}`);
@@ -327,11 +336,23 @@ app.post<{ Body: ActivityRequest }>('/activity', async (request) => {
 // Start server
 // ========================================
 
+let warmPoolTimer: NodeJS.Timeout | undefined;
+
 async function main(): Promise<void> {
   if (config.warmPoolServiceName && config.ecsClusterArn) {
-    startWarmPoolSync(ecs, store, config.warmPoolServiceName, config.sandboxImage, (level, msg) => {
+    warmPoolTimer = startWarmPoolSync(ecs, store, config.warmPoolServiceName, config.sandboxImage, (level, msg) => {
       if (level === 'error') app.log.error(msg);
       else app.log.info(msg);
+    });
+  }
+
+  // Graceful shutdown — ECS sends SIGTERM before killing tasks
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, async () => {
+      app.log.info(`Received ${signal}, shutting down gracefully`);
+      if (warmPoolTimer) clearInterval(warmPoolTimer);
+      await app.close();
+      process.exit(0);
     });
   }
 

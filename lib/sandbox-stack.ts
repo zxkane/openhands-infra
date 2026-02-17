@@ -371,11 +371,18 @@ export class SandboxStack extends cdk.Stack {
     });
 
     // Orchestrator task role needs ECS + DynamoDB permissions
+    // RunTask scoped to specific task definition; Stop/Describe scoped to cluster tasks
+    orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'EcsRunSandboxTask',
+      effect: iam.Effect.ALLOW,
+      actions: ['ecs:RunTask'],
+      resources: [sandboxTaskDefinition.taskDefinitionArn],
+    }));
+
     orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       sid: 'EcsSandboxManagement',
       effect: iam.Effect.ALLOW,
       actions: [
-        'ecs:RunTask',
         'ecs:StopTask',
         'ecs:DescribeTasks',
         'ecs:ListTasks',
@@ -427,7 +434,7 @@ export class SandboxStack extends cdk.Stack {
       environment: {
         REGISTRY_TABLE_NAME: registryTable.tableName,
         ECS_CLUSTER_ARN: cluster.clusterArn,
-        TASK_DEFINITION_ARN: 'openhands-sandbox',
+        TASK_DEFINITION_FAMILY: 'openhands-sandbox',
         SUBNETS: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds.join(','),
         SECURITY_GROUP_ID: sandboxTaskSg.securityGroupId,
         AWS_REGION_NAME: config.region,

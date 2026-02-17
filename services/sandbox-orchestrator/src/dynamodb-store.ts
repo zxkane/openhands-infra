@@ -88,6 +88,32 @@ export class DynamoDBStore {
     return records;
   }
 
+  /** Atomically claim a WARM record — returns true if this caller won the race. */
+  async claimWarmTask(conversationId: string): Promise<boolean> {
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      await this.docClient.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { conversation_id: conversationId },
+          UpdateExpression: 'SET #status = :claimed, last_activity_at = :now, #ttl = :ttl',
+          ConditionExpression: '#status = :warm',
+          ExpressionAttributeValues: {
+            ':claimed': 'CLAIMED',
+            ':warm': 'WARM',
+            ':now': now,
+            ':ttl': now + TTL_SECONDS,
+          },
+          ExpressionAttributeNames: { '#status': 'status', '#ttl': 'ttl' },
+        }),
+      );
+      return true;
+    } catch (err: any) {
+      if (err.name === 'ConditionalCheckFailedException') return false;
+      throw err;
+    }
+  }
+
   async updateStatus(
     conversationId: string,
     status: SandboxStatus,
