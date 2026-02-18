@@ -30,10 +30,8 @@ export interface SandboxStackProps extends cdk.StackProps {
   monitoringOutput: MonitoringStackOutput;
   /** Enable sandbox AWS access — Bedrock and S3 permissions on task role */
   sandboxAwsAccess?: boolean;
-  /** EFS file system ID for workspace persistence (from ComputeStack) */
-  workspaceFileSystemId?: string;
-  /** EFS access point ID for workspace (from ComputeStack) */
-  workspaceAccessPointId?: string;
+  /** Security group for EFS access (from SecurityStack) */
+  efsSecurityGroup?: ec2.ISecurityGroup;
   /** Number of warm pool tasks to keep pre-started (default: 2) */
   warmPoolSize?: number;
 }
@@ -141,6 +139,42 @@ export class SandboxStack extends cdk.Stack {
     // to avoid cyclic cross-stack dependency between SecurityStack and SandboxStack
 
     // ========================================
+    // Workspace EFS (per-conversation persistence)
+    // ========================================
+    // Shared by all Fargate sandbox tasks. Each task mounts EFS at /mnt/efs and
+    // creates /mnt/efs/<CONVERSATION_ID>/ → symlinked to /workspace in the entrypoint.
+    const workspaceEfsSg = new ec2.SecurityGroup(this, 'WorkspaceEfsSg', {
+      vpc,
+      description: 'Security group for sandbox workspace EFS',
+      allowAllOutbound: false,
+    });
+    // Allow NFS from sandbox tasks
+    workspaceEfsSg.addIngressRule(
+      sandboxTaskSg,
+      ec2.Port.tcp(2049),
+      'Allow NFS from sandbox Fargate tasks'
+    );
+
+    const workspaceFileSystem = new efs.FileSystem(this, 'WorkspaceEfs', {
+      vpc,
+      vpcSubnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }),
+      securityGroup: workspaceEfsSg,
+      encrypted: true,
+      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
+      throughputMode: efs.ThroughputMode.BURSTING,
+      lifecyclePolicy: efs.LifecyclePolicy.AFTER_14_DAYS,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    cdk.Tags.of(workspaceFileSystem).add('Component', 'sandbox-workspace');
+
+    const workspaceAccessPoint = new efs.AccessPoint(this, 'WorkspaceAccessPoint', {
+      fileSystem: workspaceFileSystem,
+      path: '/sandbox-workspace',
+      posixUser: { uid: '1000', gid: '1000' },  // openhands user
+      createAcl: { ownerUid: '1000', ownerGid: '1000', permissions: '0755' },
+    });
+
+    // ========================================
     // Sandbox Task IAM Roles
     // ========================================
 
@@ -168,21 +202,18 @@ export class SandboxStack extends cdk.Stack {
     });
 
     // EFS access for workspace persistence
-    if (props.workspaceFileSystemId) {
-      sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
-        sid: 'EfsWorkspaceAccess',
-        effect: iam.Effect.ALLOW,
-        actions: [
-          'elasticfilesystem:ClientMount',
-          'elasticfilesystem:ClientWrite',
-          'elasticfilesystem:ClientRootAccess',
-        ],
-        resources: ['*'],
-        conditions: {
-          Bool: { 'elasticfilesystem:AccessedViaMountTarget': 'true' },
-        },
-      }));
-    }
+    sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'EfsWorkspaceAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'elasticfilesystem:ClientMount',
+        'elasticfilesystem:ClientWrite',
+      ],
+      resources: [workspaceFileSystem.fileSystemArn],
+      conditions: {
+        Bool: { 'elasticfilesystem:AccessedViaMountTarget': 'true' },
+      },
+    }));
 
     // AWS permissions for sandbox containers (gated by sandboxAwsAccess context flag)
     if (props.sandboxAwsAccess) {
@@ -241,21 +272,18 @@ export class SandboxStack extends cdk.Stack {
       taskRole: sandboxTaskRole,
     });
 
-    // Mount EFS workspace volume for persistent storage across conversation resume
-    // Shares the same EFS as the EC2 host — sandbox tasks can access previous workspace files
-    if (props.workspaceFileSystemId && props.workspaceAccessPointId) {
-      sandboxTaskDefinition.addVolume({
-        name: 'workspace',
-        efsVolumeConfiguration: {
-          fileSystemId: props.workspaceFileSystemId,
-          transitEncryption: 'ENABLED',
-          authorizationConfig: {
-            accessPointId: props.workspaceAccessPointId,
-            iam: 'ENABLED',
-          },
+    // EFS volume for per-conversation workspace persistence across task restarts
+    sandboxTaskDefinition.addVolume({
+      name: 'workspace',
+      efsVolumeConfiguration: {
+        fileSystemId: workspaceFileSystem.fileSystemId,
+        transitEncryption: 'ENABLED',
+        authorizationConfig: {
+          accessPointId: workspaceAccessPoint.accessPointId,
+          iam: 'ENABLED',
         },
-      });
-    }
+      },
+    });
 
     // Agent-server container (main sandbox container)
     const agentServerContainer = sandboxTaskDefinition.addContainer('agent-server', {
@@ -274,11 +302,12 @@ export class SandboxStack extends cdk.Stack {
       entryPoint: ['/bin/sh', '-c'],
       command: [
         // Sanitize CONVERSATION_ID to alphanumeric/hyphen only (defense-in-depth against injection)
+        // Per-conversation workspace: if EFS is mounted at /mnt/efs and CONVERSATION_ID is set,
+        // create a per-conversation subdirectory on EFS and replace /workspace with a symlink.
+        // If EFS not mounted (no workspaceFileSystemId), use /workspace directly.
         'CID=$(echo "$CONVERSATION_ID" | tr -cd "a-zA-Z0-9-");' +
-        'if [ -n "$CID" ]; then ' +
+        'if [ -n "$CID" ] && mountpoint -q /mnt/efs 2>/dev/null; then ' +
           'mkdir -p /mnt/efs/$CID/project;' +
-          // Remove existing /workspace (directory from base image) before symlinking,
-          // otherwise ln creates /workspace/<CID> inside the directory instead of replacing it
           'rm -rf /workspace;' +
           'ln -s /mnt/efs/$CID /workspace;' +
         'else ' +
@@ -314,15 +343,12 @@ export class SandboxStack extends cdk.Stack {
       },
     });
 
-    // Mount EFS at /mnt/efs (not /workspace directly) so the entrypoint can
-    // create per-conversation subdirectories: /mnt/efs/<CONVERSATION_ID> → /workspace
-    if (props.workspaceFileSystemId) {
-      agentServerContainer.addMountPoints({
-        sourceVolume: 'workspace',
-        containerPath: '/mnt/efs',
-        readOnly: false,
-      });
-    }
+    // Mount EFS at /mnt/efs — entrypoint creates /mnt/efs/<CONVERSATION_ID>/ → /workspace
+    agentServerContainer.addMountPoints({
+      sourceVolume: 'workspace',
+      containerPath: '/mnt/efs',
+      readOnly: false,
+    });
 
     // ========================================
     // Warm Pool ECS Service (disabled — desiredCount=0)
