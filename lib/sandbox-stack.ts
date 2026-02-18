@@ -302,14 +302,15 @@ export class SandboxStack extends cdk.Stack {
       entryPoint: ['/bin/sh', '-c'],
       command: [
         // Sanitize CONVERSATION_ID to alphanumeric/hyphen only (defense-in-depth against injection)
-        // Per-conversation workspace: if EFS is mounted at /mnt/efs and CONVERSATION_ID is set,
-        // create a per-conversation subdirectory on EFS and replace /workspace with a symlink.
-        // If EFS not mounted (no workspaceFileSystemId), use /workspace directly.
+        // Per-conversation workspace isolation:
+        // - /workspace is owned by openhands user (can't be removed from root /)
+        // - Redirect /workspace/project → /mnt/efs/<CID>/project (agent code persists on EFS)
+        // - /workspace itself stays as regular dir (git metadata is ephemeral, OK)
         'CID=$(echo "$CONVERSATION_ID" | tr -cd "a-zA-Z0-9-");' +
         'if [ -n "$CID" ] && mountpoint -q /mnt/efs 2>/dev/null; then ' +
           'mkdir -p /mnt/efs/$CID/project;' +
-          'rm -rf /workspace;' +
-          'ln -s /mnt/efs/$CID /workspace;' +
+          'rm -rf /workspace/project;' +
+          'ln -s /mnt/efs/$CID/project /workspace/project;' +
         'else ' +
           'mkdir -p /workspace/project;' +
         'fi;' +
