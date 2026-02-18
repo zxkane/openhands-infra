@@ -19,6 +19,9 @@ Step 2: IMPLEMENT CHANGES
   - Write code
   - Write new unit tests for new functionality
   - Update existing tests if behavior changed
+  - **For bug fixes**: MUST add a regression test (unit test or E2E check)
+    that would have caught the bug. This prevents the same bug from
+    recurring. Update E2E_TEST_CASES.md acceptance criteria if applicable.
   - Write/update E2E test cases if needed
        ↓
 Step 3: LOCAL VERIFICATION

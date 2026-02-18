@@ -373,7 +373,25 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 | 4 | Git Changes API returns 200 | `GET /runtime/{convId}/8000/api/git/changes/` returns 200 (not 500) |
 | 5 | Workspace is a git repo | No "Not a git repository" error |
 | 6 | File creation visible in Changes | After agent creates a file, Changes API shows it |
-| 7 | No console errors | No error-level console messages |
+| 7 | No conversation ID in file tree | Changes panel must NOT show conversation ID as a file/directory name |
+| 8 | No console errors | No error-level console messages |
+
+### Workspace Verification (TC-005 step 5.5)
+
+After the sandbox is ready, verify the Changes panel does not contain the conversation ID:
+
+```javascript
+mcp__chrome-devtools__evaluate_script({
+  function: `async () => {
+    await new Promise(r => setTimeout(r, 5000));
+    const main = document.querySelector('main');
+    const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+    const text = main ? main.textContent : '';
+    return { hasConvIdFile: text.includes(convId), convId };
+  }`
+})
+// Expected: { hasConvIdFile: false, convId: "<uuid>" }
+```
 
 ### Timeout Configuration
 
