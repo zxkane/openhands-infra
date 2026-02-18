@@ -277,7 +277,10 @@ export class SandboxStack extends cdk.Stack {
         'CID=$(echo "$CONVERSATION_ID" | tr -cd "a-zA-Z0-9-");' +
         'if [ -n "$CID" ]; then ' +
           'mkdir -p /mnt/efs/$CID/project;' +
-          'ln -sfn /mnt/efs/$CID /workspace;' +
+          // Remove existing /workspace (directory from base image) before symlinking,
+          // otherwise ln creates /workspace/<CID> inside the directory instead of replacing it
+          'rm -rf /workspace;' +
+          'ln -s /mnt/efs/$CID /workspace;' +
         'else ' +
           'mkdir -p /workspace/project;' +
         'fi;' +
