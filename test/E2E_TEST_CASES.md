@@ -1156,7 +1156,13 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
 2. Record the conversation id (`convId`)
    - Use the URL, runtime URL, or conversation list item id to capture `<convId>` for the next steps
 
-3. Find the current ASG instance and terminate it (forces replacement)
+3. Find the current ASG instance and terminate it via AWS API (forces replacement)
+
+   > **Tip for automated E2E testing**: EC2 termination can be performed entirely via
+   > AWS CLI/API without SSH access. Use `aws autoscaling terminate-instance-in-auto-scaling-group`
+   > to trigger replacement, then poll the ALB target health until `healthy`. This enables
+   > fully automated EC2 replacement testing from CI/CD or Claude Code sessions.
+
    ```bash
    ASG_NAME=$(aws cloudformation describe-stacks \
      --stack-name OpenHands-Compute \
@@ -1177,10 +1183,30 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
    ```
 
 4. Wait for the replacement instance to become healthy
+
+   Option A: Use ASG waiter (blocks until InService)
    ```bash
    aws autoscaling wait group-in-service \
      --auto-scaling-group-names "$ASG_NAME" \
      --region $DEPLOY_REGION
+   ```
+
+   Option B: Poll ALB target health (more reliable for E2E — confirms app is serving)
+   ```bash
+   TG_ARN=$(aws elbv2 describe-target-groups \
+     --load-balancer-arn "<alb-arn>" \
+     --region $DEPLOY_REGION \
+     --query 'TargetGroups[?Port==`3000`].TargetGroupArn' --output text)
+
+   for i in $(seq 1 60); do
+     STATUS=$(aws elbv2 describe-target-health \
+       --target-group-arn "$TG_ARN" \
+       --region $DEPLOY_REGION \
+       --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text)
+     echo "[$i/60] $STATUS"
+     [ "$STATUS" = "healthy" ] && break
+     sleep 15
+   done
    ```
 
 5. Navigate to home page and click on the archived conversation
