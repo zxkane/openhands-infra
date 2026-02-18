@@ -23,6 +23,9 @@
     "ts-jest": "^29.4.0",
     "typescript": "~5.9.3"
   },
+  "overrides": {
+    "fast-xml-parser": "5.3.6"
+  },
   "jest": {
     "extensionsToTreatAsEsm": [".ts"],
     "transform": {
