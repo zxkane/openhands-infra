@@ -511,11 +511,11 @@ export class ComputeStack extends cdk.Stack {
       '      - SANDBOX_API_KEY=local',  // Required by RemoteSandboxServiceInjector
       '      - SANDBOX_START_TIMEOUT=300',  // Fargate tasks take ~90s to start (vs 5s Docker)
       // Environment variables injected into sandbox containers at startup
-      // When sandboxAwsAccess is enabled, include AWS_SHARED_CREDENTIALS_FILE to use scoped credentials
       // OH_SECRET_KEY enables secret persistence across sandbox restarts (required for conversation resume)
-      sandboxAwsAccess && sandboxRoleArn
-        ? '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}'
-        : '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}',
+      // NOTE: AWS_SHARED_CREDENTIALS_FILE is NOT set for Fargate sandboxes — the ECS task role
+      // provides credentials natively via the ECS credential provider. Setting it would override
+      // the default provider and point to a non-existent file.
+      '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}',
       // DB_* env vars enable PostgreSQL mode in OpenHands V1 (DbSessionInjector checks DB_HOST)
       // DB_SSL=require is essential for Aurora IAM auth (asyncpg requires explicit SSL)
       // Use RDS Proxy endpoint for automatic IAM token management and connection pooling

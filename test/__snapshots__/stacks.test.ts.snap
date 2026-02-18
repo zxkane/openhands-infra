@@ -1352,7 +1352,7 @@ services:
       - SANDBOX_REMOTE_RUNTIME_API_URL=http://orchestrator.openhands.local:8081
       - SANDBOX_API_KEY=local
       - SANDBOX_START_TIMEOUT=300
-      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
+      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}
       - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
       - DB_PORT=5432
       - DB_NAME=openhands
