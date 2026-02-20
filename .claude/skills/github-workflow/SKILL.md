@@ -59,6 +59,7 @@ Step 8: DEPLOY TO STAGING
        ↓
 Step 9: EXECUTE E2E TESTS (MANDATORY)
   - Use test/select-e2e-tests.sh to determine required tests
+  - Use test/select-e2e-tests.sh --all for full test suite
   - Use Chrome DevTools MCP server for browser automation
   - Run tests based on change category (see E2E Test Selection below)
   - If ANY test FAILS → Return to Step 2
