@@ -175,16 +175,21 @@ export class EcsManager {
     return response.taskArns ?? [];
   }
 
-  /** Describe multiple tasks at once. */
+  /** Describe multiple tasks at once (handles AWS 100-item limit). */
   async describeTasks(taskArns: string[]): Promise<EcsTaskDescription[]> {
     if (!taskArns.length) return [];
-    const response = await this.ecs.send(
-      new DescribeTasksCommand({
-        cluster: this.clusterArn,
-        tasks: taskArns,
-      }),
-    );
-    return (response.tasks ?? []) as EcsTaskDescription[];
+    const results: EcsTaskDescription[] = [];
+    for (let i = 0; i < taskArns.length; i += 100) {
+      const batch = taskArns.slice(i, i + 100);
+      const response = await this.ecs.send(
+        new DescribeTasksCommand({
+          cluster: this.clusterArn,
+          tasks: batch,
+        }),
+      );
+      results.push(...((response.tasks ?? []) as EcsTaskDescription[]));
+    }
+    return results;
   }
 
   /** Extract private IP from task's ENI attachment. */
