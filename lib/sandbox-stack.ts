@@ -225,6 +225,7 @@ export class SandboxStack extends cdk.Stack {
     // Loads custom IAM policy from sandbox-aws-policy.json (same policy used by SecurityStack
     // for the STS-assumed sandbox role in Docker-on-EC2 mode)
     if (props.sandboxAwsAccess) {
+      // Load custom allow policy (same as SecurityStack's STS-assumed sandbox role)
       const policyFilePath = props.sandboxAwsPolicyFile || path.join(process.cwd(), 'config', 'sandbox-aws-policy.json');
       if (!fs.existsSync(policyFilePath)) {
         throw new Error(`Sandbox AWS policy file not found: ${policyFilePath}`);
@@ -233,6 +234,23 @@ export class SandboxStack extends cdk.Stack {
       for (const statement of policyDoc.Statement || []) {
         sandboxTaskRole.addToPolicy(iam.PolicyStatement.fromJson(statement));
       }
+
+      // Explicit deny guardrails (ALWAYS applied, cannot be overridden by allow policy)
+      // Mirrors SecurityStack's DenySensitiveOperations for the STS-assumed sandbox role
+      sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'DenySensitiveOperations',
+        effect: iam.Effect.DENY,
+        actions: [
+          'iam:CreateUser', 'iam:DeleteUser',
+          'iam:CreateAccessKey', 'iam:DeleteAccessKey', 'iam:UpdateAccessKey',
+          'iam:AttachUserPolicy', 'iam:DetachUserPolicy', 'iam:PutUserPolicy', 'iam:DeleteUserPolicy',
+          'iam:AttachRolePolicy', 'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy',
+          'iam:CreateRole', 'iam:DeleteRole', 'iam:UpdateAssumeRolePolicy',
+          'organizations:*', 'account:*', 'billing:*',
+          'sts:AssumeRole',
+        ],
+        resources: ['*'],
+      }));
     }
 
     // ========================================
