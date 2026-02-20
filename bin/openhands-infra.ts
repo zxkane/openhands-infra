@@ -229,6 +229,7 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   networkOutput: networkStack.output,
   monitoringOutput: monitoringStack.output,
   sandboxAwsAccess,
+  sandboxAwsPolicyFile,
   warmPoolSize,
   idleTimeoutMinutes,
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',

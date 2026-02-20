@@ -15,6 +15,7 @@ import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
+import * as fs from 'fs';
 import * as path from 'path';
 import {
   OpenHandsConfig,
@@ -29,8 +30,10 @@ export interface SandboxStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   networkOutput: NetworkStackOutput;
   monitoringOutput: MonitoringStackOutput;
-  /** Enable sandbox AWS access — Bedrock and S3 permissions on task role */
+  /** Enable sandbox AWS access — custom IAM policy on task role */
   sandboxAwsAccess?: boolean;
+  /** Path to custom policy JSON file for sandbox AWS access (default: config/sandbox-aws-policy.json) */
+  sandboxAwsPolicyFile?: string;
   /** Security group for EFS access (from SecurityStack) */
   efsSecurityGroup?: ec2.ISecurityGroup;
   /** Number of warm pool tasks to keep pre-started (default: 2) */
@@ -219,36 +222,17 @@ export class SandboxStack extends cdk.Stack {
     }));
 
     // AWS permissions for sandbox containers (gated by sandboxAwsAccess context flag)
+    // Loads custom IAM policy from sandbox-aws-policy.json (same policy used by SecurityStack
+    // for the STS-assumed sandbox role in Docker-on-EC2 mode)
     if (props.sandboxAwsAccess) {
-      sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
-        sid: 'BedrockAccess',
-        effect: iam.Effect.ALLOW,
-        actions: [
-          'bedrock:InvokeModel',
-          'bedrock:InvokeModelWithResponseStream',
-        ],
-        resources: [
-          'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-          'arn:aws:bedrock:*::foundation-model/us.anthropic.claude-*',
-          `arn:aws:bedrock:${config.region}:${this.account}:inference-profile/*anthropic.claude*`,
-          `arn:aws:bedrock:*:${this.account}:inference-profile/global.anthropic.claude*`,
-        ],
-      }));
-
-      sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
-        sid: 'S3DataBucketAccess',
-        effect: iam.Effect.ALLOW,
-        actions: [
-          's3:GetObject',
-          's3:PutObject',
-          's3:DeleteObject',
-          's3:ListBucket',
-        ],
-        resources: [
-          monitoringOutput.dataBucket.bucketArn,
-          `${monitoringOutput.dataBucket.bucketArn}/*`,
-        ],
-      }));
+      const policyFilePath = props.sandboxAwsPolicyFile || path.join(process.cwd(), 'config', 'sandbox-aws-policy.json');
+      if (!fs.existsSync(policyFilePath)) {
+        throw new Error(`Sandbox AWS policy file not found: ${policyFilePath}`);
+      }
+      const policyDoc = JSON.parse(fs.readFileSync(policyFilePath, 'utf-8'));
+      for (const statement of policyDoc.Statement || []) {
+        sandboxTaskRole.addToPolicy(iam.PolicyStatement.fromJson(statement));
+      }
     }
 
     // ========================================
