@@ -6,6 +6,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaNode from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -517,14 +518,15 @@ export class SandboxStack extends cdk.Stack {
     // ========================================
     // Idle Monitor Lambda
     // ========================================
-    const idleMonitorLambda = new lambda.Function(this, 'IdleMonitorLambda', {
+    const idleMonitorLambda = new lambdaNode.NodejsFunction(this, 'IdleMonitorLambda', {
       functionName: 'openhands-sandbox-idle-monitor',
       runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'sandbox-monitor')),
+      entry: path.join(__dirname, '..', 'lambda', 'sandbox-monitor', 'index.ts'),
+      handler: 'handler',
       timeout: cdk.Duration.minutes(2),
       memorySize: 256,
       architecture: lambda.Architecture.ARM_64,
+      bundling: { minify: true, sourceMap: true },
       environment: {
         REGISTRY_TABLE_NAME: registryTable.tableName,
         ECS_CLUSTER_ARN: cluster.clusterArn,
@@ -575,14 +577,15 @@ export class SandboxStack extends cdk.Stack {
     // When an ECS task stops (crash, OOM, idle timeout), EventBridge fires an event.
     // This Lambda updates DynamoDB immediately so the orchestrator returns accurate
     // status — preventing the upstream OpenHands app from connecting to dead task IPs.
-    const taskStateHandler = new lambda.Function(this, 'TaskStateHandler', {
+    const taskStateHandler = new lambdaNode.NodejsFunction(this, 'TaskStateHandler', {
       functionName: 'openhands-sandbox-task-state',
       runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'sandbox-task-state')),
+      entry: path.join(__dirname, '..', 'lambda', 'sandbox-task-state', 'index.ts'),
+      handler: 'handler',
       timeout: cdk.Duration.seconds(30),
       memorySize: 128,
       architecture: lambda.Architecture.ARM_64,
+      bundling: { minify: true, sourceMap: true },
       environment: {
         REGISTRY_TABLE_NAME: registryTable.tableName,
         AWS_REGION_NAME: config.region,
