@@ -19,7 +19,7 @@ This document covers the Docker container configuration, OpenResty proxy, and pa
 | `patched/auth_user_context.py` | Patched webhook auth for Docker internal network |
 | `openresty/Dockerfile` | OpenResty proxy container |
 | `openresty/nginx.conf` | Nginx configuration with Lua |
-| `openresty/docker_discovery.lua` | Container discovery via Docker API |
+| `openresty/sandbox_discovery.lua` | Container discovery via Docker API |
 | `agent-server-custom/Dockerfile` | Custom agent-server with boto3 |
 | `agent-server-custom/apply-sdk-patches.py` | Build-time SDK patches |
 
@@ -142,7 +142,7 @@ Browser → CloudFront → Lambda@Edge (JWT verify) → ALB → OpenResty (verif
 The Lua script queries Docker API to find containers:
 
 ```lua
--- docker_discovery.lua
+-- sandbox_discovery.lua
 function _M.find_container(cid, tp)
   -- 1. Connect to Docker socket: /var/run/docker.sock
   -- 2. GET /containers/json?filters={"label":["conversation_id={cid}"]}
