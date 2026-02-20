@@ -219,6 +219,9 @@ userConfigStack.addDependency(securityStack);
 //      Provides per-conversation sandbox tasks on Fargate with DynamoDB registry
 //      Replaces Docker-socket-based sandbox creation with RUNTIME=remote
 const warmPoolSize = parseInt(app.node.tryGetContext('warmPoolSize') || '2', 10);
+// Idle timeout: staging=10min (faster testing), production=30min (default)
+const idleTimeoutDefault = config.domainName.startsWith('test.') ? 10 : 30;
+const idleTimeoutMinutes = parseInt(app.node.tryGetContext('idleTimeoutMinutes') || String(idleTimeoutDefault), 10);
 
 const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   env: mainEnv,
@@ -227,6 +230,7 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   monitoringOutput: monitoringStack.output,
   sandboxAwsAccess,
   warmPoolSize,
+  idleTimeoutMinutes,
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
   crossRegionReferences: true,
 });

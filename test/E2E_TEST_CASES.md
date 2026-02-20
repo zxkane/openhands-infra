@@ -2901,3 +2901,92 @@ The bug is fixed by Patch 8 in `docker/patch-fix.js` (temporary React fiber fix)
 # Reset viewport to desktop in Chrome DevTools
 # No infrastructure cleanup needed
 ```
+
+---
+
+## TC-024: Verify Sandbox Idle Timeout
+
+### Description
+Verify that sandbox Fargate tasks are automatically stopped after the configured idle timeout (staging: 10 minutes, production: 30 minutes). This tests the idle monitor Lambda, EventBridge schedule, and task-state Lambda event-driven cleanup.
+
+### Prerequisites
+- Infrastructure deployed with sandbox orchestrator
+- Idle monitor Lambda deployed and working (check `/aws/lambda/openhands-sandbox-idle-monitor` logs)
+- At least one conversation sandbox running
+
+### Steps
+
+1. Start a new conversation and verify sandbox is running
+   ```javascript
+   // Create new conversation (TC-005)
+   // Verify "Waiting for task" status
+   ```
+
+2. Record the conversation ID and check DynamoDB status
+   ```bash
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key '{"conversation_id":{"S":"<conv-id>"}}' \
+     --region $DEPLOY_REGION \
+     --query 'Item.{status:status.S,task_arn:task_arn.S,last_activity:last_activity_at.N}'
+   # Expected: status=RUNNING
+   ```
+
+3. Wait for idle timeout to elapse (staging: 10min, production: 30min)
+   - Do NOT interact with the conversation during this period
+   - The idle monitor Lambda runs every 5 minutes
+
+4. Verify the sandbox was stopped
+   ```bash
+   # Check DynamoDB - should be PAUSED (stopped by idle monitor)
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key '{"conversation_id":{"S":"<conv-id>"}}' \
+     --region $DEPLOY_REGION \
+     --query 'Item.status.S'
+   # Expected: PAUSED
+
+   # Check ECS task - should be STOPPED
+   aws ecs describe-tasks \
+     --cluster <cluster> \
+     --tasks <task-arn> \
+     --region $DEPLOY_REGION \
+     --query 'tasks[0].lastStatus'
+   # Expected: STOPPED
+   ```
+
+5. Verify idle monitor Lambda logs
+   ```bash
+   aws logs filter-log-events \
+     --log-group-name /aws/lambda/openhands-sandbox-idle-monitor \
+     --start-time $(($(date +%s) - 900))000 \
+     --region $DEPLOY_REGION \
+     --query 'events[*].message' | grep -i "stopping\|idle"
+   ```
+
+6. Verify task-state Lambda processed the stop event
+   ```bash
+   aws logs filter-log-events \
+     --log-group-name /aws/lambda/openhands-sandbox-task-state \
+     --start-time $(($(date +%s) - 900))000 \
+     --region $DEPLOY_REGION \
+     --query 'events[*].message' | grep "<conv-id>"
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Sandbox created and running | DynamoDB status=RUNNING |
+| 2 | Idle monitor Lambda functional | No errors in Lambda logs |
+| 3 | Sandbox stopped after timeout | DynamoDB status=PAUSED after idle period |
+| 4 | ECS task stopped | `lastStatus=STOPPED` in ECS |
+| 5 | Task-state Lambda triggered | EventBridge → Lambda → DynamoDB update logged |
+| 6 | Configurable timeout | staging=10min, production=30min (via `idleTimeoutMinutes` context) |
+
+### Configuration
+
+| Environment | Idle Timeout | Override |
+|-------------|-------------|----------|
+| Staging (`test.*`) | 10 minutes | `--context idleTimeoutMinutes=<N>` |
+| Production | 30 minutes | `--context idleTimeoutMinutes=<N>` |

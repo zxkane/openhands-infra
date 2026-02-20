@@ -834,6 +834,48 @@ describe('OpenHands Infrastructure Stacks', () => {
       expect(stack.output.orchestratorApiUrl).toBeDefined();
       expect(stack.output.orchestratorDnsName).toContain('openhands.local');
     });
+
+    test('idle timeout is configurable', () => {
+      const stack = new SandboxStack(app, 'TestSandboxCustomTimeout', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        idleTimeoutMinutes: 10,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify idle monitor Lambda has custom timeout
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: 'openhands-sandbox-idle-monitor',
+        Environment: {
+          Variables: Match.objectLike({
+            IDLE_TIMEOUT_MINUTES: '10',
+          }),
+        },
+      });
+    });
+
+    test('idle timeout defaults to 30 minutes', () => {
+      const stack = new SandboxStack(app, 'TestSandboxDefaultTimeout', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: 'openhands-sandbox-idle-monitor',
+        Environment: {
+          Variables: Match.objectLike({
+            IDLE_TIMEOUT_MINUTES: '30',
+          }),
+        },
+      });
+    });
   });
 
   describe('Stack Integration', () => {

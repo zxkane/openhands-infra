@@ -35,6 +35,8 @@ export interface SandboxStackProps extends cdk.StackProps {
   efsSecurityGroup?: ec2.ISecurityGroup;
   /** Number of warm pool tasks to keep pre-started (default: 2) */
   warmPoolSize?: number;
+  /** Idle timeout in minutes before sandbox is stopped (default: 30) */
+  idleTimeoutMinutes?: number;
 }
 
 /**
@@ -530,7 +532,7 @@ export class SandboxStack extends cdk.Stack {
       environment: {
         REGISTRY_TABLE_NAME: registryTable.tableName,
         ECS_CLUSTER_ARN: cluster.clusterArn,
-        IDLE_TIMEOUT_MINUTES: '30',
+        IDLE_TIMEOUT_MINUTES: String(props.idleTimeoutMinutes ?? 30),
         AWS_REGION_NAME: config.region,
         LOG_LEVEL: 'INFO',
         POWERTOOLS_SERVICE_NAME: 'sandbox-idle-monitor',
