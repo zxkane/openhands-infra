@@ -1299,7 +1299,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9a25ecb533b709046332e7a46cc7db0df4cf376e195428b0bcd37c39798b7641",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:46d8f97d9c28eba13ee4536a068d246d725982afb123323fdbb42d4a60082ed7",
                   },
                   "
     container_name: openhands-app
@@ -1465,7 +1465,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9a25ecb533b709046332e7a46cc7db0df4cf376e195428b0bcd37c39798b7641",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:46d8f97d9c28eba13ee4536a068d246d725982afb123323fdbb42d4a60082ed7",
                   },
                   ""
 pull_with_retry "",

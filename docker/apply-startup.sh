@@ -214,6 +214,18 @@ else
   echo "Patch 27a: DATABASE_URL not set, skipping database migration (will happen at runtime)"
 fi
 
+# ─── Patch 30: Fix resume start_sandbox user_id parameter ────────────────────
+# The fork patch in app_conversation_router.py passes user_id= to start_sandbox(),
+# but RemoteSandboxService.start_sandbox() doesn't accept it (only sandbox_id=).
+# Remove the user_id kwarg — RemoteSandboxService gets user_id internally via UserContext.
+ROUTER_FILE="/app/openhands/app_server/app_conversation/app_conversation_router.py"
+if [ -f "$ROUTER_FILE" ] && grep -q 'start_sandbox.*user_id=' "$ROUTER_FILE"; then
+  sed -i '/start_sandbox/,/)/s/user_id=user_id,//' "$ROUTER_FILE"
+  echo "Patch 30: Removed user_id parameter from start_sandbox() call in resume flow"
+else
+  echo "Patch 30: No user_id parameter found in start_sandbox() (already clean)"
+fi
+
 # ─── Verify security-critical fork patches ───────────────────────────────────
 # These patches are applied at build time via download-fork-patches.sh.
 # Verify that the downloaded files actually contain the expected changes.
