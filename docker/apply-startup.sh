@@ -219,8 +219,9 @@ fi
 # but RemoteSandboxService.start_sandbox() doesn't accept it (only sandbox_id=).
 # Remove the user_id kwarg — RemoteSandboxService gets user_id internally via UserContext.
 ROUTER_FILE="/app/openhands/app_server/app_conversation/app_conversation_router.py"
-if [ -f "$ROUTER_FILE" ] && grep -q 'start_sandbox.*user_id=' "$ROUTER_FILE"; then
-  sed -i '/start_sandbox/,/)/s/user_id=user_id,//' "$ROUTER_FILE"
+if [ -f "$ROUTER_FILE" ] && grep -q 'user_id=user_id' "$ROUTER_FILE"; then
+  # Remove lines containing 'user_id=user_id,' within start_sandbox() calls
+  sed -i '/user_id=user_id,/d' "$ROUTER_FILE"
   echo "Patch 30: Removed user_id parameter from start_sandbox() call in resume flow"
 else
   echo "Patch 30: No user_id parameter found in start_sandbox() (already clean)"
