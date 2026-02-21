@@ -268,9 +268,12 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
   if (!record) {
     return reply.code(404).send({ detail: 'Sandbox not found' });
   }
-  if (record.status === 'RUNNING') {
+  if (record.status === 'RUNNING' || record.status === 'STARTING') {
     return recordToRuntime(record);
   }
+
+  // Immediately mark as STARTING to prevent concurrent resume requests from creating duplicate tasks
+  await store.updateStatus(record.conversation_id, 'STARTING');
 
   const sandboxImage = record.sandbox_spec_id || config.sandboxImage;
   const sessionApiKey = record.session_api_key || randomUUID();
