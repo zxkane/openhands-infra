@@ -338,6 +338,19 @@ app.get<{ Params: { session_id: string } }>(
   },
 );
 
+// /runtime/:id — alias for /sessions/:id (used by upstream RemoteSandboxService for VS Code URL)
+app.get<{ Params: { id: string } }>(
+  '/runtime/:id',
+  async (request, reply) => {
+    const record = await store.getSandbox(request.params.id);
+    if (!record) {
+      return reply.code(404).send({ detail: 'Sandbox not found' });
+    }
+    const verified = await verifyRunningRecords([record]);
+    return recordToRuntime(verified[0] ?? record);
+  },
+);
+
 app.get('/list', async () => {
   const records = await store.listRunning();
   return { runtimes: records.map(recordToRuntime) };
