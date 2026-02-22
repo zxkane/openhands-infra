@@ -374,7 +374,25 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 | 5 | Workspace is a git repo | No "Not a git repository" error |
 | 6 | File creation visible in Changes | After agent creates a file, Changes API shows it |
 | 7 | No conversation ID in file tree | Changes panel must NOT show conversation ID as a file/directory name |
-| 8 | No console errors | No error-level console messages |
+| 8 | Code tab loads without errors | VS Code URL API returns 200, no "Error parsing URL" |
+| 9 | No console errors | No error-level console messages |
+
+### VS Code URL Verification (TC-005 step 5.6)
+
+After the sandbox is ready, verify the VS Code URL API works:
+
+```javascript
+mcp__chrome-devtools__evaluate_script({
+  function: `async () => {
+    const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+    const r = await fetch('/api/conversations/' + convId + '/vscode-url');
+    const data = await r.json();
+    return { status: r.status, hasUrl: !!data.vscode_url, url: data.vscode_url?.substring(0, 50) };
+  }`
+})
+// Expected: { status: 200, hasUrl: true, url: "https://..." }
+// If status: 500 → /runtime/:id endpoint missing from orchestrator
+```
 
 ### Workspace Verification (TC-005 step 5.5)
 
