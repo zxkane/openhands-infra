@@ -59,10 +59,14 @@ NEW = '''    try:
             # action_execution_server_url points to the sandbox IP:port
             # (same host as agent-server, which has /api/vscode/url)
             base_url = getattr(runtime, 'action_execution_server_url', None)
-            logger.info(f'Patch 31: base_url={base_url}')
+            api_key = getattr(runtime, 'session_api_key', None)
+            logger.info(f'Patch 31: base_url={base_url} has_key={bool(api_key)}')
             if base_url:
+                headers = {}
+                if api_key:
+                    headers['X-Session-API-Key'] = api_key
                 async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(f'{base_url}/api/vscode/url')
+                    resp = await client.get(f'{base_url}/api/vscode/url', headers=headers)
                     if resp.status_code == 200:
                         data = resp.json()
                         vscode_url = data.get('url')
