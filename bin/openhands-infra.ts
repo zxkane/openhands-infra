@@ -210,10 +210,20 @@ userConfigStack.addDependency(monitoringStack);
 userConfigStack.addDependency(securityStack);
 
 // 4.6. Cluster Stack - Shared ECS Cluster and Cloud Map Namespace
+// During migration, pass existing namespace details to avoid ConflictingDomainExists error
+// when SandboxStack still owns the Cloud Map namespace.
+// Usage: --context existingNamespaceArn=arn:... --context existingNamespaceId=ns-... --context existingNamespaceName=openhands.local
+const existingNamespaceArn = getContextString('existingNamespaceArn', undefined);
+const existingNamespaceId = getContextString('existingNamespaceId', undefined);
+const existingNamespaceName = getContextString('existingNamespaceName', undefined);
+
 const clusterStack = new ClusterStack(app, `${prefix}-Cluster`, {
   env: mainEnv,
   config,
   networkOutput: networkStack.output,
+  existingNamespaceArn,
+  existingNamespaceId,
+  existingNamespaceName,
   description: 'OpenHands Cluster Infrastructure - Shared ECS Cluster and Cloud Map',
   crossRegionReferences: true,
 });

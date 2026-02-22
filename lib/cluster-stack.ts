@@ -7,6 +7,21 @@ import { OpenHandsConfig, NetworkStackOutput, ClusterStackOutput } from './inter
 export interface ClusterStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   networkOutput: NetworkStackOutput;
+  /**
+   * Existing Cloud Map namespace ARN to import instead of creating a new one.
+   * Used during migration when the namespace was previously owned by SandboxStack.
+   * Once migration is complete and the old namespace resource is removed from
+   * SandboxStack's CloudFormation template, this can be omitted to create a new one.
+   */
+  existingNamespaceArn?: string;
+  /**
+   * Existing Cloud Map namespace name (required when existingNamespaceArn is provided).
+   */
+  existingNamespaceName?: string;
+  /**
+   * Existing Cloud Map namespace ID (required when existingNamespaceArn is provided).
+   */
+  existingNamespaceId?: string;
 }
 
 /**
@@ -46,11 +61,26 @@ export class ClusterStack extends cdk.Stack {
     // ========================================
     // Cloud Map Private DNS Namespace
     // ========================================
-    const namespace = new servicediscovery.PrivateDnsNamespace(this, 'Namespace', {
-      name: 'openhands.local',
-      vpc,
-      description: 'Private DNS for OpenHands services (app, orchestrator)',
-    });
+    // During migration from SandboxStack-owned namespace, import the existing one.
+    // For fresh deployments, create a new namespace.
+    let namespace: servicediscovery.IPrivateDnsNamespace;
+    let namespaceName: string;
+
+    if (props.existingNamespaceArn && props.existingNamespaceId && props.existingNamespaceName) {
+      namespace = servicediscovery.PrivateDnsNamespace.fromPrivateDnsNamespaceAttributes(this, 'Namespace', {
+        namespaceArn: props.existingNamespaceArn,
+        namespaceId: props.existingNamespaceId,
+        namespaceName: props.existingNamespaceName,
+      });
+      namespaceName = props.existingNamespaceName;
+    } else {
+      namespace = new servicediscovery.PrivateDnsNamespace(this, 'Namespace', {
+        name: 'openhands.local',
+        vpc,
+        description: 'Private DNS for OpenHands services (app, orchestrator)',
+      });
+      namespaceName = 'openhands.local';
+    }
 
     // ========================================
     // Outputs
@@ -60,7 +90,7 @@ export class ClusterStack extends cdk.Stack {
       clusterArn: cluster.clusterArn,
       clusterName: cluster.clusterName,
       namespace,
-      namespaceName: 'openhands.local',
+      namespaceName,
     };
 
     new cdk.CfnOutput(this, 'ClusterArn', {
@@ -74,7 +104,7 @@ export class ClusterStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'NamespaceName', {
-      value: 'openhands.local',
+      value: namespaceName,
       description: 'Cloud Map private DNS namespace',
     });
   }
