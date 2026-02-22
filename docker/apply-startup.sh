@@ -214,18 +214,21 @@ else
   echo "Patch 27a: DATABASE_URL not set, skipping database migration (will happen at runtime)"
 fi
 
+# ─── Patch 30: Fix resume flow for Fargate sandboxes ─────────────────────────
+python3 /opt/patch-resume.py
+
+# ─── Patch 31: Fix VS Code URL for Remote sandbox mode ───────────────────────
+python3 /opt/patch-vscode-url.py
+
+# ─── Patch 32: Fix exposed_urls for Fargate sandbox mode ─────────────────────
+python3 /opt/patch-exposed-urls.py
+
 # ─── Verify security-critical fork patches ───────────────────────────────────
 # These patches are applied at build time via download-fork-patches.sh.
 # Verify that the downloaded files actually contain the expected changes.
 
-SANDBOX_SERVICE_FILE="/app/openhands/app_server/sandbox/docker_sandbox_service.py"
-if [ -f "$SANDBOX_SERVICE_FILE" ]; then
-  if grep -q "'user_id': user_id" "$SANDBOX_SERVICE_FILE"; then
-    echo "Verify: user_id label present in docker_sandbox_service.py"
-  else
-    mark_critical_failure "Patch16-user_id_label-missing-in-fork"
-  fi
-fi
+# Note: Docker-specific user_id label check removed — Fargate sandbox uses
+# RemoteSandboxService which gets user_id from UserContext.get_user_id() internally
 
 APP_CONFIG_FILE="/app/openhands/app_server/config.py"
 if [ -f "$APP_CONFIG_FILE" ]; then

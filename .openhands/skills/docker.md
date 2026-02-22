@@ -69,7 +69,7 @@ This document covers the Docker container configuration, OpenResty proxy, and fr
 | `cognito_file_conversation_store.py` | User-scoped conversation storage |
 | `openresty/Dockerfile` | OpenResty proxy container |
 | `openresty/nginx.conf` | Nginx configuration with Lua |
-| `openresty/docker_discovery.lua` | Container discovery via Docker API |
+| `openresty/sandbox_discovery.lua` | Container discovery via Docker API |
 
 ## Runtime Subdomain Routing
 
@@ -110,7 +110,7 @@ Browser → CloudFront → Lambda@Edge (JWT verify) → ALB → OpenResty (verif
 The Lua script queries Docker API to find containers:
 
 ```lua
--- docker_discovery.lua
+-- sandbox_discovery.lua
 function _M.find_container(cid, tp)
   -- 1. Connect to Docker socket: /var/run/docker.sock
   -- 2. GET /containers/json?filters={"label":["conversation_id={cid}"]}

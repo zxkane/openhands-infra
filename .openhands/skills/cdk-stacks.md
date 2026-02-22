@@ -305,6 +305,6 @@ Runtime requests are authenticated and authorized:
 
 1. **Lambda@Edge** (`lib/edge-stack.ts`): Verifies JWT, injects `X-Cognito-User-Id` header
 2. **OpenResty** (`docker/openresty/nginx.conf`): Checks container's `user_id` label matches header
-3. **Docker Discovery** (`docker/openresty/docker_discovery.lua`): Returns container IP, port, and user_id
+3. **Docker Discovery** (`docker/openresty/sandbox_discovery.lua`): Returns container IP, port, and user_id
 
 **Implementation**: Patch 16 in `docker/patch-fix.js` modifies the OpenHands `DockerRuntime` class to add `user_id` label when creating sandbox containers. Containers without this label allow access (backwards compatibility for existing containers).

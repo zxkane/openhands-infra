@@ -4,9 +4,10 @@
 # Automatically determines which E2E tests to run based on changed files.
 #
 # Usage:
-#   ./test/select-e2e-tests.sh [base_ref]
+#   ./test/select-e2e-tests.sh [--all] [base_ref]
 #
 # Arguments:
+#   --all    - Select ALL test cases (ignore change detection)
 #   base_ref - Git ref to compare against (default: origin/main)
 #
 # Output:
@@ -14,6 +15,12 @@
 #
 
 set -e
+
+RUN_ALL=false
+if [ "$1" = "--all" ]; then
+    RUN_ALL=true
+    shift
+fi
 
 BASE_REF="${1:-origin/main}"
 
@@ -25,6 +32,7 @@ CORE_TESTS=(
     "TC-003:Login via Chrome DevTools"
     "TC-004:Verify Conversation List"
     "TC-005:Start New Conversation"
+    "TC-005a:Load Existing Conversation History"
 )
 
 # Additional tests based on change categories
@@ -50,6 +58,7 @@ EC2_PERSISTENCE_TESTS=(
 
 SANDBOX_AWS_TESTS=(
     "TC-017:Sandbox AWS Access"
+    "TC-024:Sandbox Idle Timeout"
 )
 
 MCP_TESTS=(
@@ -70,6 +79,16 @@ HAS_SANDBOX_AWS_CHANGES=false
 HAS_MCP_CHANGES=false
 HAS_USER_CONFIG_CHANGES=false
 
+# --all flag: select every test category
+if $RUN_ALL; then
+    HAS_AUTH_CHANGES=true
+    HAS_RUNTIME_CHANGES=true
+    HAS_EC2_CHANGES=true
+    HAS_SANDBOX_AWS_CHANGES=true
+    HAS_MCP_CHANGES=true
+    HAS_USER_CONFIG_CHANGES=true
+fi
+
 for file in $CHANGED_FILES; do
     # Auth/Lambda@Edge changes
     if [[ "$file" =~ lib/lambda-edge/ ]] || [[ "$file" =~ edge-stack\.ts ]] || [[ "$file" =~ auth-stack\.ts ]]; then
@@ -86,8 +105,8 @@ for file in $CHANGED_FILES; do
         HAS_EC2_CHANGES=true
     fi
 
-    # Sandbox AWS changes
-    if [[ "$file" =~ security-stack\.ts ]] || [[ "$file" =~ sandbox.*credentials ]] || [[ "$file" =~ sandbox-aws-policy\.json ]]; then
+    # Sandbox AWS changes (task role, credentials, orchestrator)
+    if [[ "$file" =~ security-stack\.ts ]] || [[ "$file" =~ sandbox-stack\.ts ]] || [[ "$file" =~ sandbox.*credentials ]] || [[ "$file" =~ sandbox-aws-policy\.json ]] || [[ "$file" =~ sandbox-orchestrator/ ]]; then
         HAS_SANDBOX_AWS_CHANGES=true
     fi
 

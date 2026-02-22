@@ -322,17 +322,45 @@ Start a new conversation and verify it becomes ready for chatting within accepta
    mcp__chrome-devtools__take_snapshot({})
    ```
 
-5. Click "Changes" panel button to verify git integration
+5. Verify git Changes API returns 200 (workspace must be a git repo)
    ```javascript
-   mcp__chrome-devtools__click({ uid: "<changes-button-uid>" })
-   mcp__chrome-devtools__take_snapshot({})
+   // Call the git changes endpoint via the runtime proxy
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+       const r = await fetch('/runtime/' + convId + '/8000/api/git/changes/');
+       return { status: r.status, ok: r.ok };
+     }`
+   })
+   // Expected: { status: 200, ok: true }
    ```
 
-6. Check network requests for git API
+6. Ask agent to create a file and verify it appears in Changes
    ```javascript
-   mcp__chrome-devtools__list_network_requests({
-     resourceTypes: ["xhr", "fetch"]
+   // Type and submit a prompt to create a file
+   mcp__chrome-devtools__evaluate_script({
+     function: `() => {
+       const el = document.querySelector('[contenteditable], textarea');
+       if (el) { el.focus(); document.execCommand('insertText', false, 'Create a file called hello.txt with content "Hello World"'); }
+       return 'typed';
+     }`
    })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   // Wait for agent to complete
+   mcp__chrome-devtools__wait_for({ text: "Waiting for task", timeout: 60000 })
+   ```
+
+7. Verify the file appears in git changes
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+       const r = await fetch('/runtime/' + convId + '/8000/api/git/changes/');
+       const data = await r.json();
+       return { status: r.status, hasChanges: data.length > 0 };
+     }`
+   })
+   // Expected: { status: 200, hasChanges: true }
    ```
 
 ### Acceptance Criteria
@@ -342,9 +370,72 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 | 1 | Conversation page loads | URL contains `/conversations/<uuid>` |
 | 2 | Chatbox is connected | "What do you want to build?" prompt visible |
 | 3 | Agent is ready | "Waiting for task" status within 3 minutes |
-| 4 | Changes panel loads | No 500 errors on `/api/conversations/.../git/changes` |
-| 5 | Workspace files visible | Changes panel shows workspace files |
-| 6 | No console errors | No error-level console messages |
+| 4 | Git Changes API returns 200 | `GET /runtime/{convId}/8000/api/git/changes/` returns 200 (not 500) |
+| 5 | Workspace is a git repo | No "Not a git repository" error |
+| 6 | File creation visible in Changes | After agent creates a file, Changes API shows it |
+| 7 | No conversation ID in file tree | Changes panel must NOT show conversation ID as a file/directory name |
+| 8 | VS Code opens in new tab | VS Code URL resolves to runtime subdomain, workspace files visible |
+| 9 | No console errors | No error-level console messages |
+
+### VS Code URL Verification (TC-005 step 5.6)
+
+After the sandbox is ready, verify VS Code URL and open in new tab:
+
+```javascript
+// Step 1: Verify VS Code URL API returns localhost:port format
+mcp__chrome-devtools__evaluate_script({
+  function: `async () => {
+    const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+    const r = await fetch('/api/v1/sandboxes?id=' + convId);
+    const data = await r.json();
+    const vscode = data[0]?.exposed_urls?.find(u => u.name === 'VSCODE');
+    return {
+      status: r.status,
+      url: vscode?.url?.substring(0, 60),
+      isLocalhost: vscode?.url?.startsWith('http://localhost:'),
+    };
+  }`
+})
+// Expected: { status: 200, url: "http://localhost:60001/?tkn=...", isLocalhost: true }
+// If url contains VPC IP (172.31.x.x) → Patch 32 not applied
+// If url contains "vscode-" prefix → Patch 32 not applied
+
+// Step 2: Open VS Code in new tab (runtime subdomain)
+// patch-fix.js rewrites localhost:{port} → https://{port}-{convId}.runtime.{domain}/
+mcp__chrome-devtools__evaluate_script({
+  function: `() => {
+    const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+    const host = window.location.host.replace(/^\\d+-[a-f0-9]+\\.runtime\\./, '');
+    const parts = host.split('.');
+    const subdomain = parts[0];
+    const domain = parts.slice(1).join('.');
+    const runtimeUrl = 'https://60001-' + convId + '.runtime.' + subdomain + '.' + domain + '/';
+    return runtimeUrl;
+  }`
+})
+// Use the returned URL to open VS Code in new tab:
+mcp__chrome-devtools__new_page({ url: "<runtime-vscode-url>", timeout: 30000 })
+mcp__chrome-devtools__wait_for({ text: "workspace", timeout: 30000 })
+mcp__chrome-devtools__take_snapshot({})
+// Expected: VS Code editor loads, shows /workspace/project files
+```
+
+### Workspace Verification (TC-005 step 5.5)
+
+After the sandbox is ready, verify the Changes panel does not contain the conversation ID:
+
+```javascript
+mcp__chrome-devtools__evaluate_script({
+  function: `async () => {
+    await new Promise(r => setTimeout(r, 5000));
+    const main = document.querySelector('main');
+    const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+    const text = main ? main.textContent : '';
+    return { hasConvIdFile: text.includes(convId), convId };
+  }`
+})
+// Expected: { hasConvIdFile: false, convId: "<uuid>" }
+```
 
 ### Timeout Configuration
 
@@ -352,7 +443,86 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 |-------|-------------------|
 | Conversation page load | 30 seconds |
 | Agent ready ("Waiting for task") | 3 minutes |
-| Changes panel load | 10 seconds |
+| Changes API response | 10 seconds |
+| Agent file creation | 60 seconds |
+
+---
+
+## TC-005a: Load Existing Conversation and Verify History
+
+### Description
+Navigate to an existing conversation (created in TC-005) and verify that chat history messages are displayed. This catches issues with stale sandbox records, event storage, and conversation resume flow.
+
+### Prerequisites
+- TC-005 completed (at least one conversation with messages exists)
+
+### Steps
+
+1. Navigate to the home page and identify an existing conversation
+   ```javascript
+   mcp__chrome-devtools__navigate_page({ url: "https://<subdomain>.<domain>/", type: "url" })
+   mcp__chrome-devtools__take_snapshot({})
+   // Find a conversation link in "Recent Conversations" section
+   ```
+
+2. Click on the existing conversation
+   ```javascript
+   mcp__chrome-devtools__click({ uid: "<conversation-link-uid>" })
+   ```
+
+3. Wait for conversation page to load and verify history
+   ```javascript
+   // Wait for the page to show the conversation
+   mcp__chrome-devtools__wait_for({
+     text: "<expected-message-text>",  // e.g., text from the original prompt or agent response
+     timeout: 30000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+4. Verify the conversations API responds within acceptable time
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const start = performance.now();
+       const res = await fetch('/api/conversations?limit=10');
+       const elapsed = Math.round(performance.now() - start);
+       return { status: res.status, elapsed_ms: elapsed };
+     }`
+   })
+   // Expected: status 200, elapsed_ms < 5000
+   ```
+
+5. Verify the events API returns conversation history
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+       const res = await fetch('/api/v1/conversation/' + convId + '/events/search?limit=100');
+       const data = await res.json();
+       return { status: res.status, eventCount: Array.isArray(data) ? data.length : data.events?.length ?? 0 };
+     }`
+   })
+   // Expected: status 200, eventCount > 0
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Conversation page loads | URL contains `/conversations/<uuid>` |
+| 2 | Chat history visible | Previous user messages and agent responses displayed |
+| 3 | Conversations API fast | `GET /api/conversations?limit=10` returns 200 in < 5s |
+| 4 | Events API returns history | `GET /api/v1/conversation/{id}/events/search` returns events |
+| 5 | No console errors | No error-level console messages related to sandbox/orchestrator |
+
+### Timeout Configuration
+
+| Stage | Maximum Wait Time |
+|-------|-------------------|
+| Conversation page load | 30 seconds |
+| Conversations API response | 5 seconds |
+| Events API response | 10 seconds |
 
 ---
 
@@ -1048,7 +1218,13 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
 2. Record the conversation id (`convId`)
    - Use the URL, runtime URL, or conversation list item id to capture `<convId>` for the next steps
 
-3. Find the current ASG instance and terminate it (forces replacement)
+3. Find the current ASG instance and terminate it via AWS API (forces replacement)
+
+   > **Tip for automated E2E testing**: EC2 termination can be performed entirely via
+   > AWS CLI/API without SSH access. Use `aws autoscaling terminate-instance-in-auto-scaling-group`
+   > to trigger replacement, then poll the ALB target health until `healthy`. This enables
+   > fully automated EC2 replacement testing from CI/CD or Claude Code sessions.
+
    ```bash
    ASG_NAME=$(aws cloudformation describe-stacks \
      --stack-name OpenHands-Compute \
@@ -1069,10 +1245,30 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
    ```
 
 4. Wait for the replacement instance to become healthy
+
+   Option A: Use ASG waiter (blocks until InService)
    ```bash
    aws autoscaling wait group-in-service \
      --auto-scaling-group-names "$ASG_NAME" \
      --region $DEPLOY_REGION
+   ```
+
+   Option B: Poll ALB target health (more reliable for E2E — confirms app is serving)
+   ```bash
+   TG_ARN=$(aws elbv2 describe-target-groups \
+     --load-balancer-arn "<alb-arn>" \
+     --region $DEPLOY_REGION \
+     --query 'TargetGroups[?Port==`3000`].TargetGroupArn' --output text)
+
+   for i in $(seq 1 60); do
+     STATUS=$(aws elbv2 describe-target-health \
+       --target-group-arn "$TG_ARN" \
+       --region $DEPLOY_REGION \
+       --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text)
+     echo "[$i/60] $STATUS"
+     [ "$STATUS" = "healthy" ] && break
+     sleep 15
+   done
    ```
 
 5. Navigate to home page and click on the archived conversation
@@ -2749,3 +2945,92 @@ The bug is fixed by Patch 8 in `docker/patch-fix.js` (temporary React fiber fix)
 # Reset viewport to desktop in Chrome DevTools
 # No infrastructure cleanup needed
 ```
+
+---
+
+## TC-024: Verify Sandbox Idle Timeout
+
+### Description
+Verify that sandbox Fargate tasks are automatically stopped after the configured idle timeout (staging: 10 minutes, production: 30 minutes). This tests the idle monitor Lambda, EventBridge schedule, and task-state Lambda event-driven cleanup.
+
+### Prerequisites
+- Infrastructure deployed with sandbox orchestrator
+- Idle monitor Lambda deployed and working (check `/aws/lambda/openhands-sandbox-idle-monitor` logs)
+- At least one conversation sandbox running
+
+### Steps
+
+1. Start a new conversation and verify sandbox is running
+   ```javascript
+   // Create new conversation (TC-005)
+   // Verify "Waiting for task" status
+   ```
+
+2. Record the conversation ID and check DynamoDB status
+   ```bash
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key '{"conversation_id":{"S":"<conv-id>"}}' \
+     --region $DEPLOY_REGION \
+     --query 'Item.{status:status.S,task_arn:task_arn.S,last_activity:last_activity_at.N}'
+   # Expected: status=RUNNING
+   ```
+
+3. Wait for idle timeout to elapse (staging: 10min, production: 30min)
+   - Do NOT interact with the conversation during this period
+   - The idle monitor Lambda runs every 5 minutes
+
+4. Verify the sandbox was stopped
+   ```bash
+   # Check DynamoDB - should be PAUSED (stopped by idle monitor)
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key '{"conversation_id":{"S":"<conv-id>"}}' \
+     --region $DEPLOY_REGION \
+     --query 'Item.status.S'
+   # Expected: PAUSED
+
+   # Check ECS task - should be STOPPED
+   aws ecs describe-tasks \
+     --cluster <cluster> \
+     --tasks <task-arn> \
+     --region $DEPLOY_REGION \
+     --query 'tasks[0].lastStatus'
+   # Expected: STOPPED
+   ```
+
+5. Verify idle monitor Lambda logs
+   ```bash
+   aws logs filter-log-events \
+     --log-group-name /aws/lambda/openhands-sandbox-idle-monitor \
+     --start-time $(($(date +%s) - 900))000 \
+     --region $DEPLOY_REGION \
+     --query 'events[*].message' | grep -i "stopping\|idle"
+   ```
+
+6. Verify task-state Lambda processed the stop event
+   ```bash
+   aws logs filter-log-events \
+     --log-group-name /aws/lambda/openhands-sandbox-task-state \
+     --start-time $(($(date +%s) - 900))000 \
+     --region $DEPLOY_REGION \
+     --query 'events[*].message' | grep "<conv-id>"
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Sandbox created and running | DynamoDB status=RUNNING |
+| 2 | Idle monitor Lambda functional | No errors in Lambda logs |
+| 3 | Sandbox stopped after timeout | DynamoDB status=PAUSED after idle period |
+| 4 | ECS task stopped | `lastStatus=STOPPED` in ECS |
+| 5 | Task-state Lambda triggered | EventBridge → Lambda → DynamoDB update logged |
+| 6 | Configurable timeout | staging=10min, production=30min (via `idleTimeoutMinutes` context) |
+
+### Configuration
+
+| Environment | Idle Timeout | Override |
+|-------------|-------------|----------|
+| Staging (`test.*`) | 10 minutes | `--context idleTimeoutMinutes=<N>` |
+| Production | 30 minutes | `--context idleTimeoutMinutes=<N>` |

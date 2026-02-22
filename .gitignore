@@ -31,3 +31,7 @@ docker/agent-server/software-agent-sdk/
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# Sandbox Orchestrator build artifacts
+services/sandbox-orchestrator/dist/
+services/sandbox-orchestrator/node_modules/

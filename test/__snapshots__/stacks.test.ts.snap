@@ -825,6 +825,24 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
         "Ref": "OpenHandsAsgASG16C624EA",
       },
     },
+    "SandboxClusterArn": {
+      "Value": "arn:aws:ecs:us-west-2:123456789012:cluster/openhands-sandbox",
+    },
+    "SandboxExecutionRoleArn": {
+      "Value": "arn:aws:iam::123456789012:role/mock-execution-role",
+    },
+    "SandboxRegistryTableArn": {
+      "Value": "arn:aws:dynamodb:us-west-2:123456789012:table/openhands-sandbox-registry",
+    },
+    "SandboxRegistryTableName": {
+      "Value": "openhands-sandbox-registry",
+    },
+    "SandboxTaskRoleArn": {
+      "Value": "arn:aws:iam::123456789012:role/mock-task-role",
+    },
+    "SandboxWarmPoolServiceName": {
+      "Value": "openhands-example-com-sandbox-warm-pool",
+    },
     "WorkspaceEfsFileSystemId": {
       "Description": "EFS file system ID for persistent OpenHands workspaces",
       "Value": {
@@ -1223,7 +1241,8 @@ retry() { for i in 1 2 3; do "$@" && return 0; sleep 10; done; return 1; }
 retry dnf install -y docker
 retry dnf install -y amazon-efs-utils
 mkdir -p /etc/docker
-echo '{"default-address-pools":[{"base":"172.17.0.0/12","size":24}],"log-driver":"json-file","log-opts":{"max-size":"100m","max-file":"3"}}' > /etc/docker/daemon.json
+VPC_DNS=$(grep "^nameserver" /etc/resolv.conf | head -1 | awk '{print $2}')
+echo "{\\"dns\\":[\\"$VPC_DNS\\"],\\"default-address-pools\\":[{\\"base\\":\\"172.17.0.0/12\\",\\"size\\":24}],\\"log-driver\\":\\"json-file\\",\\"log-opts\\":{\\"max-size\\":\\"100m\\",\\"max-file\\":\\"3\\"}}" > /etc/docker/daemon.json
 systemctl enable --now docker
 usermod -aG docker ec2-user
 chmod 666 /var/run/docker.sock
@@ -1260,18 +1279,15 @@ services:
   openresty:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:37c6a79b76ecf633887da106303243cb24b25e7e54642c5c9d515a453b98c02a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9fdb39acfa2edffd42dcebbdff5efd0c0cd747e8598634e603b4023f92e37cb1",
                   },
                   "
     container_name: openresty-proxy
     restart: always
     ports:
       - "8080:8080"
-    volumes:
-      # SECURITY: Docker socket access required for container discovery (read-only)
-      # OpenResty queries /containers/json to find sandbox container IPs for routing
-      # Mitigations: mounted :ro, only GET requests, no container modifications
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - ORCHESTRATOR_URL=http://orchestrator.openhands.local:8081
     depends_on:
       - openhands
     logging:
@@ -1283,7 +1299,7 @@ services:
   openhands:
     image: ",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:08614c37d96d0144174119bbaf888c00e3e08bbc104031ea008e37116a8a8667",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:df4eb244ca0b6b853ad60399e7bba228a7870d5f4319200eb5ccea93ffe7ded9",
                   },
                   "
     container_name: openhands-app
@@ -1332,7 +1348,11 @@ services:
       - AGENT_SERVER_IMAGE_TAG=cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf
       - AGENT_ENABLE_BROWSING=false
       - AGENT_ENABLE_MCP=true
-      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}
+      - RUNTIME=remote
+      - SANDBOX_REMOTE_RUNTIME_API_URL=http://orchestrator.openhands.local:8081
+      - SANDBOX_API_KEY=local
+      - SANDBOX_START_TIMEOUT=300
+      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}
       - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
       - DB_PORT=5432
       - DB_NAME=openhands
@@ -1352,6 +1372,7 @@ services:
       - /data/openhands/config/database.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
 
   watchtower:
     image: containrrr/watchtower:1.7.1
@@ -1444,12 +1465,12 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:08614c37d96d0144174119bbaf888c00e3e08bbc104031ea008e37116a8a8667",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:df4eb244ca0b6b853ad60399e7bba228a7870d5f4319200eb5ccea93ffe7ded9",
                   },
                   ""
 pull_with_retry "",
                   {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:37c6a79b76ecf633887da106303243cb24b25e7e54642c5c9d515a453b98c02a",
+                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9fdb39acfa2edffd42dcebbdff5efd0c0cd747e8598634e603b4023f92e37cb1",
                   },
                   ""
 pull_with_retry "",
@@ -1464,8 +1485,7 @@ pull_with_retry "",
                   ""
 set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
 systemctl daemon-reload && systemctl enable openhands && systemctl start openhands
-for i in {1..30}; do docker inspect openresty-proxy >/dev/null 2>&1 && break; sleep 2; done
-docker network connect bridge openresty-proxy 2>/dev/null || echo "Already connected to bridge network"
+for i in {1..30}; do docker inspect openhands-app >/dev/null 2>&1 && break; sleep 2; done
 echo "OpenHands setup complete!"",
                 ],
               ],
@@ -1530,6 +1550,19 @@ echo "OpenHands setup complete!"",
       },
       "Type": "AWS::SSM::Parameter",
     },
+    "OrchestratorIngressFromEc2": {
+      "Properties": {
+        "Description": "Allow EC2 to reach sandbox orchestrator Fargate service",
+        "FromPort": 8081,
+        "GroupId": "sg-orchestrator123",
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "ToPort": 8081,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
     "OriginVerifyParam9FCB2131": {
       "Properties": {
         "Description": "Secret header value for CloudFront origin verification",
@@ -1573,6 +1606,19 @@ echo "OpenHands setup complete!"",
         "Value": "1.3-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
+    },
+    "SandboxIngressFromEc2": {
+      "Properties": {
+        "Description": "Allow all TCP from EC2 (OpenResty routes to sandbox ports)",
+        "FromPort": 1,
+        "GroupId": "sg-sandbox123",
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "ToPort": 65535,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
     },
     "SsmUsEast1SecretWriter39004BA6": {
       "DeletionPolicy": "Delete",
@@ -3648,6 +3694,31 @@ exports[`OpenHands Infrastructure Stacks NetworkStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::VPCEndpoint",
     },
+    "DynamoDbEndpointBF7E74F2": {
+      "Properties": {
+        "RouteTableIds": [
+          "rtb-12345p",
+          "rtb-57890p",
+          "rtb-12345s",
+          "rtb-67890s",
+        ],
+        "ServiceName": {
+          "Fn::Join": [
+            "",
+            [
+              "com.amazonaws.",
+              {
+                "Ref": "AWS::Region",
+              },
+              ".dynamodb",
+            ],
+          ],
+        },
+        "VpcEndpointType": "Gateway",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
     "Ec2MessagesEndpoint440704A5": {
       "Properties": {
         "PrivateDnsEnabled": true,
@@ -3702,6 +3773,48 @@ exports[`OpenHands Infrastructure Stacks NetworkStack matches snapshot 1`] = `
           },
         ],
         "ServiceName": "com.amazonaws.us-west-2.ecr.dkr",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "EcsEndpoint39CB6EC2": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ecs",
+        "SubnetIds": [
+          "p-12345",
+          "p-67890",
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "EcsTelemetryEndpoint6E338EB9": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "VpcEndpointSg00AAF2D5",
+              "GroupId",
+            ],
+          },
+        ],
+        "ServiceName": "com.amazonaws.us-west-2.ecs-telemetry",
         "SubnetIds": [
           "p-12345",
           "p-67890",

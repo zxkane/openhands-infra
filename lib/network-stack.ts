@@ -55,6 +55,8 @@ export class NetworkStack extends cdk.Stack {
       { id: 'Ssm', service: ec2.InterfaceVpcEndpointAwsService.SSM },
       { id: 'SsmMessages', service: ec2.InterfaceVpcEndpointAwsService.SSM_MESSAGES },
       { id: 'Ec2Messages', service: ec2.InterfaceVpcEndpointAwsService.EC2_MESSAGES },
+      { id: 'Ecs', service: ec2.InterfaceVpcEndpointAwsService.ECS },
+      { id: 'EcsTelemetry', service: ec2.InterfaceVpcEndpointAwsService.ECS_TELEMETRY },
     ];
 
     for (const endpoint of interfaceEndpoints) {
@@ -73,6 +75,12 @@ export class NetworkStack extends cdk.Stack {
         service: ec2.GatewayVpcEndpointAwsService.S3,
       });
     }
+
+    // DynamoDB Gateway Endpoint (free, used by sandbox registry)
+    new ec2.GatewayVpcEndpoint(this, 'DynamoDbEndpoint', {
+      vpc,
+      service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
+    });
 
     // Store outputs
     this.output = {

@@ -114,3 +114,39 @@ export interface UserConfigStackOutput {
   /** KMS key ID for user secrets encryption */
   kmsKeyId: string;
 }
+
+/**
+ * Output from SandboxStack (ECS Fargate Sandbox Infrastructure)
+ */
+export interface SandboxStackOutput {
+  /** ECS Cluster ARN for sandbox tasks */
+  clusterArn: string;
+  /** ECS Cluster name */
+  clusterName: string;
+  /** DynamoDB table name for sandbox registry */
+  registryTableName: string;
+  /** DynamoDB table ARN for sandbox registry */
+  registryTableArn: string;
+  /** Sandbox task definition family name (use with :LATEST for RunTask) */
+  taskDefinitionFamily: string;
+  /** Security group ID for sandbox Fargate tasks */
+  sandboxTaskSecurityGroupId: string;
+  /** Sandbox Orchestrator API URL (internal, Cloud Map DNS) */
+  orchestratorApiUrl: string;
+  /** Sandbox Orchestrator DNS name (Cloud Map private DNS) */
+  orchestratorDnsName: string;
+  /** Security group ID for orchestrator Fargate service (for inbound rules) */
+  orchestratorSecurityGroupId: string;
+  /** CloudWatch log group for sandbox tasks */
+  sandboxLogGroupName: string;
+  /** Sandbox Orchestrator Docker image URI (ECR) */
+  orchestratorImageUri: string;
+  /** Warm pool size (number of pre-started tasks) */
+  warmPoolSize: number;
+  /** ECS Service name for warm pool (used by orchestrator to discover tasks) */
+  warmPoolServiceName: string;
+  /** Sandbox execution role ARN (for iam:PassRole) */
+  sandboxExecutionRoleArn: string;
+  /** Sandbox task role ARN (for iam:PassRole) */
+  sandboxTaskRoleArn: string;
+}

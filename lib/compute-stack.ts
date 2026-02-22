@@ -23,6 +23,7 @@ import {
   MonitoringStackOutput,
   ComputeStackOutput,
   DatabaseStackOutput,
+  SandboxStackOutput,
 } from './interfaces.js';
 
 /**
@@ -121,6 +122,12 @@ export interface ComputeStackProps extends cdk.StackProps {
    * to route requests to this Lambda function.
    */
   userConfigFunction?: lambda.IFunction;
+  /**
+   * Sandbox infrastructure output (required).
+   * Enables Fargate sandbox mode with RUNTIME=remote env vars
+   * and adds Sandbox Orchestrator to docker-compose.
+   */
+  sandboxOutput: SandboxStackOutput;
 }
 
 /**
@@ -140,12 +147,80 @@ export class ComputeStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxAwsAccess } = props;
+    const { sandboxOutput } = props;
     const { vpc } = networkOutput;
     const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile, sandboxRoleArn, sandboxSecretKeyName } = securityOutput;
     const { alertTopic, dataBucket } = monitoringOutput;
 
     // Full domain for runtime URL pattern
     const fullDomain = `${config.subDomain}.${config.domainName}`;
+
+    // EC2 ↔ sandbox Fargate task networking
+    // Both ingress and egress rules are placed here (not in SandboxStack) to avoid
+    // cyclic cross-stack dependency between SecurityStack and SandboxStack
+    const sandboxTaskSg = ec2.SecurityGroup.fromSecurityGroupId(
+      this, 'ImportedSandboxTaskSg', sandboxOutput.sandboxTaskSecurityGroupId
+    );
+    // EC2 → sandbox (outbound)
+    ec2SecurityGroup.addEgressRule(
+      sandboxTaskSg,
+      ec2.Port.tcpRange(1, 65535),
+      'Allow EC2 to reach sandbox Fargate tasks'
+    );
+    // sandbox → EC2 (inbound to sandbox SG from EC2 SG)
+    new ec2.CfnSecurityGroupIngress(this, 'SandboxIngressFromEc2', {
+      groupId: sandboxOutput.sandboxTaskSecurityGroupId,
+      sourceSecurityGroupId: ec2SecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 1,
+      toPort: 65535,
+      description: 'Allow all TCP from EC2 (OpenResty routes to sandbox ports)',
+    });
+
+    // EC2 ↔ orchestrator Fargate service (port 8081 for sandbox API)
+    // Both egress (EC2 → orchestrator) and ingress (orchestrator ← EC2) rules needed.
+    // Placed here (not in SandboxStack) to avoid cyclic cross-stack dependency.
+    ec2SecurityGroup.addEgressRule(
+      ec2.SecurityGroup.fromSecurityGroupId(this, 'ImportedOrchestratorSg', sandboxOutput.orchestratorSecurityGroupId),
+      ec2.Port.tcp(8081),
+      'Allow EC2 to reach sandbox orchestrator Fargate service'
+    );
+    new ec2.CfnSecurityGroupIngress(this, 'OrchestratorIngressFromEc2', {
+      groupId: sandboxOutput.orchestratorSecurityGroupId,
+      sourceSecurityGroupId: ec2SecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 8081,
+      toPort: 8081,
+      description: 'Allow EC2 to reach sandbox orchestrator Fargate service',
+    });
+
+    // NOTE: ECS/DynamoDB permissions for sandbox orchestrator are on the orchestrator
+    // Fargate task role (in SandboxStack), not the EC2 role. The orchestrator runs as
+    // a standalone ECS Fargate service, not as a docker-compose sidecar on EC2.
+
+    // Preserve cross-stack exports to avoid CloudFormation "Cannot delete export"
+    // errors. These were previously referenced by docker-compose env vars and IAM
+    // policies. A future cleanup deploy can remove these once no deployed stack
+    // imports them. CDK auto-generates exports when sandbox output fields are used;
+    // referencing them here keeps those exports alive during the migration.
+    new cdk.CfnOutput(this, 'SandboxClusterArn', {
+      value: sandboxOutput.clusterArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxRegistryTableName', {
+      value: sandboxOutput.registryTableName,
+    });
+    new cdk.CfnOutput(this, 'SandboxRegistryTableArn', {
+      value: sandboxOutput.registryTableArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxWarmPoolServiceName', {
+      value: sandboxOutput.warmPoolServiceName,
+    });
+    new cdk.CfnOutput(this, 'SandboxExecutionRoleArn', {
+      value: sandboxOutput.sandboxExecutionRoleArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxTaskRoleArn', {
+      value: sandboxOutput.sandboxTaskRoleArn,
+    });
 
     // Get private subnets for EC2 and internal ALB
     const privateSubnets = vpc.selectSubnets({
@@ -329,7 +404,10 @@ export class ComputeStack extends cdk.Stack {
       'retry dnf install -y docker',
       'retry dnf install -y amazon-efs-utils',
       'mkdir -p /etc/docker',
-      'echo \'{"default-address-pools":[{"base":"172.17.0.0/12","size":24}],"log-driver":"json-file","log-opts":{"max-size":"100m","max-file":"3"}}\' > /etc/docker/daemon.json',
+      // Docker DNS: use VPC DNS resolver so containers can resolve Cloud Map private DNS
+      // (e.g., orchestrator.openhands.local for the sandbox orchestrator Fargate service)
+      'VPC_DNS=$(grep "^nameserver" /etc/resolv.conf | head -1 | awk \'{print $2}\')',
+      'echo "{\\\"dns\\\":[\\\"$VPC_DNS\\\"],\\\"default-address-pools\\\":[{\\\"base\\\":\\\"172.17.0.0/12\\\",\\\"size\\\":24}],\\\"log-driver\\\":\\\"json-file\\\",\\\"log-opts\\\":{\\\"max-size\\\":\\\"100m\\\",\\\"max-file\\\":\\\"3\\\"}}" > /etc/docker/daemon.json',
       'systemctl enable --now docker',
       'usermod -aG docker ec2-user',
       'chmod 666 /var/run/docker.sock',
@@ -367,11 +445,8 @@ export class ComputeStack extends cdk.Stack {
       '    restart: always',
       '    ports:',
       '      - "8080:8080"',  // ALB connects to this port for runtime traffic
-      '    volumes:',
-      '      # SECURITY: Docker socket access required for container discovery (read-only)',
-      '      # OpenResty queries /containers/json to find sandbox container IPs for routing',
-      '      # Mitigations: mounted :ro, only GET requests, no container modifications',
-      '      - /var/run/docker.sock:/var/run/docker.sock:ro',
+      '    environment:',
+      `      - ORCHESTRATOR_URL=http://${sandboxOutput.orchestratorDnsName}:8081`,
       '    depends_on:',
       '      - openhands',
       '    logging:',
@@ -430,12 +505,17 @@ export class ComputeStack extends cdk.Stack {
       `      - AGENT_SERVER_IMAGE_TAG=${agentServerTag}`,
       '      - AGENT_ENABLE_BROWSING=false',
       '      - AGENT_ENABLE_MCP=true',
+      // RUNTIME=remote delegates sandbox creation to the Sandbox Orchestrator → ECS Fargate
+      '      - RUNTIME=remote',
+      `      - SANDBOX_REMOTE_RUNTIME_API_URL=${sandboxOutput.orchestratorApiUrl}`,
+      '      - SANDBOX_API_KEY=local',  // Required by RemoteSandboxServiceInjector
+      '      - SANDBOX_START_TIMEOUT=300',  // Fargate tasks take ~90s to start (vs 5s Docker)
       // Environment variables injected into sandbox containers at startup
-      // When sandboxAwsAccess is enabled, include AWS_SHARED_CREDENTIALS_FILE to use scoped credentials
       // OH_SECRET_KEY enables secret persistence across sandbox restarts (required for conversation resume)
-      sandboxAwsAccess && sandboxRoleArn
-        ? '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}'
-        : '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","OH_SECRET_KEY":"$OH_SECRET_KEY"}',
+      // NOTE: AWS_SHARED_CREDENTIALS_FILE is NOT set for Fargate sandboxes — the ECS task role
+      // provides credentials natively via the ECS credential provider. Setting it would override
+      // the default provider and point to a non-existent file.
+      '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}',
       // DB_* env vars enable PostgreSQL mode in OpenHands V1 (DbSessionInjector checks DB_HOST)
       // DB_SSL=require is essential for Aurora IAM auth (asyncpg requires explicit SSL)
       // Use RDS Proxy endpoint for automatic IAM token management and connection pooling
@@ -469,6 +549,9 @@ export class ComputeStack extends cdk.Stack {
       ] : []),
       '    extra_hosts:',
       '      - "host.docker.internal:host-gateway"',
+      '',
+      // NOTE: Sandbox Orchestrator now runs as a standalone ECS Fargate service
+      // with Cloud Map DNS (orchestrator.openhands.local:8081), not as a docker-compose sidecar.
       '',
       '  watchtower:',
       '    image: containrrr/watchtower:1.7.1',
@@ -512,12 +595,10 @@ export class ComputeStack extends cdk.Stack {
       `pull_with_retry "${openrestyImageUri}"`,  // OpenResty runtime proxy
       `pull_with_retry "${customRuntimeImage.imageUri}"`,  // Custom runtime with Chromium for MCP
       `pull_with_retry "${agentServerImageUri}"`,
+      // NOTE: Sandbox orchestrator runs as ECS Fargate service, no image pull needed on EC2
       'set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap \'error_handler $LINENO\' ERR',
       'systemctl daemon-reload && systemctl enable openhands && systemctl start openhands',
-      // Connect OpenResty to the Docker bridge network for sandbox container access
-      // Sandbox containers use default bridge, compose network doesn't support external bridge directly
-      'for i in {1..30}; do docker inspect openresty-proxy >/dev/null 2>&1 && break; sleep 2; done',
-      'docker network connect bridge openresty-proxy 2>/dev/null || echo "Already connected to bridge network"',
+      'for i in {1..30}; do docker inspect openhands-app >/dev/null 2>&1 && break; sleep 2; done',
       'echo "OpenHands setup complete!"',
     );
 
@@ -571,10 +652,6 @@ export class ComputeStack extends cdk.Stack {
       updatePolicy: autoscaling.UpdatePolicy.rollingUpdate(),
       newInstancesProtectedFromScaleIn: false,
     });
-
-    // Add data volume via Block Device Mapping in Launch Template
-    // Note: Additional EBS volume needs to be added separately
-    const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
 
     // Internet-facing Application Load Balancer (required for WebSocket support)
     // CloudFront VPC Origin does NOT support WebSocket connections, so we use
