@@ -31,15 +31,15 @@ OLD = '''def _build_service_url(url: str, service_name: str):
 
 # Map service names to their actual ports inside the Fargate container
 NEW = '''def _build_service_url(url: str, service_name: str):
-    # Patch 32: Use IP:port for Fargate (upstream uses service-name-IP for K8s DNS)
-    import re
+    # Patch 32: Use localhost:port for Fargate sandbox URLs
+    # The frontend (patch-fix.js) rewrites localhost:{port} to
+    # https://{port}-{convId}.runtime.{subdomain}.{domain}/
+    # Using localhost instead of VPC IP ensures the URL goes through
+    # the frontend rewriter → CloudFront → ALB → OpenResty → sandbox
     _port_map = {'vscode': 60001, 'work-1': 12000, 'work-2': 12001}
     port = _port_map.get(service_name)
     if port:
-        # Extract IP from url (http://172.31.x.x:8000 → 172.31.x.x)
-        match = re.match(r'(https?)://([^:]+)', url)
-        if match:
-            return f'{match.group(1)}://{match.group(2)}:{port}'
+        return f'http://localhost:{port}'
     # Fallback to original behavior
     scheme, host_and_path = url.split('://')
     return scheme + '://' + service_name + '-' + host_and_path'''
