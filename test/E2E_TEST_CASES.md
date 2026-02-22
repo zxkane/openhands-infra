@@ -374,24 +374,50 @@ Start a new conversation and verify it becomes ready for chatting within accepta
 | 5 | Workspace is a git repo | No "Not a git repository" error |
 | 6 | File creation visible in Changes | After agent creates a file, Changes API shows it |
 | 7 | No conversation ID in file tree | Changes panel must NOT show conversation ID as a file/directory name |
-| 8 | Code tab loads without errors | VS Code URL API returns 200, no "Error parsing URL" |
+| 8 | VS Code opens in new tab | VS Code URL resolves to runtime subdomain, workspace files visible |
 | 9 | No console errors | No error-level console messages |
 
 ### VS Code URL Verification (TC-005 step 5.6)
 
-After the sandbox is ready, verify the VS Code URL API works:
+After the sandbox is ready, verify VS Code URL and open in new tab:
 
 ```javascript
+// Step 1: Verify VS Code URL API returns localhost:port format
 mcp__chrome-devtools__evaluate_script({
   function: `async () => {
     const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
-    const r = await fetch('/api/conversations/' + convId + '/vscode-url');
+    const r = await fetch('/api/v1/sandboxes?id=' + convId);
     const data = await r.json();
-    return { status: r.status, hasUrl: !!data.vscode_url, url: data.vscode_url?.substring(0, 50) };
+    const vscode = data[0]?.exposed_urls?.find(u => u.name === 'VSCODE');
+    return {
+      status: r.status,
+      url: vscode?.url?.substring(0, 60),
+      isLocalhost: vscode?.url?.startsWith('http://localhost:'),
+    };
   }`
 })
-// Expected: { status: 200, hasUrl: true, url: "https://..." }
-// If status: 500 → /runtime/:id endpoint missing from orchestrator
+// Expected: { status: 200, url: "http://localhost:60001/?tkn=...", isLocalhost: true }
+// If url contains VPC IP (172.31.x.x) → Patch 32 not applied
+// If url contains "vscode-" prefix → Patch 32 not applied
+
+// Step 2: Open VS Code in new tab (runtime subdomain)
+// patch-fix.js rewrites localhost:{port} → https://{port}-{convId}.runtime.{domain}/
+mcp__chrome-devtools__evaluate_script({
+  function: `() => {
+    const convId = window.location.pathname.match(/conversations\\/([a-f0-9]+)/)?.[1];
+    const host = window.location.host.replace(/^\\d+-[a-f0-9]+\\.runtime\\./, '');
+    const parts = host.split('.');
+    const subdomain = parts[0];
+    const domain = parts.slice(1).join('.');
+    const runtimeUrl = 'https://60001-' + convId + '.runtime.' + subdomain + '.' + domain + '/';
+    return runtimeUrl;
+  }`
+})
+// Use the returned URL to open VS Code in new tab:
+mcp__chrome-devtools__new_page({ url: "<runtime-vscode-url>", timeout: 30000 })
+mcp__chrome-devtools__wait_for({ text: "workspace", timeout: 30000 })
+mcp__chrome-devtools__take_snapshot({})
+// Expected: VS Code editor loads, shows /workspace/project files
 ```
 
 ### Workspace Verification (TC-005 step 5.5)
