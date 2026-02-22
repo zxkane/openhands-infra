@@ -215,9 +215,10 @@ else
 fi
 
 # ─── Patch 30: Fix resume flow for Fargate sandboxes ─────────────────────────
-# Uses external Python script to avoid shell heredoc indentation issues.
-# See docker/patch-resume.py for details.
 python3 /opt/patch-resume.py
+
+# ─── Patch 31: Fix VS Code URL for Remote sandbox mode ───────────────────────
+python3 /opt/patch-vscode-url.py
 
 # ─── Verify security-critical fork patches ───────────────────────────────────
 # These patches are applied at build time via download-fork-patches.sh.

@@ -64,6 +64,7 @@ COPY patch-fix.js /opt/patch-fix.js
 #   - Critical patch verification
 COPY apply-startup.sh /opt/apply-startup.sh
 COPY patch-resume.py /opt/patch-resume.py
+COPY patch-vscode-url.py /opt/patch-vscode-url.py
 
 ENTRYPOINT ["/bin/sh", "/opt/apply-startup.sh"]
 CMD ["uvicorn", "openhands.server.listen:app", "--host", "0.0.0.0", "--port", "3000"]
