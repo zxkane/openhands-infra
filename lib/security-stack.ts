@@ -69,7 +69,9 @@ export class SecurityStack extends cdk.Stack {
     );
 
     // Security Group for Fargate app and openresty services
-    const appServiceSecurityGroup = new ec2.SecurityGroup(this, 'AppServiceSecurityGroup', {
+    // Note: Construct ID kept as 'Ec2SecurityGroup' for CloudFormation export compatibility
+    // with existing Compute/Database stacks that reference this export.
+    const appServiceSecurityGroup = new ec2.SecurityGroup(this, 'Ec2SecurityGroup', {
       vpc,
       description: 'Security group for OpenHands Fargate app and openresty services',
       allowAllOutbound: false,
@@ -141,7 +143,10 @@ export class SecurityStack extends cdk.Stack {
     // ========================================
     // IAM Task Role for Fargate App Service
     // ========================================
-    const appTaskRole = new iam.Role(this, 'AppTaskRole', {
+    // Note: Construct ID kept as 'OpenHandsEc2Role' for CloudFormation export compatibility
+    // with existing Compute/Database stacks that reference this export. The role principal
+    // is changed from ec2.amazonaws.com to ecs-tasks.amazonaws.com (in-place update, no replacement).
+    const appTaskRole = new iam.Role(this, 'OpenHandsEc2Role', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       description: 'IAM task role for OpenHands Fargate app service',
     });
@@ -256,7 +261,7 @@ export class SecurityStack extends cdk.Stack {
 
       // Create sandbox role — Fargate sandboxes use native ECS task role, not STS
       // This role is kept for backward compatibility with EC2-based sandbox mode
-      const sandboxRole = new iam.Role(this, 'SandboxRole', {
+      const sandboxRole = new iam.Role(this, 'OpenHandsSandboxRole', {
         assumedBy: new iam.ArnPrincipal(appTaskRole.roleArn),
         externalIds: ['openhands-sandbox'],
         description: 'IAM role for OpenHands sandbox containers with scoped AWS access',

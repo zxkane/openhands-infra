@@ -1118,7 +1118,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
             "AssignPublicIp": "DISABLED",
             "SecurityGroups": [
               {
-                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppServiceSecurityGroupFEC2CF45GroupId639F695A",
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
               },
             ],
             "Subnets": [
@@ -1475,7 +1475,7 @@ security_analyzer = "llm"",
           "OperatingSystemFamily": "LINUX",
         },
         "TaskRoleArn": {
-          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppTaskRole7EC51C11Arn9DB8B755",
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttOpenHandsEc2RoleD4668748Arn7A231DF5",
         },
         "Volumes": [
           {
@@ -1649,7 +1649,7 @@ security_analyzer = "llm"",
             "AssignPublicIp": "DISABLED",
             "SecurityGroups": [
               {
-                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppServiceSecurityGroupFEC2CF45GroupId639F695A",
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
               },
             ],
             "Subnets": [
@@ -1732,7 +1732,7 @@ security_analyzer = "llm"",
           "OperatingSystemFamily": "LINUX",
         },
         "TaskRoleArn": {
-          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppTaskRole7EC51C11Arn9DB8B755",
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttOpenHandsEc2RoleD4668748Arn7A231DF5",
         },
       },
       "Type": "AWS::ECS::TaskDefinition",
@@ -1744,7 +1744,7 @@ security_analyzer = "llm"",
         "GroupId": "sg-orchestrator123",
         "IpProtocol": "tcp",
         "SourceSecurityGroupId": {
-          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppServiceSecurityGroupFEC2CF45GroupId639F695A",
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
         },
         "ToPort": 8081,
       },
@@ -1801,7 +1801,7 @@ security_analyzer = "llm"",
         "GroupId": "sg-sandbox123",
         "IpProtocol": "tcp",
         "SourceSecurityGroupId": {
-          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppServiceSecurityGroupFEC2CF45GroupId639F695A",
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
         },
         "ToPort": 65535,
       },
@@ -1969,7 +1969,7 @@ security_analyzer = "llm"",
               "Effect": "Allow",
               "Principal": {
                 "AWS": {
-                  "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppTaskRole7EC51C11Arn9DB8B755",
+                  "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttOpenHandsEc2RoleD4668748Arn7A231DF5",
                 },
               },
               "Resource": "*",
@@ -4171,7 +4171,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       "Description": "Fargate App Task Role ARN",
       "Value": {
         "Fn::GetAtt": [
-          "AppTaskRole7EC51C11",
+          "OpenHandsEc2RoleD4668748",
           "Arn",
         ],
       },
@@ -4223,12 +4223,12 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupIngress",
     },
-    "AlbSecurityGrouptoTestSecurityStackAppServiceSecurityGroupFB369DB330007FDA212C": {
+    "AlbSecurityGrouptoTestSecurityStackEc2SecurityGroup55A42D313000C2D6BB59": {
       "Properties": {
         "Description": "Allow traffic to OpenHands app",
         "DestinationSecurityGroupId": {
           "Fn::GetAtt": [
-            "AppServiceSecurityGroupFEC2CF45",
+            "Ec2SecurityGroup55889913",
             "GroupId",
           ],
         },
@@ -4244,12 +4244,12 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupEgress",
     },
-    "AlbSecurityGrouptoTestSecurityStackAppServiceSecurityGroupFB369DB380809EB31157": {
+    "AlbSecurityGrouptoTestSecurityStackEc2SecurityGroup55A42D318080E731A33C": {
       "Properties": {
         "Description": "Allow traffic to OpenResty runtime proxy",
         "DestinationSecurityGroupId": {
           "Fn::GetAtt": [
-            "AppServiceSecurityGroupFEC2CF45",
+            "Ec2SecurityGroup55889913",
             "GroupId",
           ],
         },
@@ -4351,7 +4351,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::IAM::Policy",
     },
-    "AppServiceSecurityGroupFEC2CF45": {
+    "Ec2SecurityGroup55889913": {
       "Properties": {
         "GroupDescription": "Security group for OpenHands Fargate app and openresty services",
         "SecurityGroupEgress": [
@@ -4367,13 +4367,13 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroup",
     },
-    "AppServiceSecurityGroupfromTestSecurityStackAlbSecurityGroupF68B86B13000379995B8": {
+    "Ec2SecurityGroupfromTestSecurityStackAlbSecurityGroupF68B86B13000E689486E": {
       "Properties": {
         "Description": "Allow traffic from ALB to OpenHands app",
         "FromPort": 3000,
         "GroupId": {
           "Fn::GetAtt": [
-            "AppServiceSecurityGroupFEC2CF45",
+            "Ec2SecurityGroup55889913",
             "GroupId",
           ],
         },
@@ -4388,13 +4388,13 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupIngress",
     },
-    "AppServiceSecurityGroupfromTestSecurityStackAlbSecurityGroupF68B86B1808074B1ECFA": {
+    "Ec2SecurityGroupfromTestSecurityStackAlbSecurityGroupF68B86B18080E114F9D4": {
       "Properties": {
         "Description": "Allow traffic from ALB to OpenResty runtime proxy",
         "FromPort": 8080,
         "GroupId": {
           "Fn::GetAtt": [
-            "AppServiceSecurityGroupFEC2CF45",
+            "Ec2SecurityGroup55889913",
             "GroupId",
           ],
         },
@@ -4409,7 +4409,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupIngress",
     },
-    "AppServiceSecurityGrouptoTestNetworkStackVpcEndpointSg4E3FE0954437475933F": {
+    "Ec2SecurityGrouptoTestNetworkStackVpcEndpointSg4E3FE0954430713D399": {
       "Properties": {
         "Description": "Allow HTTPS to VPC Endpoints",
         "DestinationSecurityGroupId": {
@@ -4418,7 +4418,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
         "FromPort": 443,
         "GroupId": {
           "Fn::GetAtt": [
-            "AppServiceSecurityGroupFEC2CF45",
+            "Ec2SecurityGroup55889913",
             "GroupId",
           ],
         },
@@ -4427,7 +4427,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupEgress",
     },
-    "AppServiceSecurityGrouptoTestSecurityStackEfsSecurityGroupE7F9482B2049C779F95B": {
+    "Ec2SecurityGrouptoTestSecurityStackEfsSecurityGroupE7F9482B2049E9A77FEE": {
       "Properties": {
         "Description": "Allow NFS to OpenHands EFS",
         "DestinationSecurityGroupId": {
@@ -4439,7 +4439,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
         "FromPort": 2049,
         "GroupId": {
           "Fn::GetAtt": [
-            "AppServiceSecurityGroupFEC2CF45",
+            "Ec2SecurityGroup55889913",
             "GroupId",
           ],
         },
@@ -4448,7 +4448,44 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupEgress",
     },
-    "AppTaskRole7EC51C11": {
+    "EfsSecurityGroupEC5F36AC": {
+      "Properties": {
+        "GroupDescription": "Security group for OpenHands EFS (NFS)",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "255.255.255.255/32",
+            "Description": "Disallow all traffic",
+            "FromPort": 252,
+            "IpProtocol": "icmp",
+            "ToPort": 86,
+          },
+        ],
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "EfsSecurityGroupfromTestSecurityStackEc2SecurityGroup55A42D3120497A775441": {
+      "Properties": {
+        "Description": "Allow NFS from OpenHands Fargate app service",
+        "FromPort": 2049,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "EfsSecurityGroupEC5F36AC",
+            "GroupId",
+          ],
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "Ec2SecurityGroup55889913",
+            "GroupId",
+          ],
+        },
+        "ToPort": 2049,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "OpenHandsEc2RoleD4668748": {
       "Properties": {
         "AssumeRolePolicyDocument": {
           "Statement": [
@@ -4466,7 +4503,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::IAM::Role",
     },
-    "AppTaskRoleDefaultPolicyAF7F85AE": {
+    "OpenHandsEc2RoleDefaultPolicy0D07380E": {
       "Properties": {
         "PolicyDocument": {
           "Statement": [
@@ -4558,51 +4595,14 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
           ],
           "Version": "2012-10-17",
         },
-        "PolicyName": "AppTaskRoleDefaultPolicyAF7F85AE",
+        "PolicyName": "OpenHandsEc2RoleDefaultPolicy0D07380E",
         "Roles": [
           {
-            "Ref": "AppTaskRole7EC51C11",
+            "Ref": "OpenHandsEc2RoleD4668748",
           },
         ],
       },
       "Type": "AWS::IAM::Policy",
-    },
-    "EfsSecurityGroupEC5F36AC": {
-      "Properties": {
-        "GroupDescription": "Security group for OpenHands EFS (NFS)",
-        "SecurityGroupEgress": [
-          {
-            "CidrIp": "255.255.255.255/32",
-            "Description": "Disallow all traffic",
-            "FromPort": 252,
-            "IpProtocol": "icmp",
-            "ToPort": 86,
-          },
-        ],
-        "VpcId": "vpc-12345",
-      },
-      "Type": "AWS::EC2::SecurityGroup",
-    },
-    "EfsSecurityGroupfromTestSecurityStackAppServiceSecurityGroupFB369DB32049E8FD06AB": {
-      "Properties": {
-        "Description": "Allow NFS from OpenHands Fargate app service",
-        "FromPort": 2049,
-        "GroupId": {
-          "Fn::GetAtt": [
-            "EfsSecurityGroupEC5F36AC",
-            "GroupId",
-          ],
-        },
-        "IpProtocol": "tcp",
-        "SourceSecurityGroupId": {
-          "Fn::GetAtt": [
-            "AppServiceSecurityGroupFEC2CF45",
-            "GroupId",
-          ],
-        },
-        "ToPort": 2049,
-      },
-      "Type": "AWS::EC2::SecurityGroupIngress",
     },
     "UserSecretsKmsKey2BAFA35E": {
       "DeletionPolicy": "Retain",
