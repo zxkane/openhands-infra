@@ -1,0 +1,53 @@
+"""Patch 32: Fix exposed_urls for Fargate sandbox mode.
+
+The upstream _build_service_url() prepends service name to the hostname
+(e.g., http://vscode-172.31.x.x:8000) for Kubernetes DNS resolution.
+In Fargate, this doesn't resolve. Fix: use the actual sandbox IP with
+the correct port for each service.
+
+The VSCODE exposed URL should use the agent-server's /api/vscode/url
+endpoint to get the real VS Code URL, since VS Code runs on a different
+port (60001) than the agent-server (8000).
+"""
+import sys
+
+SERVICE_FILE = "/app/openhands/app_server/sandbox/remote_sandbox_service.py"
+
+try:
+    with open(SERVICE_FILE, "r") as f:
+        content = f.read()
+except FileNotFoundError:
+    print("Patch 32: remote_sandbox_service.py not found, skipping")
+    sys.exit(0)
+
+if "Patch 32" in content:
+    print("Patch 32: Already applied")
+    sys.exit(0)
+
+# Replace _build_service_url to use IP:port instead of service-name-IP:port
+OLD = '''def _build_service_url(url: str, service_name: str):
+    scheme, host_and_path = url.split('://')
+    return scheme + '://' + service_name + '-' + host_and_path'''
+
+# Map service names to their actual ports inside the Fargate container
+NEW = '''def _build_service_url(url: str, service_name: str):
+    # Patch 32: Use IP:port for Fargate (upstream uses service-name-IP for K8s DNS)
+    import re
+    _port_map = {'vscode': 60001, 'work-1': 12000, 'work-2': 12001}
+    port = _port_map.get(service_name)
+    if port:
+        # Extract IP from url (http://172.31.x.x:8000 → 172.31.x.x)
+        match = re.match(r'(https?)://([^:]+)', url)
+        if match:
+            return f'{match.group(1)}://{match.group(2)}:{port}'
+    # Fallback to original behavior
+    scheme, host_and_path = url.split('://')
+    return scheme + '://' + service_name + '-' + host_and_path'''
+
+if OLD in content:
+    content = content.replace(OLD, NEW)
+    with open(SERVICE_FILE, "w") as f:
+        f.write(content)
+    print("Patch 32: Fixed _build_service_url for Fargate (IP:port instead of service-name)")
+else:
+    print("WARNING: Patch 32 pattern not found in remote_sandbox_service.py")

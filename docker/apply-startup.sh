@@ -220,6 +220,9 @@ python3 /opt/patch-resume.py
 # ─── Patch 31: Fix VS Code URL for Remote sandbox mode ───────────────────────
 python3 /opt/patch-vscode-url.py
 
+# ─── Patch 32: Fix exposed_urls for Fargate sandbox mode ─────────────────────
+python3 /opt/patch-exposed-urls.py
+
 # ─── Verify security-critical fork patches ───────────────────────────────────
 # These patches are applied at build time via download-fork-patches.sh.
 # Verify that the downloaded files actually contain the expected changes.
