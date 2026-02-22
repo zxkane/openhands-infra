@@ -496,8 +496,8 @@ export class ComputeStack extends cdk.Stack {
       essential: true,
       entryPoint: ['/bin/bash', '-c'],
       command: [
-        // Write config.toml from env var, then exec the startup script
-        'echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /bin/sh /opt/apply-startup.sh',
+        // Write config.toml from env var, then exec the original entrypoint + CMD
+        'echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /bin/sh /opt/apply-startup.sh uvicorn openhands.server.listen:app --host 0.0.0.0 --port 3000',
       ],
       portMappings: [
         { containerPort: 3000, protocol: ecs.Protocol.TCP },

@@ -1240,7 +1240,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
         "ContainerDefinitions": [
           {
             "Command": [
-              "echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /bin/sh /opt/apply-startup.sh",
+              "echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /bin/sh /opt/apply-startup.sh uvicorn openhands.server.listen:app --host 0.0.0.0 --port 3000",
             ],
             "EntryPoint": [
               "/bin/bash",
