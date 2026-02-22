@@ -51,16 +51,18 @@ NEW = '''    try:
         )
     except Exception as e:
         # Patch 31: Fallback for Remote sandbox mode — try agent-server's /api/vscode/url
+        # The runtime object has the action_execution_server URL (sandbox IP:port)
         logger.warning(f'runtime.vscode_url failed ({e}), trying agent-server fallback')
         try:
             import httpx
-            sandbox = await conversation.sandbox_service.get_sandbox(conversation.sandbox_id)
-            if sandbox and sandbox.url:
+            runtime = conversation.runtime
+            base_url = getattr(runtime, 'action_execution_server_url', None) or getattr(runtime, 'sandbox_url', None)
+            if not base_url:
+                # Try to extract from runtime config
+                base_url = getattr(getattr(runtime, 'config', None), 'sandbox_url', None)
+            if base_url:
                 async with httpx.AsyncClient(timeout=10) as client:
-                    headers = {}
-                    if sandbox.session_api_key:
-                        headers['X-Session-API-Key'] = sandbox.session_api_key
-                    resp = await client.get(f'{sandbox.url}/api/vscode/url', headers=headers)
+                    resp = await client.get(f'{base_url}/api/vscode/url')
                     if resp.status_code == 200:
                         data = resp.json()
                         vscode_url = data.get('url')
