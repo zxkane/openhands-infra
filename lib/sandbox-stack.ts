@@ -320,7 +320,7 @@ export class SandboxStack extends cdk.Stack {
           'mkdir -p /workspace/project;' +
         'fi;' +
         'git init /workspace 2>/dev/null;' +
-        'printf "bash_events/\\nconversations/\\n*.pyc\\n__pycache__/\\nproject/\\n" > /workspace/.gitignore;' +
+        'printf "bash_events/\\nconversations/\\n*.pyc\\n__pycache__/\\n" > /workspace/.gitignore;' +
         'cd /workspace && git add .gitignore && git -c user.name=openhands -c user.email=oh@local commit -qm init 2>/dev/null;' +
         'git init /workspace/project 2>/dev/null;' +
         'exec /usr/local/bin/openhands-agent-server --port 8000'
