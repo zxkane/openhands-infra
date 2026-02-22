@@ -8,8 +8,9 @@ import { EdgeStack } from '../lib/edge-stack';
 import { DatabaseStack } from '../lib/database-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { UserConfigStack } from '../lib/user-config-stack';
+import { ClusterStack } from '../lib/cluster-stack';
 import { SandboxStack } from '../lib/sandbox-stack';
-import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput, SandboxStackOutput } from '../lib/interfaces';
+import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput, SandboxStackOutput, ClusterStackOutput } from '../lib/interfaces';
 
 // Test configuration
 const testConfig: OpenHandsConfig = {
@@ -31,7 +32,7 @@ const mockDatabaseOutput: DatabaseStackOutput = {
   clusterPort: '5432',
   clusterResourceId: 'cluster-ABC123DEF456',
   databaseName: 'openhands',
-  databaseUser: 'openhands_proxy',  // Proxy user for RDS Proxy connections
+  databaseUser: 'openhands_proxy',
   securityGroupId: 'sg-mock123',
   proxyEndpoint: 'mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com',
 };
@@ -104,7 +105,6 @@ describe('OpenHands Infrastructure Stacks', () => {
 
   describe('SecurityStack', () => {
     test('synthesizes correctly', () => {
-      // First create NetworkStack and MonitoringStack to get outputs
       const networkStack = new NetworkStack(app, 'TestNetworkStack', {
         env: testEnv,
         config: testConfig,
@@ -124,7 +124,7 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       const template = Template.fromStack(stack);
 
-      // Verify IAM Role is created with EC2 assume role policy
+      // Verify IAM Role is created with ECS tasks assume role policy
       template.hasResourceProperties('AWS::IAM::Role', {
         AssumeRolePolicyDocument: {
           Statement: Match.arrayWith([
@@ -132,17 +132,17 @@ describe('OpenHands Infrastructure Stacks', () => {
               Action: 'sts:AssumeRole',
               Effect: 'Allow',
               Principal: {
-                Service: 'ec2.amazonaws.com',
+                Service: 'ecs-tasks.amazonaws.com',
               },
             }),
           ]),
         },
       });
 
-      // Verify Instance Profile is created
-      template.resourceCountIs('AWS::IAM::InstanceProfile', 1);
+      // Verify no Instance Profile (Fargate doesn't use instance profiles)
+      template.resourceCountIs('AWS::IAM::InstanceProfile', 0);
 
-      // Verify Security Groups are created (ALB, EC2, EFS)
+      // Verify Security Groups are created (ALB, App Service, EFS)
       template.resourceCountIs('AWS::EC2::SecurityGroup', 3);
     });
 
@@ -207,10 +207,73 @@ describe('OpenHands Infrastructure Stacks', () => {
     });
   });
 
+  describe('ClusterStack', () => {
+    test('synthesizes correctly', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      const stack = new ClusterStack(app, 'TestClusterStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Verify ECS Cluster is created
+      template.hasResourceProperties('AWS::ECS::Cluster', {
+        ClusterName: 'openhands-example-com',
+      });
+
+      // Verify Cloud Map namespace is created
+      template.hasResourceProperties('AWS::ServiceDiscovery::PrivateDnsNamespace', {
+        Name: 'openhands.local',
+      });
+    });
+
+    test('outputs are correctly defined', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      const stack = new ClusterStack(app, 'TestClusterStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+      });
+
+      expect(stack.output).toBeDefined();
+      expect(stack.output.cluster).toBeDefined();
+      expect(stack.output.clusterArn).toBeDefined();
+      expect(stack.output.namespace).toBeDefined();
+      expect(stack.output.namespaceName).toBe('openhands.local');
+    });
+
+    test('matches snapshot', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkStack', {
+        env: testEnv,
+        config: testConfig,
+      });
+
+      const stack = new ClusterStack(app, 'TestClusterStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+      expect(template.toJSON()).toMatchSnapshot();
+    });
+  });
+
   describe('ComputeStack', () => {
     let networkStack: NetworkStack;
     let securityStack: SecurityStack;
     let monitoringStack: MonitoringStack;
+    let clusterStack: ClusterStack;
 
     beforeEach(() => {
       networkStack = new NetworkStack(app, 'TestNetworkStack', {
@@ -229,6 +292,12 @@ describe('OpenHands Infrastructure Stacks', () => {
         networkOutput: networkStack.output,
         dataBucket: monitoringStack.output.dataBucket,
       });
+
+      clusterStack = new ClusterStack(app, 'TestClusterStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+      });
     });
 
     test('synthesizes correctly', () => {
@@ -238,34 +307,53 @@ describe('OpenHands Infrastructure Stacks', () => {
         networkOutput: networkStack.output,
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
         databaseOutput: mockDatabaseOutput,
         sandboxOutput: mockSandboxOutput,
       });
 
       const template = Template.fromStack(stack);
 
-      // Verify Launch Template is created
-      template.resourceCountIs('AWS::EC2::LaunchTemplate', 1);
+      // Verify NO EC2 resources (Launch Template, ASG)
+      template.resourceCountIs('AWS::EC2::LaunchTemplate', 0);
+      template.resourceCountIs('AWS::AutoScaling::AutoScalingGroup', 0);
 
-      // Verify Auto Scaling Group is created
-      template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
-        MinSize: '1',
-        MaxSize: '1',
+      // Verify Fargate task definitions are created
+      template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+        Family: 'openhands-app',
+        Cpu: '4096',
+        Memory: '8192',
+        RequiresCompatibilities: ['FARGATE'],
+        NetworkMode: 'awsvpc',
+      });
+
+      template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+        Family: 'openhands-openresty',
+        Cpu: '256',
+        Memory: '512',
+        RequiresCompatibilities: ['FARGATE'],
+        NetworkMode: 'awsvpc',
       });
 
       // Verify ALB is created (internet-facing for CloudFront compatibility)
-      // Note: CloudFront VPC Origin does NOT support WebSocket connections,
-      // so we use internet-facing ALB with CloudFront HttpOrigin instead
       template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
         Scheme: 'internet-facing',
         Type: 'application',
       });
 
-      // Verify Target Group is created
+      // Verify IP-type Target Groups are created
       template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
         Port: 3000,
         Protocol: 'HTTP',
+        TargetType: 'ip',
         HealthCheckPath: '/api/health',
+      });
+
+      template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+        Port: 8080,
+        Protocol: 'HTTP',
+        TargetType: 'ip',
+        HealthCheckPath: '/health',
       });
 
       // Verify SSM Parameters for Docker versions
@@ -274,49 +362,37 @@ describe('OpenHands Infrastructure Stacks', () => {
         Type: 'String',
       });
 
-      template.hasResourceProperties('AWS::SSM::Parameter', {
-        Name: '/openhands/docker/runtime-version',
-        Type: 'String',
-      });
-
-      // Verify CloudWatch Alarms are created
-      template.resourceCountIs('AWS::CloudWatch::Alarm', 3); // CPU, Memory, Disk
+      // Verify CloudWatch Alarms are created (CPU + Memory for ECS)
+      template.resourceCountIs('AWS::CloudWatch::Alarm', 2);
     });
 
-    test('creates alarms with proper ASG reference', () => {
+    test('creates ECS service alarms', () => {
       const stack = new ComputeStack(app, 'TestComputeStack', {
         env: testEnv,
         config: testConfig,
         networkOutput: networkStack.output,
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
         databaseOutput: mockDatabaseOutput,
         sandboxOutput: mockSandboxOutput,
       });
 
       const template = Template.fromStack(stack);
 
-      // Verify CPU alarm references ASG dynamically
+      // Verify CPU alarm for ECS service
       template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmDescription: 'CPU utilization exceeds 80%',
-        Namespace: 'AWS/EC2',
+        AlarmDescription: 'App service CPU utilization exceeds 80%',
+        Namespace: 'AWS/ECS',
         MetricName: 'CPUUtilization',
         Threshold: 80,
       });
 
-      // Verify Memory alarm references ASG dynamically
+      // Verify Memory alarm for ECS service
       template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmDescription: 'Memory utilization exceeds 85%',
-        Namespace: 'CWAgent',
-        MetricName: 'mem_used_percent',
-        Threshold: 85,
-      });
-
-      // Verify Disk alarm references ASG dynamically
-      template.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmDescription: 'Disk usage exceeds 85%',
-        Namespace: 'CWAgent',
-        MetricName: 'disk_used_percent',
+        AlarmDescription: 'App service memory utilization exceeds 85%',
+        Namespace: 'AWS/ECS',
+        MetricName: 'MemoryUtilization',
         Threshold: 85,
       });
     });
@@ -328,6 +404,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         networkOutput: networkStack.output,
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
         databaseOutput: mockDatabaseOutput,
         sandboxOutput: mockSandboxOutput,
       });
@@ -341,6 +418,7 @@ describe('OpenHands Infrastructure Stacks', () => {
     let networkStack: NetworkStack;
     let securityStack: SecurityStack;
     let monitoringStack: MonitoringStack;
+    let clusterStack: ClusterStack;
     let computeStack: ComputeStack;
 
     beforeEach(() => {
@@ -361,19 +439,25 @@ describe('OpenHands Infrastructure Stacks', () => {
         dataBucket: monitoringStack.output.dataBucket,
       });
 
+      clusterStack = new ClusterStack(app, 'TestClusterStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+      });
+
       computeStack = new ComputeStack(app, 'TestComputeStack', {
         env: testEnv,
         config: testConfig,
         networkOutput: networkStack.output,
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
         databaseOutput: mockDatabaseOutput,
         sandboxOutput: mockSandboxOutput,
       });
     });
 
     test('synthesizes correctly', () => {
-      // EdgeStack must be in us-east-1 for Lambda@Edge
       const edgeEnv = { account: '123456789012', region: 'us-east-1' };
 
       const stack = new EdgeStack(app, 'TestEdgeStack', {
@@ -448,7 +532,6 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       const template = Template.fromStack(stack);
 
-      // Verify WAF has managed rule groups
       template.hasResourceProperties('AWS::WAFv2::WebACL', {
         Rules: Match.arrayWith([
           Match.objectLike({
@@ -483,7 +566,6 @@ describe('OpenHands Infrastructure Stacks', () => {
   describe('AuthStack', () => {
     const authEnv = { account: '123456789012', region: 'us-east-1' };
 
-    // Helper to extract UserPool properties from template
     function getUserPoolProperties(template: Template): Record<string, unknown> {
       const templateJson = template.toJSON() as Record<string, unknown>;
       const resources = templateJson.Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
@@ -503,23 +585,19 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       const template = Template.fromStack(stack);
 
-      // Verify User Pool is created
       template.hasResourceProperties('AWS::Cognito::UserPool', {
         UserPoolName: Match.anyValue(),
         AutoVerifiedAttributes: ['email'],
         MfaConfiguration: 'OPTIONAL',
       });
 
-      // Verify User Pool Client is created
       template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
         AllowedOAuthFlows: ['code'],
         AllowedOAuthScopes: Match.arrayWith(['openid', 'email', 'profile']),
       });
 
-      // Verify Cognito Domain is created
       template.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
 
-      // Verify Secret is created for client secret
       template.hasResourceProperties('AWS::SecretsManager::Secret', {
         Description: 'Cognito User Pool Client Secret for OpenHands',
       });
@@ -574,11 +652,9 @@ describe('OpenHands Infrastructure Stacks', () => {
       const inviteTemplate = adminConfig.InviteMessageTemplate as Record<string, string>;
       const invitationEmail = inviteTemplate.EmailMessage;
 
-      // Verify invitation email contains both portal URLs
       expect(invitationEmail).toContain('https://openhands.example.com');
       expect(invitationEmail).toContain('https://openhands.test.example.com');
 
-      // Verify placeholders are replaced (no {{...}} remaining)
       expect(invitationEmail).not.toContain('{{PORTAL_URLS}}');
       expect(invitationEmail).not.toContain('{{PRIMARY_PORTAL_URL}}');
     });
@@ -629,15 +705,11 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       const template = Template.fromStack(stack);
 
-      // Verify Lambda function is created with correct runtime
       template.hasResourceProperties('AWS::Lambda::Function', {
         Runtime: 'python3.12',
         Handler: 'handler.handler',
         FunctionName: 'openhands-user-config-api',
       });
-
-      // Note: API Gateway is no longer used - Lambda is integrated via ALB target group
-      // The Lambda function is created here, and ComputeStack creates the ALB target group
     });
 
     test('lambda function is exported for ALB integration', () => {
@@ -648,7 +720,6 @@ describe('OpenHands Infrastructure Stacks', () => {
         kmsKeyArn: securityStack.output.userSecretsKmsKeyArn!,
       });
 
-      // Verify the userConfigFunction is exposed for ALB integration
       expect(stack.userConfigFunction).toBeDefined();
       expect(stack.userConfigFunction.functionArn).toBeDefined();
     });
@@ -682,7 +753,6 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       const template = Template.fromStack(stack);
 
-      // Verify IAM policy exists for Lambda function with S3 permissions
       template.hasResourceProperties('AWS::IAM::Policy', {
         PolicyDocument: {
           Statement: Match.arrayWith([
@@ -721,8 +791,6 @@ describe('OpenHands Infrastructure Stacks', () => {
       const template = Template.fromStack(stack);
       const templateJson = template.toJSON();
 
-      // Normalize Lambda asset hash which varies between Docker builds on different environments
-      // The PythonFunction bundling produces different hashes due to timestamps in the built artifacts
       const resources = templateJson.Resources || {};
       for (const [, resource] of Object.entries(resources)) {
         const res = resource as { Type?: string; Properties?: { Code?: { S3Key?: string } } };
@@ -739,6 +807,7 @@ describe('OpenHands Infrastructure Stacks', () => {
     let networkStack: NetworkStack;
     let securityStack: SecurityStack;
     let monitoringStack: MonitoringStack;
+    let clusterStack: ClusterStack;
 
     beforeEach(() => {
       networkStack = new NetworkStack(app, 'TestNetworkStack', {
@@ -757,6 +826,12 @@ describe('OpenHands Infrastructure Stacks', () => {
         networkOutput: networkStack.output,
         dataBucket: monitoringStack.output.dataBucket,
       });
+
+      clusterStack = new ClusterStack(app, 'TestClusterStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+      });
     });
 
     test('synthesizes correctly', () => {
@@ -765,16 +840,15 @@ describe('OpenHands Infrastructure Stacks', () => {
         config: testConfig,
         networkOutput: networkStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
       });
 
       const template = Template.fromStack(stack);
 
-      // Verify ECS Cluster is created (name derived from domain)
-      template.hasResourceProperties('AWS::ECS::Cluster', {
-        ClusterName: 'openhands-example-com-sandbox',
-      });
+      // Verify no ECS Cluster is created in SandboxStack (it comes from ClusterStack)
+      template.resourceCountIs('AWS::ECS::Cluster', 0);
 
-      // Verify DynamoDB table is created (name derived from domain)
+      // Verify DynamoDB table is created
       template.hasResourceProperties('AWS::DynamoDB::Table', {
         TableName: 'openhands-example-com-sandbox-registry',
         KeySchema: Match.arrayWith([
@@ -824,6 +898,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         config: testConfig,
         networkOutput: networkStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
       });
 
       expect(stack.output).toBeDefined();
@@ -841,12 +916,12 @@ describe('OpenHands Infrastructure Stacks', () => {
         config: testConfig,
         networkOutput: networkStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
         idleTimeoutMinutes: 10,
       });
 
       const template = Template.fromStack(stack);
 
-      // Verify idle monitor Lambda has custom timeout
       template.hasResourceProperties('AWS::Lambda::Function', {
         FunctionName: 'openhands-sandbox-idle-monitor',
         Environment: {
@@ -863,6 +938,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         config: testConfig,
         networkOutput: networkStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
       });
 
       const template = Template.fromStack(stack);
@@ -897,12 +973,19 @@ describe('OpenHands Infrastructure Stacks', () => {
         dataBucket: monitoringStack.output.dataBucket,
       });
 
+      const clusterStack = new ClusterStack(app, 'TestClusterStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+      });
+
       const computeStack = new ComputeStack(app, 'TestComputeStack', {
         env: testEnv,
         config: testConfig,
         networkOutput: networkStack.output,
         securityOutput: securityStack.output,
         monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
         databaseOutput: mockDatabaseOutput,
         sandboxOutput: mockSandboxOutput,
       });
@@ -911,12 +994,14 @@ describe('OpenHands Infrastructure Stacks', () => {
       expect(networkStack.stackName).toBeDefined();
       expect(securityStack.stackName).toBeDefined();
       expect(monitoringStack.stackName).toBeDefined();
+      expect(clusterStack.stackName).toBeDefined();
       expect(computeStack.stackName).toBeDefined();
 
       // Verify outputs are defined
       expect(networkStack.output).toBeDefined();
       expect(securityStack.output).toBeDefined();
       expect(monitoringStack.output).toBeDefined();
+      expect(clusterStack.output).toBeDefined();
       expect(computeStack.output).toBeDefined();
     });
 
@@ -938,11 +1023,9 @@ describe('OpenHands Infrastructure Stacks', () => {
         dataBucket: monitoringStack.output.dataBucket,
       });
 
-      // Verify SecurityStack outputs KMS key ARN
       expect(securityStack.output.userSecretsKmsKeyArn).toBeDefined();
       expect(securityStack.output.userSecretsKmsKeyId).toBeDefined();
 
-      // Verify UserConfigStack can be created with the KMS key
       const userConfigStack = new UserConfigStack(app, 'TestUserConfigStack', {
         env: testEnv,
         config: testConfig,

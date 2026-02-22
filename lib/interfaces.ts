@@ -1,9 +1,11 @@
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 
 /**
  * Configuration for the OpenHands infrastructure deployment
@@ -46,17 +48,36 @@ export interface NetworkStackOutput {
 }
 
 /**
+ * Output from ClusterStack (shared ECS cluster and Cloud Map namespace)
+ */
+export interface ClusterStackOutput {
+  /** Shared ECS cluster for all Fargate services */
+  cluster: ecs.ICluster;
+  /** ECS Cluster ARN */
+  clusterArn: string;
+  /** ECS Cluster name */
+  clusterName: string;
+  /** Cloud Map private DNS namespace */
+  namespace: servicediscovery.IPrivateDnsNamespace;
+  /** Cloud Map namespace name (e.g., "openhands.local") */
+  namespaceName: string;
+}
+
+/**
  * Output from SecurityStack
  */
 export interface SecurityStackOutput {
   albSecurityGroup: ec2.ISecurityGroup;
-  ec2SecurityGroup: ec2.ISecurityGroup;
-  ec2SecurityGroupId: string;
+  /** Security group for Fargate app/openresty services */
+  appServiceSecurityGroup: ec2.ISecurityGroup;
+  appServiceSecurityGroupId: string;
   /** Security group for EFS (NFS) used to persist workspaces */
   efsSecurityGroup: ec2.ISecurityGroup;
   efsSecurityGroupId: string;
-  ec2Role: iam.IRole;
-  ec2InstanceProfile: iam.CfnInstanceProfile;
+  /** IAM task role for the OpenHands app Fargate service */
+  appTaskRole: iam.IRole;
+  /** IAM execution role for Fargate tasks (image pull, logs, secrets) */
+  appExecutionRole: iam.IRole;
   /** IAM role ARN for sandbox containers (optional, only when sandboxAwsAccess is enabled) */
   sandboxRoleArn?: string;
   /** KMS key ARN for user secrets encryption (optional, only when user config enabled) */

@@ -57,14 +57,14 @@ aws secretsmanager create-secret --name openhands/sandbox-secret-key \
   --description "OpenHands sandbox secret key for session encryption"
 ```
 
-## Architecture (8 Stacks)
+## Architecture (10 Stacks)
 
 ```
 AuthStack (us-east-1) ← Cognito User Pool (shared across domains)
     ↓
 NetworkStack (main region)
     ↓
-SecurityStack ← depends on Network, creates KMS key
+SecurityStack ← depends on Network, creates KMS key, Fargate roles
     ↓
 MonitoringStack ← independent, S3 data bucket
     ↓
@@ -72,12 +72,16 @@ DatabaseStack ← depends on Network + Security
     ↓
 UserConfigStack ← depends on Security (KMS) + Monitoring (S3), creates Lambda
     ↓
-ComputeStack ← depends on Network + Security + Monitoring + Database + UserConfig
-    ↓           (routes /api/v1/user-config/* to Lambda via ALB target group)
+ClusterStack ← depends on Network, shared ECS cluster + Cloud Map namespace
+    ↓
+SandboxStack ← depends on Network + Monitoring + Cluster
+    ↓
+ComputeStack ← depends on Network + Security + Monitoring + Database + UserConfig + Cluster + Sandbox
+    ↓           (Fargate services for app + OpenResty, ALB, routes /api/v1/user-config/* to Lambda)
 EdgeStack (us-east-1) ← depends on Compute + Auth
 ```
 
-**Self-healing**: Aurora PostgreSQL + S3 + EFS preserve data across EC2 replacements.
+**Self-healing**: Aurora PostgreSQL + S3 + EFS preserve data across Fargate task replacements.
 
 ## Key Files
 
@@ -86,10 +90,11 @@ EdgeStack (us-east-1) ← depends on Compute + Auth
 | `bin/openhands-infra.ts` | CDK entry point |
 | `lib/interfaces.ts` | Stack I/O interfaces |
 | `lib/*-stack.ts` | Individual stack definitions |
+| `lib/cluster-stack.ts` | Shared ECS cluster + Cloud Map |
 | `config/config.toml` | OpenHands app config (LLM, sandbox) |
 | `config/sandbox-aws-policy.json` | Customizable IAM policy for sandbox |
 | `docker/patch-fix.js` | Frontend patches (URL rewriting) |
-| `docker/openresty/` | OpenResty proxy container |
+| `docker/openresty/` | OpenResty proxy container (Fargate service) |
 | `lambda/user-config/` | User config API Lambda |
 | `lib/lambda-edge/` | Lambda@Edge handlers |
 | `test/E2E_TEST_CASES.md` | E2E test cases |
@@ -125,7 +130,8 @@ User apps accessible via: `https://{port}-{convId}.runtime.{subdomain}.{domain}/
 ```bash
 npx cdk deploy --all --exclusively \
   OpenHands-Network OpenHands-Monitoring OpenHands-Security \
-  OpenHands-Database OpenHands-UserConfig OpenHands-Compute OpenHands-Edge \
+  OpenHands-Database OpenHands-UserConfig OpenHands-Cluster \
+  OpenHands-Sandbox OpenHands-Compute OpenHands-Edge \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<zone-id> \
   --context domainName=<domain> \
@@ -144,7 +150,7 @@ npx cdk deploy --all \
 
 | Change Type | Command |
 |-------------|---------|
-| Compute/Edge/Network | Exclude Auth stack |
+| Compute/Edge/Network/Cluster | Exclude Auth stack |
 | Cognito changes | Include all callback domains |
 | First deployment | Include all callback domains |
 
@@ -184,20 +190,26 @@ aws cognito-idp admin-set-user-password \
 
 | Issue | Check |
 |-------|-------|
-| 502 Bad Gateway | EC2 health, security groups |
+| 502 Bad Gateway | ECS service health, target group targets |
 | Token verification failed | Lambda@Edge logs (check region closest to user) |
 | Redirect loop | Cookie domain settings |
 | CORS errors | CloudFront response headers policy |
 | CloudFront 403 | WAF rules and logs |
+| Service not starting | ECS task stopped reason, CloudWatch logs |
 
-### Quick EC2 Debug
+### Quick ECS Debug
 
 ```bash
-# SSM to EC2
-aws ssm start-session --target <instance-id> --region <region>
+# Check ECS services
+aws ecs describe-services --cluster <cluster-name> \
+  --services openhands-app openhands-openresty --region <region>
 
-# Check logs
-docker logs openhands-app 2>&1 | grep -iE "(error|exception|failed)" | tail -20
+# Tail app logs
+aws logs tail /openhands/application --follow --region <region>
+
+# ECS exec into app container
+aws ecs execute-command --cluster <cluster-name> --task <task-id> \
+  --container openhands-app --interactive --command "/bin/bash" --region <region>
 ```
 
 ## Release Process (Automated)

@@ -21,15 +21,16 @@ import {
   OpenHandsConfig,
   NetworkStackOutput,
   MonitoringStackOutput,
+  ClusterStackOutput,
   SandboxStackOutput,
 } from './interfaces.js';
-
-const WARM_POOL_SIZE_DEFAULT = 2;
 
 export interface SandboxStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
   networkOutput: NetworkStackOutput;
   monitoringOutput: MonitoringStackOutput;
+  /** Shared ECS cluster and Cloud Map namespace from ClusterStack */
+  clusterOutput: ClusterStackOutput;
   /** Enable sandbox AWS access — custom IAM policy on task role */
   sandboxAwsAccess?: boolean;
   /** Path to custom policy JSON file for sandbox AWS access (default: config/sandbox-aws-policy.json) */
@@ -59,25 +60,14 @@ export class SandboxStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: SandboxStackProps) {
     super(scope, id, props);
 
-    const { config, networkOutput, monitoringOutput } = props;
+    const { config, networkOutput, monitoringOutput, clusterOutput } = props;
     const { vpc } = networkOutput;
     const { alertTopic } = monitoringOutput;
+    const { cluster, namespace } = clusterOutput;
 
     // Name prefix derived from domain to support multi-environment deployments
     const fullDomain = `${config.subDomain}.${config.domainName}`;
     const namePrefix = fullDomain.replace(/\./g, '-');
-
-    // ========================================
-    // ECS Cluster
-    // ========================================
-    const cluster = new ecs.Cluster(this, 'SandboxCluster', {
-      vpc,
-      clusterName: `${namePrefix}-sandbox`,
-      containerInsightsV2: ecs.ContainerInsights.ENABLED,
-    });
-    // Enable tag propagation: CDK app-level tags (Project, STAGE, Purpose, ManagedBy)
-    // are propagated to ECS tasks via the cluster's defaultCloudMapNamespace and task tags
-    cdk.Tags.of(cluster).add('Component', 'sandbox');
 
     // ========================================
     // DynamoDB Sandbox Registry
@@ -141,7 +131,7 @@ export class SandboxStack extends cdk.Stack {
       'Allow inter-sandbox communication'
     );
 
-    // NOTE: EC2 ↔ sandbox SG rules (ingress + egress) are added in ComputeStack
+    // NOTE: App service ↔ sandbox SG rules (ingress + egress) are added in ComputeStack
     // to avoid cyclic cross-stack dependency between SecurityStack and SandboxStack
 
     // ========================================
@@ -382,15 +372,6 @@ export class SandboxStack extends cdk.Stack {
     cdk.Tags.of(warmPoolService).add('Component', 'sandbox-warm-pool');
 
     // ========================================
-    // Cloud Map Private DNS Namespace
-    // ========================================
-    const namespace = new servicediscovery.PrivateDnsNamespace(this, 'OrchestratorNamespace', {
-      name: 'openhands.local',
-      vpc,
-      description: 'Private DNS for OpenHands sandbox orchestrator',
-    });
-
-    // ========================================
     // Sandbox Orchestrator Docker Image
     // ========================================
     const orchestratorImage = new DockerImageAsset(this, 'OrchestratorImage', {
@@ -406,7 +387,7 @@ export class SandboxStack extends cdk.Stack {
       description: 'Security group for sandbox orchestrator Fargate service',
       allowAllOutbound: true,
     });
-    // NOTE: Inbound rule from EC2 SG is added in ComputeStack to avoid cyclic dependency
+    // NOTE: Inbound rule from app service SG is added in ComputeStack to avoid cyclic dependency
 
     // ========================================
     // Orchestrator Fargate Task Definition

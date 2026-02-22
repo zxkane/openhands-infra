@@ -1,17 +1,18 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
-import * as sns from 'aws-cdk-lib/aws-sns';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as efs from 'aws-cdk-lib/aws-efs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
@@ -23,41 +24,31 @@ import {
   MonitoringStackOutput,
   ComputeStackOutput,
   DatabaseStackOutput,
+  ClusterStackOutput,
   SandboxStackOutput,
 } from './interfaces.js';
 
 /**
  * Default Docker image versions - update these when new stable versions are released.
  * Latest release: https://github.com/OpenHands/OpenHands/releases
- *
- * NOTE: Using CDK DockerImageAsset to build and push images during deployment.
- * Images are built for ARM64 (Graviton) architecture using Docker buildx.
- * See docker/ directory for Dockerfile contents.
  */
 const DEFAULT_OPENHANDS_VERSION = '1.3.0';
-// Runtime version matching OpenHands 1.3.x - see docker-compose.yml in OpenHands repo
 const DEFAULT_RUNTIME_VERSION = '1.3-nikolaik';
 
 /**
  * Read OpenHands config.toml from the config directory.
- * The config file uses ${AWS_REGION} placeholder which will be replaced at runtime,
- * and ${AWS_S3_BUCKET} placeholder which is replaced at CDK synth time.
- *
- * @param s3BucketName - The S3 bucket name to substitute for ${AWS_S3_BUCKET}
- * @param agentServerImageUri - The full agent server image URI to substitute for ${AGENT_SERVER_IMAGE}
- * @throws Error if config file is not found or contains invalid content
+ * Replaces all placeholders with actual values at CDK synth time
+ * (no shell expansion available in Fargate).
  */
-function readOpenHandsConfig(s3BucketName: string, agentServerImageUri: string): string {
+function readOpenHandsConfig(s3BucketName: string, agentServerImageUri: string, region: string): string {
   const projectRoot = process.cwd();
   const configPath = path.resolve(projectRoot, 'config', 'config.toml');
 
-  // Security: Validate path is within expected directory (prevent path traversal)
   const expectedDir = path.resolve(projectRoot, 'config');
   if (!configPath.startsWith(expectedDir)) {
     throw new Error(`Security Error: Config path must be within ${expectedDir}`);
   }
 
-  // Check file exists before reading
   if (!fs.existsSync(configPath)) {
     throw new Error(
       `Configuration file not found: ${configPath}\n` +
@@ -73,20 +64,19 @@ function readOpenHandsConfig(s3BucketName: string, agentServerImageUri: string):
     throw new Error(`Failed to read config file: ${err.message}`);
   }
 
-  // Validate config has required sections
   if (!content.includes('[core]') || !content.includes('[llm]')) {
     throw new Error(
       'Invalid config.toml: Missing required sections [core] and/or [llm]'
     );
   }
 
-  // Replace ${AWS_REGION} with ${REGION} for shell variable substitution in user data
-  content = content.replace(/\$\{AWS_REGION\}/g, '${REGION}');
+  // Replace ${AWS_REGION} with the actual region value (no shell expansion in Fargate)
+  content = content.replace(/\$\{AWS_REGION\}/g, region);
 
-  // Replace ${AWS_S3_BUCKET} with actual bucket name at CDK synth time
+  // Replace ${AWS_S3_BUCKET} with actual bucket name
   content = content.replace(/\$\{AWS_S3_BUCKET\}/g, s3BucketName);
 
-  // Replace ${AGENT_SERVER_IMAGE} with the provided image URI at CDK synth time
+  // Replace ${AGENT_SERVER_IMAGE} with the provided image URI
   content = content.replace(/\$\{AGENT_SERVER_IMAGE\}/g, agentServerImageUri);
 
   // Remove comments and empty lines for cleaner embedded config
@@ -103,41 +93,40 @@ export interface ComputeStackProps extends cdk.StackProps {
   networkOutput: NetworkStackOutput;
   securityOutput: SecurityStackOutput;
   monitoringOutput: MonitoringStackOutput;
+  /** Shared ECS cluster and Cloud Map namespace from ClusterStack */
+  clusterOutput: ClusterStackOutput;
   /**
    * Database configuration for Aurora Serverless PostgreSQL.
    * Optional: When provided, enables self-healing architecture that persists
-   * conversation history across EC2 instance replacements.
-   * When omitted, the app uses SQLite on the EBS volume (data persists within instance lifecycle).
-   * The EC2 instance uses IAM role authentication (no passwords).
+   * conversation history across task replacements.
    */
   databaseOutput?: DatabaseStackOutput;
   /**
    * Enable sandbox AWS access (default: false).
-   * When enabled, sandbox containers receive scoped AWS credentials.
    */
   sandboxAwsAccess?: boolean;
   /**
    * User Config API Lambda function (optional).
    * When provided, creates ALB target group and listener rule for /api/v1/user-config/*
-   * to route requests to this Lambda function.
    */
   userConfigFunction?: lambda.IFunction;
   /**
    * Sandbox infrastructure output (required).
-   * Enables Fargate sandbox mode with RUNTIME=remote env vars
-   * and adds Sandbox Orchestrator to docker-compose.
+   * Enables Fargate sandbox mode with RUNTIME=remote env vars.
    */
   sandboxOutput: SandboxStackOutput;
 }
 
 /**
- * ComputeStack - Creates ASG, Launch Template, ALB, and EBS configuration
+ * ComputeStack - Creates Fargate services, ALB, and EFS configuration
  *
  * This stack deploys:
- * - Launch Template with Graviton (ARM64) instance
- * - Auto Scaling Group for self-healing
- * - Internal Application Load Balancer
- * - Target Group with health checks
+ * - OpenHands App Fargate Service (4 vCPU, 8 GB) with Cloud Map DNS
+ * - OpenResty Proxy Fargate Service (0.25 vCPU, 512 MB)
+ * - Internet-facing Application Load Balancer
+ * - IP-type Target Groups with health checks
+ * - EFS for persistent workspace storage
+ * - CloudWatch alarms for ECS service health
  */
 export class ComputeStack extends cdk.Stack {
   public readonly output: ComputeStackOutput;
@@ -146,89 +135,71 @@ export class ComputeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
 
-    const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxAwsAccess } = props;
-    const { sandboxOutput } = props;
+    const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxOutput, clusterOutput } = props;
     const { vpc } = networkOutput;
-    const { albSecurityGroup, ec2SecurityGroup, efsSecurityGroup, ec2Role, ec2InstanceProfile, sandboxRoleArn, sandboxSecretKeyName } = securityOutput;
+    const { albSecurityGroup, appServiceSecurityGroup, efsSecurityGroup, appTaskRole, appExecutionRole, sandboxSecretKeyName } = securityOutput;
     const { alertTopic, dataBucket } = monitoringOutput;
+    const { cluster, namespace } = clusterOutput;
 
     // Full domain for runtime URL pattern
     const fullDomain = `${config.subDomain}.${config.domainName}`;
 
-    // EC2 ↔ sandbox Fargate task networking
-    // Both ingress and egress rules are placed here (not in SandboxStack) to avoid
-    // cyclic cross-stack dependency between SecurityStack and SandboxStack
+    // ========================================
+    // App ↔ Sandbox Fargate Networking
+    // ========================================
     const sandboxTaskSg = ec2.SecurityGroup.fromSecurityGroupId(
       this, 'ImportedSandboxTaskSg', sandboxOutput.sandboxTaskSecurityGroupId
     );
-    // EC2 → sandbox (outbound)
-    ec2SecurityGroup.addEgressRule(
+    // App → sandbox (outbound)
+    appServiceSecurityGroup.addEgressRule(
       sandboxTaskSg,
       ec2.Port.tcpRange(1, 65535),
-      'Allow EC2 to reach sandbox Fargate tasks'
+      'Allow app service to reach sandbox Fargate tasks'
     );
-    // sandbox → EC2 (inbound to sandbox SG from EC2 SG)
-    new ec2.CfnSecurityGroupIngress(this, 'SandboxIngressFromEc2', {
+    // sandbox → app (inbound to sandbox SG from app SG)
+    new ec2.CfnSecurityGroupIngress(this, 'SandboxIngressFromApp', {
       groupId: sandboxOutput.sandboxTaskSecurityGroupId,
-      sourceSecurityGroupId: ec2SecurityGroup.securityGroupId,
+      sourceSecurityGroupId: appServiceSecurityGroup.securityGroupId,
       ipProtocol: 'tcp',
       fromPort: 1,
       toPort: 65535,
-      description: 'Allow all TCP from EC2 (OpenResty routes to sandbox ports)',
+      description: 'Allow all TCP from app service (OpenResty routes to sandbox ports)',
     });
 
-    // EC2 ↔ orchestrator Fargate service (port 8081 for sandbox API)
-    // Both egress (EC2 → orchestrator) and ingress (orchestrator ← EC2) rules needed.
-    // Placed here (not in SandboxStack) to avoid cyclic cross-stack dependency.
-    ec2SecurityGroup.addEgressRule(
+    // App ↔ orchestrator Fargate service (port 8081 for sandbox API)
+    appServiceSecurityGroup.addEgressRule(
       ec2.SecurityGroup.fromSecurityGroupId(this, 'ImportedOrchestratorSg', sandboxOutput.orchestratorSecurityGroupId),
       ec2.Port.tcp(8081),
-      'Allow EC2 to reach sandbox orchestrator Fargate service'
+      'Allow app service to reach sandbox orchestrator'
     );
-    new ec2.CfnSecurityGroupIngress(this, 'OrchestratorIngressFromEc2', {
+    new ec2.CfnSecurityGroupIngress(this, 'OrchestratorIngressFromApp', {
       groupId: sandboxOutput.orchestratorSecurityGroupId,
-      sourceSecurityGroupId: ec2SecurityGroup.securityGroupId,
+      sourceSecurityGroupId: appServiceSecurityGroup.securityGroupId,
       ipProtocol: 'tcp',
       fromPort: 8081,
       toPort: 8081,
-      description: 'Allow EC2 to reach sandbox orchestrator Fargate service',
+      description: 'Allow app service to reach sandbox orchestrator',
     });
 
-    // NOTE: ECS/DynamoDB permissions for sandbox orchestrator are on the orchestrator
-    // Fargate task role (in SandboxStack), not the EC2 role. The orchestrator runs as
-    // a standalone ECS Fargate service, not as a docker-compose sidecar on EC2.
+    // App service internal communication (port 3000 between tasks in the same SG)
+    appServiceSecurityGroup.addIngressRule(
+      appServiceSecurityGroup,
+      ec2.Port.tcp(3000),
+      'Allow internal communication between app service tasks'
+    );
+    appServiceSecurityGroup.addEgressRule(
+      appServiceSecurityGroup,
+      ec2.Port.tcp(3000),
+      'Allow outbound to app service tasks (for OpenResty → app)'
+    );
 
-    // Preserve cross-stack exports to avoid CloudFormation "Cannot delete export"
-    // errors. These were previously referenced by docker-compose env vars and IAM
-    // policies. A future cleanup deploy can remove these once no deployed stack
-    // imports them. CDK auto-generates exports when sandbox output fields are used;
-    // referencing them here keeps those exports alive during the migration.
-    new cdk.CfnOutput(this, 'SandboxClusterArn', {
-      value: sandboxOutput.clusterArn,
-    });
-    new cdk.CfnOutput(this, 'SandboxRegistryTableName', {
-      value: sandboxOutput.registryTableName,
-    });
-    new cdk.CfnOutput(this, 'SandboxRegistryTableArn', {
-      value: sandboxOutput.registryTableArn,
-    });
-    new cdk.CfnOutput(this, 'SandboxWarmPoolServiceName', {
-      value: sandboxOutput.warmPoolServiceName,
-    });
-    new cdk.CfnOutput(this, 'SandboxExecutionRoleArn', {
-      value: sandboxOutput.sandboxExecutionRoleArn,
-    });
-    new cdk.CfnOutput(this, 'SandboxTaskRoleArn', {
-      value: sandboxOutput.sandboxTaskRoleArn,
-    });
-
-    // Get private subnets for EC2 and internal ALB
+    // ========================================
+    // Persistent Workspace EFS
+    // ========================================
     const privateSubnets = vpc.selectSubnets({
       subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
     });
 
-    // Persistent workspace storage
-    // Mounting /data/openhands from EFS allows conversations to be resumed after EC2 replacement.
     const workspaceFileSystem = new efs.FileSystem(this, 'WorkspaceFileSystem', {
       vpc,
       vpcSubnets: privateSubnets,
@@ -241,19 +212,16 @@ export class ComputeStack extends cdk.Stack {
     });
     cdk.Tags.of(workspaceFileSystem).add('backup', 'true');
 
-    // Ensure the EFS file system policy allows mounting from EC2 instances only.
-    // Restrict access to the specific EC2 role to prevent unauthorized access.
+    // EFS resource policy: allow mounting from Fargate app task role only
     workspaceFileSystem.addToResourcePolicy(new iam.PolicyStatement({
       sid: 'AllowClientMountViaMountTarget',
       effect: iam.Effect.ALLOW,
-      principals: [ec2Role],
+      principals: [appTaskRole],
       actions: [
         'elasticfilesystem:ClientMount',
         'elasticfilesystem:ClientWrite',
         'elasticfilesystem:ClientRootAccess',
       ],
-      // IMPORTANT: Use Resource="*" to avoid a self-dependency cycle in CloudFormation when
-      // embedding FileSystemPolicy directly on AWS::EFS::FileSystem.
       resources: ['*'],
       conditions: {
         Bool: {
@@ -262,27 +230,15 @@ export class ComputeStack extends cdk.Stack {
       },
     }));
 
-    // Access Point uses root (uid=0) because OpenHands sandbox containers run as root
-    // and need full access to workspace files for Docker operations and code execution.
-    // The EFS policy above restricts access to only the EC2 role via mount targets.
     const workspaceAccessPoint = new efs.AccessPoint(this, 'WorkspaceAccessPoint', {
       fileSystem: workspaceFileSystem,
       path: '/openhands',
-      posixUser: {
-        uid: '0',
-        gid: '0',
-      },
-      createAcl: {
-        ownerUid: '0',
-        ownerGid: '0',
-        permissions: '0777',
-      },
+      posixUser: { uid: '0', gid: '0' },
+      createAcl: { ownerUid: '0', ownerGid: '0', permissions: '0777' },
     });
 
-    // Grant EC2 role permission to access EFS (required for IAM-authenticated mount)
-    // Use Resource='*' to avoid circular dependency between SecurityStack and ComputeStack.
-    // The EFS resource policy above restricts access to only this specific role.
-    ec2Role.addToPrincipalPolicy(new iam.PolicyStatement({
+    // Grant app task role permission to access EFS
+    appTaskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       sid: 'EfsClientAccess',
       actions: [
         'elasticfilesystem:ClientMount',
@@ -297,45 +253,26 @@ export class ComputeStack extends cdk.Stack {
       },
     }));
 
-    // SSM Parameters for Docker image versions (allows runtime updates without redeploying)
-    const openhandsVersionParam = new ssm.StringParameter(this, 'OpenHandsVersionParam', {
-      parameterName: '/openhands/docker/openhands-version',
-      stringValue: DEFAULT_OPENHANDS_VERSION,
-      description: 'OpenHands Docker image version tag',
-      tier: ssm.ParameterTier.STANDARD,
-    });
+    // ========================================
+    // Log Groups (referenced by name to avoid cross-stack cycles)
+    // ========================================
+    // The /openhands/application log group is created by MonitoringStack.
+    // The /openhands/openresty log group is auto-created by ECS at runtime
+    // (appTaskRole has logs:CreateLogGroup on /openhands/*).
+    // Using fromLogGroupName avoids cyclic dependencies between SecurityStack
+    // (which owns the roles) and ComputeStack (which creates the services).
+    const appLogGroup = logs.LogGroup.fromLogGroupName(this, 'AppLogGroupRef', '/openhands/application');
+    const openrestyLogGroup = logs.LogGroup.fromLogGroupName(this, 'OpenRestyLogGroupRef', '/openhands/openresty');
 
-    const runtimeVersionParam = new ssm.StringParameter(this, 'RuntimeVersionParam', {
-      parameterName: '/openhands/docker/runtime-version',
-      stringValue: DEFAULT_RUNTIME_VERSION,
-      description: 'OpenHands Runtime Docker image version tag',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    // Origin verification secret for CloudFront-to-ALB authentication
-    // This secret is shared with EdgeStack via cross-stack reference
-    // CloudFront sends this in X-Origin-Verify header, ALB validates it
-    // Use uniqueId which generates a stable hash based on construct path (works across stacks)
-    const originVerifySecret = cdk.Names.uniqueId(this).substring(0, 32);
-
-    // Store in local region for ALB listener rules
-    const originVerifyParam = new ssm.StringParameter(this, 'OriginVerifyParam', {
-      parameterName: '/openhands/cloudfront/origin-verify-secret',
-      stringValue: originVerifySecret,
-      description: 'Secret header value for CloudFront origin verification',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    // Build custom Docker images using CDK DockerImageAsset
-    // Images are built for ARM64 (Graviton) architecture during CDK deployment
-    // and automatically pushed to CDK-managed ECR repositories
+    // ========================================
+    // Docker Image Builds
+    // ========================================
     const customOpenhandsImage = new DockerImageAsset(this, 'CustomOpenHandsImage', {
       directory: path.join(__dirname, '..', 'docker'),
       platform: Platform.LINUX_ARM64,
       buildArgs: {
         OPENHANDS_VERSION: DEFAULT_OPENHANDS_VERSION,
       },
-      // Exclude agent-server subdirectories from the build context
       exclude: [
         'agent-server',
         'agent-server-custom',
@@ -350,16 +287,11 @@ export class ComputeStack extends cdk.Stack {
       platform: Platform.LINUX_ARM64,
     });
 
-    // Build OpenResty Docker image for runtime proxy
-    // Runs as a container on the same bridge network as sandbox containers
-    // enabling direct routing to any port without Docker port mappings
     const openrestyImage = new DockerImageAsset(this, 'OpenRestyImage', {
       directory: path.join(__dirname, '..', 'docker', 'openresty'),
       platform: Platform.LINUX_ARM64,
     });
 
-    // Build custom runtime Docker image with Chromium for browser automation (MCP chrome-devtools)
-    // This runtime image is used as the sandbox container where agent code executes
     const customRuntimeImage = new DockerImageAsset(this, 'CustomRuntimeImage', {
       directory: path.join(__dirname, '..', 'docker', 'runtime-custom'),
       platform: Platform.LINUX_ARM64,
@@ -368,295 +300,253 @@ export class ComputeStack extends cdk.Stack {
       },
     });
 
-    // Grant EC2 role permission to pull from CDK-managed ECR repositories
-    customOpenhandsImage.repository.grantPull(ec2Role);
-    customAgentServerImage.repository.grantPull(ec2Role);
-    openrestyImage.repository.grantPull(ec2Role);
-    customRuntimeImage.repository.grantPull(ec2Role);
+    // Grant execution role permission to pull from CDK-managed ECR repositories
+    customOpenhandsImage.repository.grantPull(appExecutionRole);
+    openrestyImage.repository.grantPull(appExecutionRole);
 
-    // Note: IAM authentication permission for Aurora PostgreSQL is granted in DatabaseStack
-    // using the EC2 role ARN to avoid cyclic cross-stack dependencies
+    // ========================================
+    // Origin Verification Secret
+    // ========================================
+    const originVerifySecret = cdk.Names.uniqueId(this).substring(0, 32);
 
-    // Extract repository URI and image tag for user data
-    // DockerImageAsset.imageUri format: <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>
-    const openhandsImageUri = customOpenhandsImage.imageUri;
-    const agentServerImageUri = customAgentServerImage.imageUri;
-    const openrestyImageUri = openrestyImage.imageUri;
+    new ssm.StringParameter(this, 'OriginVerifyParam', {
+      parameterName: '/openhands/cloudfront/origin-verify-secret',
+      stringValue: originVerifySecret,
+      description: 'Secret header value for CloudFront origin verification',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-    // Use DockerImageAsset properties to get repository URI and tag
-    // Note: imageUri is a CDK token (CloudFormation intrinsic), so string operations don't work.
-    // DockerImageAsset exposes repositoryUri and imageTag properties for this purpose.
-    const agentServerRepo = customAgentServerImage.repository.repositoryUri;
-    const agentServerTag = customAgentServerImage.imageTag;
+    // SSM Parameters for Docker image versions
+    new ssm.StringParameter(this, 'OpenHandsVersionParam', {
+      parameterName: '/openhands/docker/openhands-version',
+      stringValue: DEFAULT_OPENHANDS_VERSION,
+      description: 'OpenHands Docker image version tag',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-    // User Data script for EC2 instance (compact version to stay under 16KB)
-    const userData = ec2.UserData.forLinux();
-    userData.addCommands(
-      '#!/bin/bash',
-      'set -ex',
-      'exec > >(tee /var/log/user-data.log) 2>&1',
-      'TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")',
-      'INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)',
-      'REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)',
-      `error_handler() { aws sns publish --topic-arn "${alertTopic.topicArn}" --region "$REGION" --subject "OpenHands EC2 Failed" --message "Instance: $INSTANCE_ID, Line: $1" || true; exit 1; }`,
-      'trap \'error_handler $LINENO\' ERR',
-      'retry() { for i in 1 2 3; do "$@" && return 0; sleep 10; done; return 1; }',
-      'retry dnf install -y docker',
-      'retry dnf install -y amazon-efs-utils',
-      'mkdir -p /etc/docker',
-      // Docker DNS: use VPC DNS resolver so containers can resolve Cloud Map private DNS
-      // (e.g., orchestrator.openhands.local for the sandbox orchestrator Fargate service)
-      'VPC_DNS=$(grep "^nameserver" /etc/resolv.conf | head -1 | awk \'{print $2}\')',
-      'echo "{\\\"dns\\\":[\\\"$VPC_DNS\\\"],\\\"default-address-pools\\\":[{\\\"base\\\":\\\"172.17.0.0/12\\\",\\\"size\\\":24}],\\\"log-driver\\\":\\\"json-file\\\",\\\"log-opts\\\":{\\\"max-size\\\":\\\"100m\\\",\\\"max-file\\\":\\\"3\\\"}}" > /etc/docker/daemon.json',
-      'systemctl enable --now docker',
-      'usermod -aG docker ec2-user',
-      'chmod 666 /var/run/docker.sock',
-      'curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-Linux-aarch64" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose',
-      'retry dnf install -y amazon-cloudwatch-agent',
-      // CloudWatch Agent configuration
-      'echo \'{"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"cpu":{"measurement":["cpu_usage_idle","cpu_usage_user"],"metrics_collection_interval":60,"totalcpu":true},"mem":{"measurement":["mem_used_percent"],"metrics_collection_interval":60},"disk":{"measurement":["disk_used_percent"],"metrics_collection_interval":60,"resources":["/","/data"]}},"append_dimensions":{"AutoScalingGroupName":"${aws:AutoScalingGroupName}","InstanceId":"${aws:InstanceId}"}}}\' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json',
-      '/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json',
-      'for i in {1..60}; do [ -e /dev/nvme1n1 ] && break; sleep 5; done; [ -e /dev/nvme1n1 ] || exit 1',
-      'blkid /dev/nvme1n1 || mkfs -t xfs /dev/nvme1n1',
-      'mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab',
-      '# Mount EFS at /data/openhands (persists workspaces across EC2 replacement)',
-      'mkdir -p /data/openhands',
-      `echo "${workspaceFileSystem.fileSystemId}:/ /data/openhands efs _netdev,tls,iam,accesspoint=${workspaceAccessPoint.accessPointId} 0 0" >> /etc/fstab`,
-      'retry mount -a',
-      'mountpoint -q /data/openhands || exit 1',
-      'mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands',
-      // Retrieve OH_SECRET_KEY from Secrets Manager (managed by SecurityStack CDK)
-      // This key encrypts secrets in conversation state, enabling resume after sandbox restart
-      // Security: Disable xtrace to prevent logging secret value
-      'set +x',
-      'echo "Retrieving sandbox secret key..."',
-      `OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id ${sandboxSecretKeyName} --region "$REGION" --query SecretString --output text)`,
-      '[ -n "$OH_SECRET_KEY" ] || { echo "ERROR: Failed to retrieve sandbox secret key" >&2; exit 1; }',
-      'export OH_SECRET_KEY',
-      'echo "Sandbox secret key configured"',
-      'set -x',
-      'cat > /data/openhands/docker-compose.yml << EOF',
-      'services:',
-      // OpenResty reverse proxy - runs as container on Docker bridge network
-      // Enables direct routing to sandbox container IPs on any port
-      '  openresty:',
-      `    image: ${openrestyImageUri}`,
-      '    container_name: openresty-proxy',
-      '    restart: always',
-      '    ports:',
-      '      - "8080:8080"',  // ALB connects to this port for runtime traffic
-      '    environment:',
-      `      - ORCHESTRATOR_URL=http://${sandboxOutput.orchestratorDnsName}:8081`,
-      '    depends_on:',
-      '      - openhands',
-      '    logging:',
-      '      driver: json-file',
-      '      options:',
-      '        max-size: "100m"',
-      '        max-file: "3"',
-      '',
-      '  openhands:',
-      `    image: ${openhandsImageUri}`,
-      '    container_name: openhands-app',
-      '    restart: unless-stopped',
-      '    environment:',
-      '      - SANDBOX_USER_ID=0',
-      `      - SANDBOX_RUNTIME_CONTAINER_IMAGE=${customRuntimeImage.imageUri}`,
-      // Ensure agent-server containers bind-mount the host workspace into /workspace.
-      // The host path (/data/openhands/workspace) is backed by EFS so it persists across EC2 replacement.
-      // When sandboxAwsAccess is enabled, also mount the credentials file (read-only).
-      sandboxAwsAccess && sandboxRoleArn
-        ? '      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw,/data/openhands/config/sandbox-credentials:/data/sandbox-credentials:ro'
-        : '      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw',
-      '      - WORKSPACE_MOUNT_PATH=/data/openhands/workspace',
-      // OpenHands config uses WORKSPACE_BASE for workspace root (and derives legacy mounts from it).
-      // This must be a host path understood by the Docker daemon to ensure nested runtimes get a real bind mount.
-      '      - WORKSPACE_BASE=/data/openhands/workspace',
-      '      - LOG_ALL_EVENTS=true',
-      '      - HIDE_LLM_SETTINGS=true',
-      '      - USER_AUTH_CLASS=openhands.server.user_auth.cognito_user_auth.CognitoUserAuth',
-      '      - LLM_MODEL=bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0',
-      '      - LLM_AWS_REGION_NAME=us-west-2',
-      // Ensure AWS SDKs inside the container have a default region for signing/endpoint resolution
-      '      - AWS_REGION=$REGION',
-      '      - AWS_DEFAULT_REGION=$REGION',
-      `      - AWS_S3_BUCKET=${dataBucket.bucketName}`,
-      '      - FILE_STORE=s3',
-      `      - FILE_STORE_PATH=${dataBucket.bucketName}`,
-      // User Config feature flag and KMS key for secrets encryption
-      // When USER_CONFIG_ENABLED=true, user-specific MCP configs are loaded from S3
-      ...(securityOutput.userSecretsKmsKeyId ? [
-        '      - USER_CONFIG_ENABLED=true',
-        `      - USER_SECRETS_KMS_KEY_ID=${securityOutput.userSecretsKmsKeyId}`,
-      ] : [
-        '      - USER_CONFIG_ENABLED=false',
-      ]),
-      // OH_SECRET_KEY encrypts/decrypts secrets in conversation state (uses shell var from user-data)
-      // Required by both main app (load/save conversations) and sandbox containers (runtime access)
-      '      - OH_SECRET_KEY=$OH_SECRET_KEY',
-      // Note: network_mode should NOT be set here as OpenHands sets it internally
-      // Only set extra_hosts for MCP connection support (PR #12236)
-      // When sandboxAwsAccess is enabled, also set environment variables for AWS credentials
-      // OH_SECRET_KEY is dynamically injected via $OH_SECRET_KEY shell variable (set in user-data)
-      sandboxAwsAccess && sandboxRoleArn
-        ? '      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}}'
-        : '      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"OH_SECRET_KEY":"$OH_SECRET_KEY"}}',
-      `      - AGENT_SERVER_IMAGE_REPOSITORY=${agentServerRepo}`,
-      `      - AGENT_SERVER_IMAGE_TAG=${agentServerTag}`,
-      '      - AGENT_ENABLE_BROWSING=false',
-      '      - AGENT_ENABLE_MCP=true',
-      // RUNTIME=remote delegates sandbox creation to the Sandbox Orchestrator → ECS Fargate
-      '      - RUNTIME=remote',
-      `      - SANDBOX_REMOTE_RUNTIME_API_URL=${sandboxOutput.orchestratorApiUrl}`,
-      '      - SANDBOX_API_KEY=local',  // Required by RemoteSandboxServiceInjector
-      '      - SANDBOX_START_TIMEOUT=300',  // Fargate tasks take ~90s to start (vs 5s Docker)
-      // Environment variables injected into sandbox containers at startup
-      // OH_SECRET_KEY enables secret persistence across sandbox restarts (required for conversation resume)
-      // NOTE: AWS_SHARED_CREDENTIALS_FILE is NOT set for Fargate sandboxes — the ECS task role
-      // provides credentials natively via the ECS credential provider. Setting it would override
-      // the default provider and point to a non-existent file.
-      '      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}',
-      // DB_* env vars enable PostgreSQL mode in OpenHands V1 (DbSessionInjector checks DB_HOST)
-      // DB_SSL=require is essential for Aurora IAM auth (asyncpg requires explicit SSL)
-      // Use RDS Proxy endpoint for automatic IAM token management and connection pooling
-      // Note: clusterEndpoint reference kept for CloudFormation export compatibility during migration
-      ...(databaseOutput ? [
-        `      - DB_HOST=${databaseOutput.proxyEndpoint}`,
-        `      - DB_PORT=${databaseOutput.clusterPort}`,
-        `      - DB_NAME=${databaseOutput.databaseName}`,
-        `      - DB_USER=${databaseOutput.databaseUser}`,
-        '      - DB_SSL=require',
-        `      - DB_CLUSTER_ENDPOINT=${databaseOutput.clusterEndpoint}`,
-      ] : []),
-      '    volumes:',
-      '      - /var/run/docker.sock:/var/run/docker.sock',
-      '      - /root/.docker:/root/.docker:ro',  // ECR credentials for Docker API
-      '      - /data/openhands/.openhands:/root/.openhands',
-      // IMPORTANT: workspace_base in config.toml is a host-path used by the Docker daemon.
-      // Mount the EFS-backed host path into the container at the same absolute path so
-      // the nested agent-server runtime gets a real bind mount (persists across EC2 replacement).
-      '      - /data/openhands/workspace:/data/openhands/workspace',
-      '      - /data/openhands/config/config.toml:/app/config.toml:ro',
-      ...(databaseOutput ? ['      - /data/openhands/config/database.env:/app/database.env:ro'] : []),
-      // Mount sandbox credentials file (read-only) when sandboxAwsAccess is enabled
-      // OpenHands container needs this to pass credentials to sandbox containers via SANDBOX_VOLUMES
-      ...(sandboxAwsAccess && sandboxRoleArn ? ['      - /data/openhands/config/sandbox-credentials:/data/openhands/config/sandbox-credentials:ro'] : []),
-      '    ports:',
-      '      - "3000:3000"',  // OpenHands app port (direct access from ALB for main app)
-      ...(databaseOutput ? [
-        '    env_file:',
-        '      - /data/openhands/config/database.env',
-      ] : []),
-      '    extra_hosts:',
-      '      - "host.docker.internal:host-gateway"',
-      '',
-      // NOTE: Sandbox Orchestrator now runs as a standalone ECS Fargate service
-      // with Cloud Map DNS (orchestrator.openhands.local:8081), not as a docker-compose sidecar.
-      '',
-      '  watchtower:',
-      '    image: containrrr/watchtower:1.7.1',
-      '    restart: unless-stopped',
-      '    volumes:',
-      '      - /var/run/docker.sock:/var/run/docker.sock',
-      '    environment:',
-      '      - WATCHTOWER_CLEANUP=true',
-      '      - WATCHTOWER_POLL_INTERVAL=86400',
-      '    command: openhands-app openresty-proxy',  // Watch both containers
-      'EOF',
-      '',
-      '# Create config.toml (loaded from config/config.toml at CDK synth time)',
-      'cat > /data/openhands/config/config.toml << CONFIG',
-      readOpenHandsConfig(dataBucket.bucketName, agentServerImageUri),
-      'CONFIG',
-      '',
-      // Aurora database setup via RDS Proxy with password from Secrets Manager
-      // No token refresh needed - password is stable and proxy handles connection pooling
-      ...(databaseOutput ? [
-        `cat > /usr/local/bin/setup-db-credentials.sh << 'DBSCRIPT'\n#!/bin/bash\nset -e\nDB_HOST="${databaseOutput.proxyEndpoint}"\nDB_PORT="${databaseOutput.clusterPort}"\nDB_USER="${databaseOutput.databaseUser}"\nDB_NAME="${databaseOutput.databaseName}"\nTOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")\nREGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)\n# Get password from Secrets Manager\nSECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id openhands/database/proxy-user --region "$REGION" --query SecretString --output text 2>/dev/null || echo "")\nif [ -z "$SECRET_VALUE" ]; then echo "ERROR: Failed to retrieve database secret"; exit 1; fi\nDB_PASS=$(echo "$SECRET_VALUE" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")\nENCODED_PASS=$(python3 -c "import urllib.parse; print(urllib.parse.quote(\\"$DB_PASS\\", safe=\\"\\"))")\nmkdir -p /data/openhands/config\necho "DB_HOST=$DB_HOST" > /data/openhands/config/database.env\necho "DB_PORT=$DB_PORT" >> /data/openhands/config/database.env\necho "DB_NAME=$DB_NAME" >> /data/openhands/config/database.env\necho "DB_USER=$DB_USER" >> /data/openhands/config/database.env\necho "DB_PASS=$DB_PASS" >> /data/openhands/config/database.env\necho "DB_SSL=require" >> /data/openhands/config/database.env\necho "DATABASE_URL=postgresql://\${DB_USER}:\${ENCODED_PASS}@\${DB_HOST}:\${DB_PORT}/\${DB_NAME}?sslmode=require" >> /data/openhands/config/database.env\nchmod 600 /data/openhands/config/database.env\necho "Database credentials configured successfully"\nDBSCRIPT`,
-        'chmod +x /usr/local/bin/setup-db-credentials.sh',
-        '/usr/local/bin/setup-db-credentials.sh',
-      ] : []),
-      // Sandbox AWS credentials refresh - assumes sandboxRole and writes credentials file
-      // Credentials have 15-minute lifetime, refreshed every 10 minutes via systemd timer
-      ...(sandboxAwsAccess && sandboxRoleArn ? [
-        `cat > /usr/local/bin/refresh-sandbox-creds.sh << 'SANDBOXSCRIPT'\n#!/bin/bash\nset -e\nROLE_ARN="${sandboxRoleArn}"\nCREDS_FILE="/data/openhands/config/sandbox-credentials"\nTOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")\nREGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)\nif [ -z "$ROLE_ARN" ]; then echo "ROLE_ARN not set, skipping credential refresh"; exit 0; fi\nCREDENTIALS=$(aws sts assume-role --role-arn "$ROLE_ARN" --role-session-name "sandbox-$(date +%s)" --external-id "openhands-sandbox" --duration-seconds 900 --output json 2>/dev/null)\nif [ $? -ne 0 ]; then echo "Failed to assume role $ROLE_ARN"; exit 1; fi\nmkdir -p "$(dirname $CREDS_FILE)"\ncat > "$CREDS_FILE" << EOF\n[default]\naws_access_key_id=$(echo $CREDENTIALS | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['AccessKeyId'])")\naws_secret_access_key=$(echo $CREDENTIALS | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SecretAccessKey'])")\naws_session_token=$(echo $CREDENTIALS | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SessionToken'])")\nregion=$REGION\nEOF\nchmod 600 "$CREDS_FILE"\necho "Sandbox credentials refreshed at $(date)"\nSANDBOXSCRIPT`,
-        'chmod +x /usr/local/bin/refresh-sandbox-creds.sh',
-        // Create systemd service and timer for credential refresh
-        `cat > /etc/systemd/system/refresh-sandbox-credentials.service << 'SVCFILE'\n[Unit]\nDescription=Refresh Sandbox AWS Credentials\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/refresh-sandbox-creds.sh\nSVCFILE`,
-        `cat > /etc/systemd/system/refresh-sandbox-credentials.timer << 'TIMERFILE'\n[Unit]\nDescription=Refresh Sandbox AWS Credentials Timer\n[Timer]\nOnBootSec=30sec\nOnUnitActiveSec=10min\n[Install]\nWantedBy=timers.target\nTIMERFILE`,
-        // Initial credential refresh and enable timer
-        '/usr/local/bin/refresh-sandbox-creds.sh',
-        'systemctl daemon-reload && systemctl enable refresh-sandbox-credentials.timer && systemctl start refresh-sandbox-credentials.timer',
-      ] : []),
-      `cat > /etc/systemd/system/openhands.service << SERVICE\n[Unit]\nDescription=OpenHands\nAfter=docker.service\nRequires=docker.service\n[Service]\nType=simple\nWorkingDirectory=/data/openhands\nExecStart=/usr/local/bin/docker-compose up\nExecStop=/usr/local/bin/docker-compose down\nRestart=always\nUser=root\n[Install]\nWantedBy=multi-user.target\nSERVICE`,
-      `aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${cdk.Aws.ACCOUNT_ID}.dkr.ecr.$REGION.amazonaws.com`,
-      'pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }',
-      `pull_with_retry "${openhandsImageUri}"`,
-      `pull_with_retry "${openrestyImageUri}"`,  // OpenResty runtime proxy
-      `pull_with_retry "${customRuntimeImage.imageUri}"`,  // Custom runtime with Chromium for MCP
-      `pull_with_retry "${agentServerImageUri}"`,
-      // NOTE: Sandbox orchestrator runs as ECS Fargate service, no image pull needed on EC2
-      'set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap \'error_handler $LINENO\' ERR',
-      'systemctl daemon-reload && systemctl enable openhands && systemctl start openhands',
-      'for i in {1..30}; do docker inspect openhands-app >/dev/null 2>&1 && break; sleep 2; done',
-      'echo "OpenHands setup complete!"',
+    new ssm.StringParameter(this, 'RuntimeVersionParam', {
+      parameterName: '/openhands/docker/runtime-version',
+      stringValue: DEFAULT_RUNTIME_VERSION,
+      description: 'OpenHands Runtime Docker image version tag',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ========================================
+    // Secrets Manager References (for ECS native secret injection)
+    // ========================================
+    const sandboxSecretKey = secretsmanager.Secret.fromSecretNameV2(
+      this, 'SandboxSecretKeyRef', sandboxSecretKeyName
     );
 
-    // Launch Template for Graviton instances
-    // Note: Let CDK generate the name to support multiple deployments in same account/region
-    const launchTemplate = new ec2.LaunchTemplate(this, 'OpenHandsLaunchTemplate', {
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.M7G, ec2.InstanceSize.XLARGE),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023({
-        cpuType: ec2.AmazonLinuxCpuType.ARM_64,
-      }),
-      securityGroup: ec2SecurityGroup,
-      role: ec2Role,
-      userData,
-      blockDevices: [
-        {
-          deviceName: '/dev/xvda',
-          volume: ec2.BlockDeviceVolume.ebs(30, {
-            volumeType: ec2.EbsDeviceVolumeType.GP3,
-            iops: 3000,
-            throughput: 125,
-            encrypted: true,
-          }),
+    const proxyUserSecret = secretsmanager.Secret.fromSecretNameV2(
+      this, 'ProxyUserSecretRef', 'openhands/database/proxy-user'
+    );
+
+    // ========================================
+    // App Fargate Task Definition (4 vCPU / 8 GB)
+    // ========================================
+    const appTaskDefinition = new ecs.FargateTaskDefinition(this, 'AppTaskDef', {
+      family: 'openhands-app',
+      cpu: 4096,      // 4 vCPU
+      memoryLimitMiB: 8192,  // 8 GB
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
+      executionRole: appExecutionRole,
+      taskRole: appTaskRole,
+    });
+
+    // EFS volume for persistent workspace
+    appTaskDefinition.addVolume({
+      name: 'workspace',
+      efsVolumeConfiguration: {
+        fileSystemId: workspaceFileSystem.fileSystemId,
+        transitEncryption: 'ENABLED',
+        authorizationConfig: {
+          accessPointId: workspaceAccessPoint.accessPointId,
+          iam: 'ENABLED',
         },
-        {
-          deviceName: '/dev/sdf',  // Will appear as /dev/nvme1n1 on Nitro instances
-          volume: ec2.BlockDeviceVolume.ebs(100, {
-            volumeType: ec2.EbsDeviceVolumeType.GP3,
-            iops: 3000,
-            throughput: 125,
-            encrypted: true,
-            deleteOnTermination: false,  // Preserve data on instance termination
-          }),
-        },
+      },
+    });
+
+    // Config file volume (embedded at synth time)
+    const agentServerImageUri = customAgentServerImage.imageUri;
+    const configContent = readOpenHandsConfig(dataBucket.bucketName, agentServerImageUri, config.region);
+
+    // Build environment variables for the app container
+    const appEnvironment: Record<string, string> = {
+      SANDBOX_USER_ID: '0',
+      SANDBOX_RUNTIME_CONTAINER_IMAGE: customRuntimeImage.imageUri,
+      WORKSPACE_MOUNT_PATH: '/data/openhands/workspace',
+      WORKSPACE_BASE: '/data/openhands/workspace',
+      LOG_ALL_EVENTS: 'true',
+      HIDE_LLM_SETTINGS: 'true',
+      USER_AUTH_CLASS: 'openhands.server.user_auth.cognito_user_auth.CognitoUserAuth',
+      LLM_MODEL: 'bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0',
+      LLM_AWS_REGION_NAME: 'us-west-2',
+      AWS_REGION: config.region,
+      AWS_DEFAULT_REGION: config.region,
+      AWS_S3_BUCKET: dataBucket.bucketName,
+      FILE_STORE: 's3',
+      FILE_STORE_PATH: dataBucket.bucketName,
+      AGENT_SERVER_IMAGE_REPOSITORY: customAgentServerImage.repository.repositoryUri,
+      AGENT_SERVER_IMAGE_TAG: customAgentServerImage.imageTag,
+      AGENT_ENABLE_BROWSING: 'false',
+      AGENT_ENABLE_MCP: 'true',
+      // Fargate sandbox mode
+      RUNTIME: 'remote',
+      SANDBOX_REMOTE_RUNTIME_API_URL: sandboxOutput.orchestratorApiUrl,
+      SANDBOX_API_KEY: 'local',
+      SANDBOX_START_TIMEOUT: '300',
+      // Sandbox runtime env vars (Fargate sandboxes use native ECS task role, not STS)
+      SANDBOX_RUNTIME_STARTUP_ENV_VARS: `{"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"${config.region}"}`,
+    };
+
+    // User Config feature flag
+    if (securityOutput.userSecretsKmsKeyId) {
+      appEnvironment['USER_CONFIG_ENABLED'] = 'true';
+      appEnvironment['USER_SECRETS_KMS_KEY_ID'] = securityOutput.userSecretsKmsKeyId;
+    } else {
+      appEnvironment['USER_CONFIG_ENABLED'] = 'false';
+    }
+
+    // Database env vars
+    if (databaseOutput) {
+      appEnvironment['DB_HOST'] = databaseOutput.proxyEndpoint;
+      appEnvironment['DB_PORT'] = databaseOutput.clusterPort;
+      appEnvironment['DB_NAME'] = databaseOutput.databaseName;
+      appEnvironment['DB_USER'] = databaseOutput.databaseUser;
+      appEnvironment['DB_SSL'] = 'require';
+      appEnvironment['DB_CLUSTER_ENDPOINT'] = databaseOutput.clusterEndpoint;
+    }
+
+    // ECS native secrets injection
+    const appSecrets: Record<string, ecs.Secret> = {
+      OH_SECRET_KEY: ecs.Secret.fromSecretsManager(sandboxSecretKey),
+    };
+
+    // Inject DB password from Secrets Manager (password JSON key)
+    if (databaseOutput) {
+      appSecrets['DB_PASS'] = ecs.Secret.fromSecretsManager(proxyUserSecret, 'password');
+    }
+
+    // App container
+    const appContainer = appTaskDefinition.addContainer('openhands-app', {
+      containerName: 'openhands-app',
+      image: ecs.ContainerImage.fromDockerImageAsset(customOpenhandsImage),
+      essential: true,
+      portMappings: [
+        { containerPort: 3000, protocol: ecs.Protocol.TCP },
       ],
-      requireImdsv2: true,
-    });
-
-    // Auto Scaling Group - let CDK generate the name to support multiple deployments
-    const asg = new autoscaling.AutoScalingGroup(this, 'OpenHandsAsg', {
-      vpc,
-      vpcSubnets: privateSubnets,
-      launchTemplate,
-      minCapacity: 1,
-      maxCapacity: 1,
-      healthChecks: autoscaling.HealthChecks.withAdditionalChecks({
-        gracePeriod: cdk.Duration.seconds(600),  // Allow time for Docker images to pull
-        additionalTypes: [
-          autoscaling.AdditionalHealthCheckType.ELB,
-        ],
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'app',
+        logGroup: appLogGroup,
       }),
-      updatePolicy: autoscaling.UpdatePolicy.rollingUpdate(),
-      newInstancesProtectedFromScaleIn: false,
+      healthCheck: {
+        command: ['CMD-SHELL', 'curl -f http://localhost:3000/api/health || exit 1'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(10),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(120),
+      },
+      environment: appEnvironment,
+      secrets: appSecrets,
     });
 
-    // Internet-facing Application Load Balancer (required for WebSocket support)
-    // CloudFront VPC Origin does NOT support WebSocket connections, so we use
-    // internet-facing ALB with CloudFront HttpOrigin instead.
-    // Security: ALB is protected by custom origin header verification (see listener rules below)
+    // Mount EFS at /data/openhands
+    appContainer.addMountPoints({
+      sourceVolume: 'workspace',
+      containerPath: '/data/openhands',
+      readOnly: false,
+    });
+
+    // ========================================
+    // App Fargate Service (with Cloud Map DNS)
+    // ========================================
+    const appService = new ecs.FargateService(this, 'AppService', {
+      cluster,
+      serviceName: 'openhands-app',
+      taskDefinition: appTaskDefinition,
+      desiredCount: 1,
+      minHealthyPercent: 100,
+      maxHealthyPercent: 200,
+      vpcSubnets: privateSubnets,
+      securityGroups: [appServiceSecurityGroup],
+      assignPublicIp: false,
+      enableECSManagedTags: true,
+      enableExecuteCommand: true,
+      propagateTags: ecs.PropagatedTagSource.TASK_DEFINITION,
+      cloudMapOptions: {
+        name: 'app',
+        cloudMapNamespace: namespace,
+        dnsRecordType: servicediscovery.DnsRecordType.A,
+        dnsTtl: cdk.Duration.seconds(10),
+      },
+    });
+    cdk.Tags.of(appService).add('Component', 'openhands-app');
+
+    // ========================================
+    // OpenResty Fargate Task Definition (0.25 vCPU / 512 MB)
+    // ========================================
+    const openrestyTaskDefinition = new ecs.FargateTaskDefinition(this, 'OpenRestyTaskDef', {
+      family: 'openhands-openresty',
+      cpu: 256,       // 0.25 vCPU
+      memoryLimitMiB: 512,  // 512 MB
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
+      executionRole: appExecutionRole,
+      taskRole: appTaskRole,
+    });
+
+    openrestyTaskDefinition.addContainer('openresty-proxy', {
+      containerName: 'openresty-proxy',
+      image: ecs.ContainerImage.fromDockerImageAsset(openrestyImage),
+      essential: true,
+      portMappings: [
+        { containerPort: 8080, protocol: ecs.Protocol.TCP },
+      ],
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'openresty',
+        logGroup: openrestyLogGroup,
+      }),
+      healthCheck: {
+        command: ['CMD-SHELL', 'curl -f http://localhost:8080/health || exit 1'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(30),
+      },
+      environment: {
+        ORCHESTRATOR_URL: sandboxOutput.orchestratorApiUrl,
+        APP_URL: 'http://app.openhands.local:3000',
+      },
+    });
+
+    // ========================================
+    // OpenResty Fargate Service
+    // ========================================
+    const openrestyService = new ecs.FargateService(this, 'OpenRestyService', {
+      cluster,
+      serviceName: 'openhands-openresty',
+      taskDefinition: openrestyTaskDefinition,
+      desiredCount: 1,
+      minHealthyPercent: 100,
+      maxHealthyPercent: 200,
+      vpcSubnets: privateSubnets,
+      securityGroups: [appServiceSecurityGroup],
+      assignPublicIp: false,
+      enableECSManagedTags: true,
+      enableExecuteCommand: true,
+      propagateTags: ecs.PropagatedTagSource.TASK_DEFINITION,
+    });
+    cdk.Tags.of(openrestyService).add('Component', 'openresty-proxy');
+
+    // ========================================
+    // Internet-facing ALB
+    // ========================================
     const alb = new elbv2.ApplicationLoadBalancer(this, 'OpenHandsAlb', {
       vpc,
       internetFacing: true,
@@ -666,12 +556,12 @@ export class ComputeStack extends cdk.Stack {
       },
     });
 
-    // Target Group
-    const targetGroup = new elbv2.ApplicationTargetGroup(this, 'OpenHandsTargetGroup', {
+    // App Target Group (IP type for Fargate)
+    const targetGroup = new elbv2.ApplicationTargetGroup(this, 'AppTargetGroup', {
       vpc,
       port: 3000,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      targetType: elbv2.TargetType.INSTANCE,
+      targetType: elbv2.TargetType.IP,
       healthCheck: {
         path: '/api/health',
         healthyThresholdCount: 2,
@@ -682,16 +572,15 @@ export class ComputeStack extends cdk.Stack {
       deregistrationDelay: cdk.Duration.seconds(30),
     });
 
-    // Attach ASG to Target Group
-    asg.attachToApplicationTargetGroup(targetGroup);
+    // Attach app Fargate service to target group
+    appService.attachToApplicationTargetGroup(targetGroup);
 
-    // Runtime Proxy Target Group (nginx on port 8080)
-    // Routes /runtime/* requests to nginx which proxies to runtime containers
+    // Runtime Proxy Target Group (IP type for Fargate, OpenResty on port 8080)
     const runtimeTargetGroup = new elbv2.ApplicationTargetGroup(this, 'RuntimeTargetGroup', {
       vpc,
       port: 8080,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      targetType: elbv2.TargetType.INSTANCE,
+      targetType: elbv2.TargetType.IP,
       healthCheck: {
         path: '/health',
         healthyThresholdCount: 2,
@@ -702,11 +591,10 @@ export class ComputeStack extends cdk.Stack {
       deregistrationDelay: cdk.Duration.seconds(30),
     });
 
-    // Attach ASG to Runtime Target Group
-    asg.attachToApplicationTargetGroup(runtimeTargetGroup);
+    // Attach openresty Fargate service to runtime target group
+    openrestyService.attachToApplicationTargetGroup(runtimeTargetGroup);
 
-    // HTTP Listener with origin verification (CloudFront connects via HTTP to internet-facing ALB)
-    // Default action returns 403 - only requests with valid X-Origin-Verify header are allowed
+    // HTTP Listener with origin verification
     const listener = alb.addListener('HttpListener', {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
@@ -717,7 +605,6 @@ export class ComputeStack extends cdk.Stack {
     });
 
     // Rule: Forward requests with valid origin verification header to main target group
-    // Priority 20 (lower priority than runtime rule)
     listener.addTargetGroups('VerifiedMainRule', {
       priority: 20,
       conditions: [
@@ -727,7 +614,6 @@ export class ComputeStack extends cdk.Stack {
     });
 
     // Rule: Forward /runtime/* requests with valid origin verification header
-    // Priority 10 (higher priority - more specific path match)
     listener.addTargetGroups('VerifiedRuntimeRule', {
       priority: 10,
       conditions: [
@@ -740,20 +626,15 @@ export class ComputeStack extends cdk.Stack {
     // ========================================
     // User Config API Lambda Target Group (optional)
     // ========================================
-    // When userConfigFunction is provided, route /api/v1/user-config/* to Lambda
-    // This eliminates the need for a separate API Gateway, reducing latency and cost
     if (props.userConfigFunction) {
-      // Create Lambda target group
       const userConfigTargetGroup = new elbv2.ApplicationTargetGroup(this, 'UserConfigTargetGroup', {
         targetType: elbv2.TargetType.LAMBDA,
         targets: [new targets.LambdaTarget(props.userConfigFunction)],
         healthCheck: {
-          enabled: false,  // Lambda targets don't support health checks in the traditional sense
+          enabled: false,
         },
       });
 
-      // Rule: Forward /api/v1/user-config/* requests with valid origin verification header
-      // Priority 5 (highest priority - most specific path match)
       listener.addTargetGroups('VerifiedUserConfigRule', {
         priority: 5,
         conditions: [
@@ -772,15 +653,12 @@ export class ComputeStack extends cdk.Stack {
     };
     this.alb = alb;
 
-    // CloudWatch Alarms for ASG - using CDK-generated ASG name reference
-    const cpuAlarm = new cloudwatch.Alarm(this, 'CpuAlarm', {
-      alarmDescription: 'CPU utilization exceeds 80%',
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/EC2',
-        metricName: 'CPUUtilization',
-        dimensionsMap: {
-          AutoScalingGroupName: asg.autoScalingGroupName,
-        },
+    // ========================================
+    // CloudWatch Alarms (ECS Service Metrics)
+    // ========================================
+    const appCpuAlarm = new cloudwatch.Alarm(this, 'AppCpuAlarm', {
+      alarmDescription: 'App service CPU utilization exceeds 80%',
+      metric: appService.metricCpuUtilization({
         statistic: 'Average',
         period: cdk.Duration.minutes(5),
       }),
@@ -789,17 +667,11 @@ export class ComputeStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    cpuAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    appCpuAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
 
-    // Memory Utilization Alarm (requires CloudWatch Agent)
-    const memoryAlarm = new cloudwatch.Alarm(this, 'MemoryAlarm', {
-      alarmDescription: 'Memory utilization exceeds 85%',
-      metric: new cloudwatch.Metric({
-        namespace: 'CWAgent',
-        metricName: 'mem_used_percent',
-        dimensionsMap: {
-          AutoScalingGroupName: asg.autoScalingGroupName,
-        },
+    const appMemoryAlarm = new cloudwatch.Alarm(this, 'AppMemoryAlarm', {
+      alarmDescription: 'App service memory utilization exceeds 85%',
+      metric: appService.metricMemoryUtilization({
         statistic: 'Average',
         period: cdk.Duration.minutes(5),
       }),
@@ -808,31 +680,11 @@ export class ComputeStack extends cdk.Stack {
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    memoryAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+    appMemoryAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
 
-    // Disk Usage Alarm
-    const diskAlarm = new cloudwatch.Alarm(this, 'DiskAlarm', {
-      alarmDescription: 'Disk usage exceeds 85%',
-      metric: new cloudwatch.Metric({
-        namespace: 'CWAgent',
-        metricName: 'disk_used_percent',
-        dimensionsMap: {
-          AutoScalingGroupName: asg.autoScalingGroupName,
-          path: '/data',
-        },
-        statistic: 'Average',
-        period: cdk.Duration.minutes(5),
-      }),
-      threshold: 85,
-      evaluationPeriods: 2,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-    });
-    diskAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
-
-    // Write ALB DNS name and origin secret to SSM in us-east-1 for EdgeStack consumption
-    // SSM parameter path includes the Compute stack's region to support multi-region deployments
-    // Each Compute stack in a different region gets its own SSM namespace: /openhands/compute/{region}/*
+    // ========================================
+    // SSM Parameters (for EdgeStack in us-east-1)
+    // ========================================
     const ssmPathPrefix = `/openhands/compute/${this.region}`;
 
     new cr.AwsCustomResource(this, 'SsmUsEast1Writer', {
@@ -932,9 +784,14 @@ export class ComputeStack extends cdk.Stack {
       description: 'ALB ARN',
     });
 
-    new cdk.CfnOutput(this, 'AsgName', {
-      value: asg.autoScalingGroupName,
-      description: 'Auto Scaling Group Name',
+    new cdk.CfnOutput(this, 'AppServiceName', {
+      value: appService.serviceName,
+      description: 'App Fargate Service Name',
+    });
+
+    new cdk.CfnOutput(this, 'OpenRestyServiceName', {
+      value: openrestyService.serviceName,
+      description: 'OpenResty Fargate Service Name',
     });
 
     new cdk.CfnOutput(this, 'WorkspaceEfsFileSystemId', {
