@@ -56,10 +56,10 @@ NEW = '''    try:
         try:
             import httpx
             runtime = conversation.runtime
-            base_url = getattr(runtime, 'action_execution_server_url', None) or getattr(runtime, 'sandbox_url', None)
-            if not base_url:
-                # Try to extract from runtime config
-                base_url = getattr(getattr(runtime, 'config', None), 'sandbox_url', None)
+            # action_execution_server_url points to the sandbox IP:port
+            # (same host as agent-server, which has /api/vscode/url)
+            base_url = getattr(runtime, 'action_execution_server_url', None)
+            logger.info(f'Patch 31: base_url={base_url}')
             if base_url:
                 async with httpx.AsyncClient(timeout=10) as client:
                     resp = await client.get(f'{base_url}/api/vscode/url')
