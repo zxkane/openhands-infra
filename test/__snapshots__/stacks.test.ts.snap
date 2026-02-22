@@ -925,6 +925,24 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
         ],
       },
     },
+    "SandboxClusterArn": {
+      "Value": "arn:aws:ecs:us-west-2:123456789012:cluster/openhands-sandbox",
+    },
+    "SandboxExecutionRoleArn": {
+      "Value": "arn:aws:iam::123456789012:role/mock-execution-role",
+    },
+    "SandboxRegistryTableArn": {
+      "Value": "arn:aws:dynamodb:us-west-2:123456789012:table/openhands-sandbox-registry",
+    },
+    "SandboxRegistryTableName": {
+      "Value": "openhands-sandbox-registry",
+    },
+    "SandboxTaskRoleArn": {
+      "Value": "arn:aws:iam::123456789012:role/mock-task-role",
+    },
+    "SandboxWarmPoolServiceName": {
+      "Value": "openhands-example-com-sandbox-warm-pool",
+    },
     "WorkspaceEfsFileSystemId": {
       "Description": "EFS file system ID for persistent OpenHands workspaces",
       "Value": {
@@ -1191,6 +1209,13 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       "Properties": {
         "ContainerDefinitions": [
           {
+            "Command": [
+              "echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /app/apply-startup.sh",
+            ],
+            "EntryPoint": [
+              "/bin/bash",
+              "-c",
+            ],
             "Environment": [
               {
                 "Name": "SANDBOX_USER_ID",
@@ -1299,7 +1324,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "SANDBOX_RUNTIME_STARTUP_ENV_VARS",
-                "Value": "{"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"us-west-2"}",
+                "Value": "{"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"us-west-2","OH_SECRET_KEY":"$OH_SECRET_KEY"}",
               },
               {
                 "Name": "USER_CONFIG_ENABLED",
@@ -1334,6 +1359,35 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               {
                 "Name": "DB_CLUSTER_ENDPOINT",
                 "Value": "mock-cluster.cluster-abc123.us-west-2.rds.amazonaws.com",
+              },
+              {
+                "Name": "OPENHANDS_CONFIG_TOML",
+                "Value": "[core]
+workspace_base = "/data/openhands/workspace"
+max_concurrent_conversations = 10
+send_telemetry = false
+conversation_max_age_seconds = 15552000
+default_agent = "CodeActAgent"
+[llm]
+model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+api_key = "placeholder-not-used-for-bedrock-iam-auth"
+aws_region_name = "us-west-2"
+[sandbox]
+timeout = 300
+volumes = "/data/openhands/workspace:/workspace:rw"
+[agent]
+enable_browsing = false
+enable_mcp = true
+[mcp]
+shttp_servers = [
+    { url = "https://knowledge-mcp.global.api.aws" }
+]
+stdio_servers = [
+    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium", "--chrome-arg=--no-sandbox", "--chrome-arg=--disable-gpu", "--chrome-arg=--disable-dev-shm-usage"] }
+]
+[security]
+confirmation_mode = false
+security_analyzer = "llm"",
               },
             ],
             "Essential": true,
@@ -4429,6 +4483,17 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
                 "arn:aws:bedrock:*:123456789012:inference-profile/global.anthropic.claude*",
               ],
               "Sid": "BedrockAccess",
+            },
+            {
+              "Action": [
+                "ssmmessages:CreateControlChannel",
+                "ssmmessages:CreateDataChannel",
+                "ssmmessages:OpenControlChannel",
+                "ssmmessages:OpenDataChannel",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "EcsExecAccess",
             },
             {
               "Action": [

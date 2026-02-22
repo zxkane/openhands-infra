@@ -166,6 +166,19 @@ export class SecurityStack extends cdk.Stack {
       ],
     }));
 
+    // ECS Execute Command requires SSM Messages permissions on the task role
+    appTaskRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'EcsExecAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ssmmessages:CreateControlChannel',
+        'ssmmessages:CreateDataChannel',
+        'ssmmessages:OpenControlChannel',
+        'ssmmessages:OpenDataChannel',
+      ],
+      resources: ['*'],
+    }));
+
     // ========================================
     // Sandbox Secret Key (for session encryption)
     // ========================================

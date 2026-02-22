@@ -181,6 +181,29 @@ export class ComputeStack extends cdk.Stack {
       description: 'Allow app service to reach sandbox orchestrator',
     });
 
+    // Preserve cross-stack exports to avoid CloudFormation "Cannot delete export"
+    // errors during migration from EC2 to Fargate. These were previously referenced
+    // by docker-compose env vars and IAM policies. Can be removed after successful
+    // migration when no deployed stack imports them.
+    new cdk.CfnOutput(this, 'SandboxClusterArn', {
+      value: sandboxOutput.clusterArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxRegistryTableName', {
+      value: sandboxOutput.registryTableName,
+    });
+    new cdk.CfnOutput(this, 'SandboxRegistryTableArn', {
+      value: sandboxOutput.registryTableArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxWarmPoolServiceName', {
+      value: sandboxOutput.warmPoolServiceName,
+    });
+    new cdk.CfnOutput(this, 'SandboxExecutionRoleArn', {
+      value: sandboxOutput.sandboxExecutionRoleArn,
+    });
+    new cdk.CfnOutput(this, 'SandboxTaskRoleArn', {
+      value: sandboxOutput.sandboxTaskRoleArn,
+    });
+
     // App service internal communication (port 3000 between tasks in the same SG)
     appServiceSecurityGroup.addIngressRule(
       appServiceSecurityGroup,
@@ -370,7 +393,7 @@ export class ComputeStack extends cdk.Stack {
       },
     });
 
-    // Config file volume (embedded at synth time)
+    // Config file content (embedded at synth time, written to /app/config.toml at container start)
     const agentServerImageUri = customAgentServerImage.imageUri;
     const configContent = readOpenHandsConfig(dataBucket.bucketName, agentServerImageUri, config.region);
 
@@ -399,8 +422,11 @@ export class ComputeStack extends cdk.Stack {
       SANDBOX_REMOTE_RUNTIME_API_URL: sandboxOutput.orchestratorApiUrl,
       SANDBOX_API_KEY: 'local',
       SANDBOX_START_TIMEOUT: '300',
-      // Sandbox runtime env vars (Fargate sandboxes use native ECS task role, not STS)
-      SANDBOX_RUNTIME_STARTUP_ENV_VARS: `{"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"${config.region}"}`,
+      // Sandbox runtime env vars injected into sandbox containers at startup.
+      // OH_SECRET_KEY enables secret persistence across sandbox restarts (required for conversation resume).
+      // The $OH_SECRET_KEY reference is resolved at runtime from the ECS-injected env var.
+      // Fargate sandboxes use native ECS task role for AWS credentials, not STS.
+      SANDBOX_RUNTIME_STARTUP_ENV_VARS: `{"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"${config.region}","OH_SECRET_KEY":"$OH_SECRET_KEY"}`,
     };
 
     // User Config feature flag
@@ -431,11 +457,22 @@ export class ComputeStack extends cdk.Stack {
       appSecrets['DB_PASS'] = ecs.Secret.fromSecretsManager(proxyUserSecret, 'password');
     }
 
+    // Inject config.toml content as environment variable
+    // Written to /app/config.toml at container startup via entrypoint command
+    appEnvironment['OPENHANDS_CONFIG_TOML'] = configContent;
+
     // App container
+    // Overrides entrypoint to write config.toml from env var before starting the app.
+    // The base image's CMD is the app startup; we prepend config file creation.
     const appContainer = appTaskDefinition.addContainer('openhands-app', {
       containerName: 'openhands-app',
       image: ecs.ContainerImage.fromDockerImageAsset(customOpenhandsImage),
       essential: true,
+      entryPoint: ['/bin/bash', '-c'],
+      command: [
+        // Write config.toml from env var, then exec the startup script
+        'echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /app/apply-startup.sh',
+      ],
       portMappings: [
         { containerPort: 3000, protocol: ecs.Protocol.TCP },
       ],
