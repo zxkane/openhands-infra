@@ -288,6 +288,8 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
       sessionApiKey,
     });
   } catch (err) {
+    // Revert status so subsequent resume attempts aren't blocked
+    await store.updateStatus(record.conversation_id, 'PAUSED').catch(() => {});
     return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
 
