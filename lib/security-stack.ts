@@ -73,7 +73,7 @@ export class SecurityStack extends cdk.Stack {
     // with existing Compute/Database stacks that reference this export.
     const appServiceSecurityGroup = new ec2.SecurityGroup(this, 'Ec2SecurityGroup', {
       vpc,
-      description: 'Security group for OpenHands Fargate app and openresty services',
+      description: 'Security group for OpenHands EC2 instances',  // Keep original to avoid SG replacement
       allowAllOutbound: false,
     });
 

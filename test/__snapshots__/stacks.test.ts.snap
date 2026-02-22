@@ -1046,6 +1046,36 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       },
       "Type": "AWS::CloudWatch::Alarm",
     },
+    "AppEgressToApp": {
+      "Properties": {
+        "Description": "Allow outbound to app on port 3000",
+        "DestinationSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "FromPort": 3000,
+        "GroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "IpProtocol": "tcp",
+        "ToPort": 3000,
+      },
+      "Type": "AWS::EC2::SecurityGroupEgress",
+    },
+    "AppIngressFromApp": {
+      "Properties": {
+        "Description": "Allow OpenResty to reach app on port 3000",
+        "FromPort": 3000,
+        "GroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "ToPort": 3000,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
     "AppMemoryAlarmE47EA10B": {
       "Properties": {
         "AlarmActions": [
@@ -1210,7 +1240,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
         "ContainerDefinitions": [
           {
             "Command": [
-              "echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /app/apply-startup.sh",
+              "echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /bin/sh /opt/apply-startup.sh",
             ],
             "EntryPoint": [
               "/bin/bash",
@@ -1496,6 +1526,18 @@ security_analyzer = "llm"",
         ],
       },
       "Type": "AWS::ECS::TaskDefinition",
+    },
+    "MigrationAppTaskRoleName3A38AB49": {
+      "Properties": {
+        "Description": "Temporary: preserves SecurityStack Ref export during migration",
+        "Name": "/openhands/migration/app-task-role-name",
+        "Tier": "Standard",
+        "Type": "String",
+        "Value": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefOpenHandsEc2RoleD46687489963EFBC",
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
     },
     "OpenHandsAlb343FAEDA": {
       "Properties": {
@@ -4353,7 +4395,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
     },
     "Ec2SecurityGroup55889913": {
       "Properties": {
-        "GroupDescription": "Security group for OpenHands Fargate app and openresty services",
+        "GroupDescription": "Security group for OpenHands EC2 instances",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",

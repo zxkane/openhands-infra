@@ -137,7 +137,7 @@ export class ComputeStack extends cdk.Stack {
 
     const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxOutput, clusterOutput } = props;
     const { vpc } = networkOutput;
-    const { albSecurityGroup, appServiceSecurityGroup, efsSecurityGroup, appTaskRole, appExecutionRole, sandboxSecretKeyName } = securityOutput;
+    const { albSecurityGroup, appServiceSecurityGroup, efsSecurityGroup, appTaskRole, appExecutionRole, sandboxSecretKeyName, sandboxRoleArn } = securityOutput;
     const { alertTopic, dataBucket } = monitoringOutput;
     const { cluster, namespace } = clusterOutput;
 
@@ -203,18 +203,44 @@ export class ComputeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SandboxTaskRoleArn', {
       value: sandboxOutput.sandboxTaskRoleArn,
     });
+    // Preserve cross-stack exports for SecurityStack's role references.
+    // Uses SSM parameters (not CfnOutput) to force CDK to generate the cross-stack imports.
+    // These are needed during migration to prevent "Cannot delete export" errors.
+    // Can be removed in a follow-up deployment after migration completes.
+    new ssm.StringParameter(this, 'MigrationAppTaskRoleName', {
+      parameterName: '/openhands/migration/app-task-role-name',
+      stringValue: appTaskRole.roleName,  // Forces Ref export
+      description: 'Temporary: preserves SecurityStack Ref export during migration',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+    if (sandboxRoleArn) {
+      new ssm.StringParameter(this, 'MigrationSandboxRoleArn', {
+        parameterName: '/openhands/migration/sandbox-role-arn',
+        stringValue: sandboxRoleArn,
+        description: 'Temporary: preserves SecurityStack sandbox role export during migration',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+    }
 
-    // App service internal communication (port 3000 between tasks in the same SG)
-    appServiceSecurityGroup.addIngressRule(
-      appServiceSecurityGroup,
-      ec2.Port.tcp(3000),
-      'Allow internal communication between app service tasks'
-    );
-    appServiceSecurityGroup.addEgressRule(
-      appServiceSecurityGroup,
-      ec2.Port.tcp(3000),
-      'Allow outbound to app service tasks (for OpenResty → app)'
-    );
+    // App ↔ app internal communication (OpenResty → app on port 3000)
+    // Uses CfnSecurityGroupIngress/Egress to avoid CDK creating rules with
+    // auto-generated descriptions in SecurityStack (cross-stack SG)
+    new ec2.CfnSecurityGroupIngress(this, 'AppIngressFromApp', {
+      groupId: appServiceSecurityGroup.securityGroupId,
+      sourceSecurityGroupId: appServiceSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 3000,
+      toPort: 3000,
+      description: 'Allow OpenResty to reach app on port 3000',
+    });
+    new ec2.CfnSecurityGroupEgress(this, 'AppEgressToApp', {
+      groupId: appServiceSecurityGroup.securityGroupId,
+      destinationSecurityGroupId: appServiceSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 3000,
+      toPort: 3000,
+      description: 'Allow outbound to app on port 3000',
+    });
 
     // ========================================
     // Persistent Workspace EFS
@@ -471,7 +497,7 @@ export class ComputeStack extends cdk.Stack {
       entryPoint: ['/bin/bash', '-c'],
       command: [
         // Write config.toml from env var, then exec the startup script
-        'echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /app/apply-startup.sh',
+        'echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /bin/sh /opt/apply-startup.sh',
       ],
       portMappings: [
         { containerPort: 3000, protocol: ecs.Protocol.TCP },
