@@ -97,6 +97,16 @@ mcp__chrome-devtools__navigate_page({ url: "https://5000-{convId}.runtime.{subdo
 mcp__chrome-devtools__take_snapshot({})
 ```
 
+### Post-Test Cleanup (MANDATORY)
+
+**After ALL E2E tests complete, navigate the browser away from the application:**
+
+```javascript
+mcp__chrome-devtools__navigate_page({ url: "about:blank", type: "url" })
+```
+
+Open conversation tabs send periodic requests that keep sandbox Fargate tasks alive (updating `last_activity_at` in DynamoDB). Leaving tabs open prevents idle cleanup and wastes Fargate costs.
+
 ### Verification Checklist
 
 | # | Test | Expected Result |
@@ -106,6 +116,7 @@ mcp__chrome-devtools__take_snapshot({})
 | 3 | New conversation | Status reaches "Waiting for task" |
 | 4 | Agent response | Agent responds correctly |
 | 5 | Runtime URL | Subdomain accessible |
+| 6 | Browser cleanup | All tabs navigated to about:blank |
 
 ### Common Test Scenarios
 
@@ -132,27 +143,27 @@ mcp__chrome-devtools__evaluate_script({
 // Should return 200
 ```
 
-## Quick Verification Commands (SSH)
+## Quick Verification Commands (ECS)
 
 ```bash
-# Get EC2 instance ID
-INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names <asg-name> \
+# Check ECS services
+aws ecs describe-services --cluster <cluster-name> \
+  --services openhands-app openhands-openresty \
   --region <region> \
-  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+  --query 'services[].{name:serviceName,status:status,running:runningCount}'
 
-# SSH via SSM
-aws ssm start-session --target $INSTANCE_ID --region <region>
+# Tail app logs
+aws logs tail /openhands/application --follow --region <region>
 
 # Check patches applied
-docker logs openhands-app 2>&1 | grep -i patch
+aws logs tail /openhands/application --since 10m --region <region> | grep -i patch
 
 # Check database connection
-docker logs openhands-app 2>&1 | grep -i "alembic"
-# Should show: "Context impl PostgresqlImpl"
+aws logs tail /openhands/application --since 10m --region <region> | grep -i "alembic"
 
-# Check API requests
-docker logs openhands-app 2>&1 | grep "/api/conversations" | tail -10
+# ECS exec into app container
+aws ecs execute-command --cluster <cluster-name> --task <task-id> \
+  --container openhands-app --interactive --command "/bin/bash" --region <region>
 ```
 
 ## E2E Test Report Format
