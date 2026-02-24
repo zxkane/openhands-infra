@@ -9,6 +9,18 @@ This document defines the end-to-end test cases for validating the OpenHands inf
 - Node.js 20+ installed
 - CDK bootstrapped in deployment regions
 
+## Important: Browser Tab Cleanup
+
+**After completing ALL E2E tests, navigate the browser away from the application:**
+
+```javascript
+mcp__chrome-devtools__navigate_page({ url: "about:blank", type: "url" })
+```
+
+**Why?** Open conversation pages send periodic API requests (WebSocket keepalive, status polling) that route through OpenResty to the sandbox orchestrator. Each request updates the sandbox's `last_activity_at` timestamp in DynamoDB, which prevents the idle monitor from stopping the sandbox. Leaving a conversation tab open indefinitely keeps the Fargate sandbox task running and incurring costs.
+
+**Rule:** Always close or navigate away from all conversation tabs after E2E testing is complete.
+
 ## Test Environment Variables
 
 ```bash

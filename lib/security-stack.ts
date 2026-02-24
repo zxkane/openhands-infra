@@ -20,7 +20,7 @@ export interface SecurityStackProps extends cdk.StackProps {
 }
 
 /**
- * SecurityStack - Creates IAM Roles and Security Groups
+ * SecurityStack - Creates IAM Roles and Security Groups for Fargate services
  *
  * This stack implements the principle of least privilege for all IAM policies
  * and creates security groups with minimal required access.
@@ -62,17 +62,18 @@ export class SecurityStack extends cdk.Stack {
     }
 
     // Allow inbound from CloudFront Managed Prefix List
-    // Note: CloudFront connects via HTTP to internet-facing ALB (HttpOrigin)
     albSecurityGroup.addIngressRule(
       ec2.Peer.prefixList(cloudfrontPrefixListId),
       ec2.Port.tcp(80),
       'Allow HTTP from CloudFront'
     );
 
-    // Security Group for EC2 (OpenHands)
-    const ec2SecurityGroup = new ec2.SecurityGroup(this, 'Ec2SecurityGroup', {
+    // Security Group for Fargate app and openresty services
+    // Note: Construct ID kept as 'Ec2SecurityGroup' for CloudFormation export compatibility
+    // with existing Compute/Database stacks that reference this export.
+    const appServiceSecurityGroup = new ec2.SecurityGroup(this, 'Ec2SecurityGroup', {
       vpc,
-      description: 'Security group for OpenHands EC2 instances',
+      description: 'Security group for OpenHands EC2 instances',  // Keep original to avoid SG replacement
       allowAllOutbound: false,
     });
 
@@ -83,82 +84,76 @@ export class SecurityStack extends cdk.Stack {
       allowAllOutbound: false,
     });
 
-    // Allow NFS from EC2 instances to EFS
+    // Allow NFS from Fargate app service to EFS
     efsSecurityGroup.addIngressRule(
-      ec2SecurityGroup,
+      appServiceSecurityGroup,
       ec2.Port.tcp(2049),
-      'Allow NFS from OpenHands EC2 instances'
+      'Allow NFS from OpenHands Fargate app service'
     );
 
     // Allow inbound from ALB on port 3000 (OpenHands app)
-    ec2SecurityGroup.addIngressRule(
+    appServiceSecurityGroup.addIngressRule(
       albSecurityGroup,
       ec2.Port.tcp(3000),
       'Allow traffic from ALB to OpenHands app'
     );
 
-    // Allow inbound from ALB on port 8080 (nginx runtime proxy)
-    ec2SecurityGroup.addIngressRule(
+    // Allow inbound from ALB on port 8080 (OpenResty runtime proxy)
+    appServiceSecurityGroup.addIngressRule(
       albSecurityGroup,
       ec2.Port.tcp(8080),
-      'Allow traffic from ALB to nginx runtime proxy'
+      'Allow traffic from ALB to OpenResty runtime proxy'
     );
 
     // Allow outbound to VPC Endpoints (HTTPS)
-    ec2SecurityGroup.addEgressRule(
+    appServiceSecurityGroup.addEgressRule(
       vpcEndpointSecurityGroup,
       ec2.Port.tcp(443),
       'Allow HTTPS to VPC Endpoints'
     );
 
-    // Allow outbound to NAT Gateway for Docker Hub / external registries
-    ec2SecurityGroup.addEgressRule(
+    // Allow outbound to NAT Gateway for external registries and services
+    appServiceSecurityGroup.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(443),
-      'Allow HTTPS outbound for Docker registry'
+      'Allow HTTPS outbound for external services'
     );
 
-    // Allow outbound NFS to EFS (EC2 SG has allowAllOutbound=false)
-    ec2SecurityGroup.addEgressRule(
+    // Allow outbound NFS to EFS
+    appServiceSecurityGroup.addEgressRule(
       efsSecurityGroup,
       ec2.Port.tcp(2049),
       'Allow NFS to OpenHands EFS'
     );
 
-    // ALB outbound to EC2 (OpenHands app)
+    // ALB outbound to Fargate app service (OpenHands app)
     albSecurityGroup.addEgressRule(
-      ec2SecurityGroup,
+      appServiceSecurityGroup,
       ec2.Port.tcp(3000),
       'Allow traffic to OpenHands app'
     );
 
-    // ALB outbound to EC2 (nginx runtime proxy)
+    // ALB outbound to Fargate openresty service (runtime proxy)
     albSecurityGroup.addEgressRule(
-      ec2SecurityGroup,
+      appServiceSecurityGroup,
       ec2.Port.tcp(8080),
-      'Allow traffic to nginx runtime proxy'
+      'Allow traffic to OpenResty runtime proxy'
     );
 
-    // Note: VPC Endpoint SG already allows inbound from VPC CIDR in NetworkStack
-    // No additional rule needed here to avoid cyclic dependency
-
-    // IAM Role for EC2 Instance Profile
-    const ec2Role = new iam.Role(this, 'OpenHandsEc2Role', {
-      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
-      description: 'IAM role for OpenHands EC2 instances',
+    // ========================================
+    // IAM Task Role for Fargate App Service
+    // ========================================
+    // Note: Construct ID kept as 'OpenHandsEc2Role' for CloudFormation export compatibility
+    // with existing Compute/Database stacks that reference this export. The role principal
+    // is changed from ec2.amazonaws.com to ecs-tasks.amazonaws.com (in-place update, no replacement).
+    const appTaskRole = new iam.Role(this, 'OpenHandsEc2Role', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      description: 'IAM task role for OpenHands Fargate app service',
     });
-
-    // Attach AWS managed policies
-    ec2Role.addManagedPolicy(
-      iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')
-    );
-    ec2Role.addManagedPolicy(
-      iam.ManagedPolicy.fromAwsManagedPolicyName('CloudWatchAgentServerPolicy')
-    );
 
     // Custom policy for Bedrock access
     // Supports both foundation models (Claude 3.x) and inference profiles (Claude 4.x)
-    ec2Role.addToPolicy(new iam.PolicyStatement({
+    appTaskRole.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockAccess',
       effect: iam.Effect.ALLOW,
       actions: [
@@ -176,20 +171,22 @@ export class SecurityStack extends cdk.Stack {
       ],
     }));
 
+    // ECS Execute Command requires SSM Messages permissions on the task role
+    appTaskRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'EcsExecAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ssmmessages:CreateControlChannel',
+        'ssmmessages:CreateDataChannel',
+        'ssmmessages:OpenControlChannel',
+        'ssmmessages:OpenDataChannel',
+      ],
+      resources: ['*'],
+    }));
+
     // ========================================
     // Sandbox Secret Key (for session encryption)
     // ========================================
-    // This secret key encrypts secrets in conversation state, enabling resume after sandbox restart.
-    // Managed by CDK to ensure it exists before EC2 instances launch.
-    //
-    // Note: Using fromSecretNameV2 to reference the secret by name.
-    // The secret must exist before deployment. For new environments, create it with:
-    //   aws secretsmanager create-secret --name openhands/sandbox-secret-key \
-    //     --secret-string "$(openssl rand -base64 32)" --region <region> \
-    //     --description "OpenHands sandbox secret key for session encryption"
-    //
-    // Why not create via CDK? CDK cannot adopt existing secrets, and different environments
-    // may have pre-existing secrets. Using fromSecretNameV2 provides consistent behavior.
     const sandboxSecretKeyName = 'openhands/sandbox-secret-key';
     const sandboxSecretKey = secretsmanager.Secret.fromSecretNameV2(
       this,
@@ -197,24 +194,8 @@ export class SecurityStack extends cdk.Stack {
       sandboxSecretKeyName
     );
 
-    // Grant EC2 role read-only access to sandbox secret key
-    sandboxSecretKey.grantRead(ec2Role);
-
-    // ECR authorization token - required for docker login to any ECR repository
-    // Note: GetAuthorizationToken is a service-level action that requires resource: '*'
-    // Repository-specific permissions (BatchGetImage, etc.) are granted by
-    // DockerImageAsset.repository.grantPull() in compute-stack.ts
-    ec2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'EcrAuthorizationToken',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'ecr:GetAuthorizationToken',
-      ],
-      resources: ['*'],
-    }));
-
     // Custom policy for CloudWatch Logs
-    ec2Role.addToPolicy(new iam.PolicyStatement({
+    appTaskRole.addToPolicy(new iam.PolicyStatement({
       sid: 'CloudWatchLogsAccess',
       effect: iam.Effect.ALLOW,
       actions: [
@@ -229,7 +210,7 @@ export class SecurityStack extends cdk.Stack {
     }));
 
     // Custom policy for S3 data bucket access (OpenHands file store)
-    ec2Role.addToPolicy(new iam.PolicyStatement({
+    appTaskRole.addToPolicy(new iam.PolicyStatement({
       sid: 'S3DataBucketAccess',
       effect: iam.Effect.ALLOW,
       actions: [
@@ -244,14 +225,30 @@ export class SecurityStack extends cdk.Stack {
       ],
     }));
 
-    // Create Instance Profile
-    const ec2InstanceProfile = new iam.CfnInstanceProfile(this, 'OpenHandsInstanceProfile', {
-      roles: [ec2Role.roleName],
+    // ========================================
+    // IAM Execution Role for Fargate Tasks
+    // ========================================
+    // Used by ECS agent to pull images, write logs, and read secrets
+    const appExecutionRole = new iam.Role(this, 'AppExecutionRole', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      description: 'Execution role for OpenHands Fargate tasks (image pull, logs, secrets)',
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
+      ],
     });
 
+    // Grant execution role read access to sandbox secret key (for ECS secret injection)
+    sandboxSecretKey.grantRead(appExecutionRole);
+
+    // Grant execution role read access to proxy user secret (for DB_PASS injection)
+    const proxyUserSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'ProxyUserSecretRef',
+      'openhands/database/proxy-user'
+    );
+    proxyUserSecret.grantRead(appExecutionRole);
+
     // Optional: Sandbox IAM Role for container AWS access
-    // This role is assumed by sandbox containers to access AWS services
-    // with explicit deny on sensitive operations
     let sandboxRoleArn: string | undefined;
 
     if (sandboxAwsAccess) {
@@ -262,55 +259,36 @@ export class SecurityStack extends cdk.Stack {
       }
       const policyDocument = JSON.parse(fs.readFileSync(policyFilePath, 'utf-8'));
 
-      // Create sandbox role with trust policy allowing EC2 role to assume it
+      // Create sandbox role — Fargate sandboxes use native ECS task role, not STS
+      // This role is kept for backward compatibility with EC2-based sandbox mode
       const sandboxRole = new iam.Role(this, 'OpenHandsSandboxRole', {
-        assumedBy: new iam.ArnPrincipal(ec2Role.roleArn),
+        assumedBy: new iam.ArnPrincipal(appTaskRole.roleArn),
         externalIds: ['openhands-sandbox'],
         description: 'IAM role for OpenHands sandbox containers with scoped AWS access',
       });
 
-      // Attach user-defined policy statements
       for (const statement of policyDocument.Statement) {
         sandboxRole.addToPolicy(iam.PolicyStatement.fromJson(statement));
       }
 
-      // Attach explicit deny policy (ALWAYS applied, cannot be overridden)
-      // These actions are denied regardless of the user-defined policy
+      // Explicit deny policy (ALWAYS applied, cannot be overridden)
       sandboxRole.addToPolicy(new iam.PolicyStatement({
         sid: 'DenySensitiveOperations',
         effect: iam.Effect.DENY,
         actions: [
-          // IAM User Management
-          'iam:CreateUser',
-          'iam:DeleteUser',
-          'iam:CreateAccessKey',
-          'iam:DeleteAccessKey',
-          'iam:UpdateAccessKey',
-          // IAM Policy Management
-          'iam:AttachUserPolicy',
-          'iam:DetachUserPolicy',
-          'iam:PutUserPolicy',
-          'iam:DeleteUserPolicy',
-          'iam:AttachRolePolicy',
-          'iam:DetachRolePolicy',
-          'iam:PutRolePolicy',
-          'iam:DeleteRolePolicy',
-          // IAM Role Management
-          'iam:CreateRole',
-          'iam:DeleteRole',
-          'iam:UpdateAssumeRolePolicy',
-          // Account-level Operations
-          'organizations:*',
-          'account:*',
-          'billing:*',
-          // Prevent lateral movement
+          'iam:CreateUser', 'iam:DeleteUser',
+          'iam:CreateAccessKey', 'iam:DeleteAccessKey', 'iam:UpdateAccessKey',
+          'iam:AttachUserPolicy', 'iam:DetachUserPolicy', 'iam:PutUserPolicy', 'iam:DeleteUserPolicy',
+          'iam:AttachRolePolicy', 'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy',
+          'iam:CreateRole', 'iam:DeleteRole', 'iam:UpdateAssumeRolePolicy',
+          'organizations:*', 'account:*', 'billing:*',
           'sts:AssumeRole',
         ],
         resources: ['*'],
       }));
 
-      // Grant EC2 role permission to assume sandbox role with external ID
-      ec2Role.addToPolicy(new iam.PolicyStatement({
+      // Grant app task role permission to assume sandbox role
+      appTaskRole.addToPolicy(new iam.PolicyStatement({
         sid: 'AssumeSandboxRole',
         effect: iam.Effect.ALLOW,
         actions: ['sts:AssumeRole'],
@@ -324,7 +302,6 @@ export class SecurityStack extends cdk.Stack {
 
       sandboxRoleArn = sandboxRole.roleArn;
 
-      // CloudFormation output for sandbox role
       new cdk.CfnOutput(this, 'SandboxRoleArn', {
         value: sandboxRole.roleArn,
         description: 'Sandbox IAM Role ARN for container AWS access',
@@ -334,23 +311,15 @@ export class SecurityStack extends cdk.Stack {
     // ========================================
     // KMS Key for User Secrets Encryption
     // ========================================
-    // Creates a KMS key for encrypting user-specific secrets (API keys, tokens)
-    // stored in S3. Uses envelope encryption: KMS encrypts data keys, data keys encrypt secrets.
-    //
-    // Security: Explicit deny for sensitive operations prevents privilege escalation.
-
     const userSecretsKmsKey = new kms.Key(this, 'UserSecretsKmsKey', {
       alias: 'alias/openhands-user-secrets',
       description: 'KMS key for encrypting OpenHands user secrets (API keys, tokens)',
       enableKeyRotation: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
-      // Restrict key usage to encrypt/decrypt only (no sign/verify)
       keySpec: kms.KeySpec.SYMMETRIC_DEFAULT,
       keyUsage: kms.KeyUsage.ENCRYPT_DECRYPT,
-      // Custom key policy with explicit deny for sensitive operations
       policy: new iam.PolicyDocument({
         statements: [
-          // Allow root account full access for key management
           new iam.PolicyStatement({
             sid: 'EnableRootAccess',
             effect: iam.Effect.ALLOW,
@@ -358,10 +327,6 @@ export class SecurityStack extends cdk.Stack {
             actions: ['kms:*'],
             resources: ['*'],
           }),
-          // Explicit deny for sensitive grant/deletion operations to prevent privilege escalation
-          // Note: kms:PutKeyPolicy is NOT denied - it requires kms:* on the key which only
-          // the root principal and key administrators have (via IAM policies)
-          // Denying PutKeyPolicy would lock out CDK from future policy updates
           new iam.PolicyStatement({
             sid: 'DenySensitiveOperations',
             effect: iam.Effect.DENY,
@@ -384,12 +349,10 @@ export class SecurityStack extends cdk.Stack {
       }),
     });
 
-    // Grant EC2 role permission to use the KMS key for decrypt and generate data keys
-    // Required for the OpenHands app to decrypt user secrets during conversation creation
-    userSecretsKmsKey.grantDecrypt(ec2Role);
-    userSecretsKmsKey.grant(ec2Role, 'kms:GenerateDataKey', 'kms:GenerateDataKeyWithoutPlaintext');
+    // Grant app task role permission to use the KMS key for decrypt and generate data keys
+    userSecretsKmsKey.grantDecrypt(appTaskRole);
+    userSecretsKmsKey.grant(appTaskRole, 'kms:GenerateDataKey', 'kms:GenerateDataKeyWithoutPlaintext');
 
-    // CloudFormation output for KMS key
     new cdk.CfnOutput(this, 'UserSecretsKmsKeyArn', {
       value: userSecretsKmsKey.keyArn,
       description: 'KMS Key ARN for user secrets encryption',
@@ -403,12 +366,12 @@ export class SecurityStack extends cdk.Stack {
     // Store outputs
     this.output = {
       albSecurityGroup,
-      ec2SecurityGroup,
-      ec2SecurityGroupId: ec2SecurityGroup.securityGroupId,
+      appServiceSecurityGroup,
+      appServiceSecurityGroupId: appServiceSecurityGroup.securityGroupId,
       efsSecurityGroup,
       efsSecurityGroupId: efsSecurityGroup.securityGroupId,
-      ec2Role,
-      ec2InstanceProfile,
+      appTaskRole,
+      appExecutionRole,
       sandboxRoleArn,
       userSecretsKmsKeyArn: userSecretsKmsKey.keyArn,
       userSecretsKmsKeyId: userSecretsKmsKey.keyId,
@@ -416,9 +379,14 @@ export class SecurityStack extends cdk.Stack {
     };
 
     // CloudFormation outputs
-    new cdk.CfnOutput(this, 'Ec2RoleArn', {
-      value: ec2Role.roleArn,
-      description: 'EC2 Instance Role ARN',
+    new cdk.CfnOutput(this, 'AppTaskRoleArn', {
+      value: appTaskRole.roleArn,
+      description: 'Fargate App Task Role ARN',
+    });
+
+    new cdk.CfnOutput(this, 'AppExecutionRoleArn', {
+      value: appExecutionRole.roleArn,
+      description: 'Fargate App Execution Role ARN',
     });
   }
 }

@@ -2,7 +2,7 @@
 
 This document provides implementation details for the CDK stack files in this directory.
 
-## Stack Architecture (8 Stacks)
+## Stack Architecture (10 Stacks)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -12,37 +12,36 @@ This document provides implementation details for the CDK stack files in this di
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                    │                                     │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │ EdgeStack: Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53   │   │
+│  │ EdgeStack: Lambda@Edge, CloudFront, WAF, Route 53                │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
-                                    ▼ (VPC Origin)
+                                    ▼ (HTTP Origin)
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           Main Region (us-west-2)                        │
 │                                                                          │
 │  ┌───────────────┐    ┌────────────────┐    ┌──────────────────┐        │
 │  │ NetworkStack  │───▶│ SecurityStack  │───▶│ MonitoringStack  │        │
-│  │ VPC, Endpoints│    │ IAM, SGs       │    │ Logs, S3, Alarms │        │
-│  └───────────────┘    └────────────────┘    └──────────────────┘        │
+│  │ VPC, Endpoints│    │ Fargate roles  │    │ Logs, S3, Alarms │        │
+│  └───────────────┘    │ SGs, KMS       │    └──────────────────┘        │
+│         │             └────────────────┘           │                    │
 │         │                    │                      │                    │
 │         ▼                    ▼                      │                    │
-│  ┌─────────────────────────────────────┐           │                    │
-│  │         DatabaseStack               │           │                    │
-│  │   Aurora Serverless v2 PostgreSQL   │           │                    │
-│  │        (IAM Authentication)         │           │                    │
-│  └─────────────────────────────────────┘           │                    │
-│                      │                              │                    │
-│                      ▼                              ▼                    │
-│  ┌───────────────────┐                                                  │
-│  │  UserConfigStack  │ (Lambda for /api/v1/user-config/*)              │
-│  │  depends on S3,   │                                                  │
-│  │  KMS key          │                                                  │
-│  └────────┬──────────┘                                                  │
-│           │                                                             │
-│           ▼                                                             │
+│  ┌──────────────┐  ┌───────────────────────┐       │                    │
+│  │ ClusterStack │  │    DatabaseStack       │       │                    │
+│  │ ECS Cluster  │  │  Aurora Serverless v2  │       │                    │
+│  │ Cloud Map    │  └───────────────────────┘       │                    │
+│  └──────────────┘           │                      │                    │
+│         │                   ▼                      ▼                    │
+│         ├──────▶ ┌──────────────────────────────────────┐              │
+│         │        │           SandboxStack                │              │
+│         │        │  DynamoDB, Orchestrator, Sandbox Tasks │              │
+│         │        └──────────────────────────────────────┘              │
+│         │                   │                                           │
+│         ▼                   ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │                      ComputeStack                                │    │
-│  │   EC2 ASG (Graviton), Internal ALB, Lambda Target Group         │    │
+│  │   Fargate Services (App + OpenResty), ALB, EFS, Lambda TG       │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -53,10 +52,12 @@ This document provides implementation details for the CDK stack files in this di
 |------|---------|---------------|
 | `interfaces.ts` | TypeScript interfaces for stack I/O | OpenHandsConfig, *StackOutput |
 | `network-stack.ts` | VPC import, VPC Endpoints | SSM, ECR, S3, Logs endpoints |
-| `security-stack.ts` | IAM roles, Security Groups, KMS | EC2 role, ALB SG, EC2 SG, User Secrets KMS key |
+| `security-stack.ts` | IAM roles, Security Groups, KMS | Fargate task/execution roles, ALB SG, App SG |
 | `monitoring-stack.ts` | Observability & data store | CloudWatch, S3 data bucket |
-| `database-stack.ts` | Persistent storage | Aurora Serverless v2, IAM auth |
-| `compute-stack.ts` | Application runtime | EC2 ASG, Internal ALB, User Data |
+| `database-stack.ts` | Persistent storage | Aurora Serverless v2, RDS Proxy |
+| `cluster-stack.ts` | Shared ECS infrastructure | ECS Cluster, Cloud Map namespace |
+| `sandbox-stack.ts` | Sandbox containers | DynamoDB, Orchestrator, Task definitions |
+| `compute-stack.ts` | Application runtime | Fargate services, ALB, EFS |
 | `user-config-stack.ts` | User Configuration API | Lambda (ALB target group) |
 | `auth-stack.ts` | Shared authentication | Cognito User Pool, managed login |
 | `edge-stack.ts` | Edge & CDN | Lambda@Edge, CloudFront, WAF, Route 53 |
@@ -69,15 +70,21 @@ securityStack.addDependency(networkStack);
 securityStack.addDependency(monitoringStack);
 databaseStack.addDependency(networkStack);
 databaseStack.addDependency(securityStack);
+clusterStack.addDependency(networkStack);
+sandboxStack.addDependency(networkStack);
+sandboxStack.addDependency(monitoringStack);
+sandboxStack.addDependency(clusterStack);
+userConfigStack.addDependency(monitoringStack);
+userConfigStack.addDependency(securityStack);
 computeStack.addDependency(networkStack);
 computeStack.addDependency(securityStack);
 computeStack.addDependency(monitoringStack);
 computeStack.addDependency(databaseStack);
-userConfigStack.addDependency(monitoringStack); // Uses S3 bucket
-userConfigStack.addDependency(securityStack);   // Uses KMS key
-computeStack.addDependency(userConfigStack);    // ALB routes to Lambda
+computeStack.addDependency(userConfigStack);
+computeStack.addDependency(clusterStack);
+computeStack.addDependency(sandboxStack);
 edgeStack.addDependency(computeStack);
-edgeStack.addDependency(authStack);             // Uses Cognito from AuthStack
+edgeStack.addDependency(authStack);
 ```
 
 ## interfaces.ts
@@ -217,57 +224,32 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO openhands_ia
 
 ## compute-stack.ts
 
-### User Data Script (16KB Limit)
+### Fargate Services
 
-EC2 user data is limited to 16KB. The script is compacted using `\n` in template literals:
+Two separate ECS Fargate services run the application:
 
-```typescript
-// Compact format (fits in 16KB)
-`cat > /etc/systemd/system/openhands.service << SERVICE\n[Unit]\nDescription=...\nSERVICE`,
+1. **App Service** (`openhands-app`): 4 vCPU / 8 GB ARM64
+   - Cloud Map DNS: `app.openhands.local:3000`
+   - EFS mount at `/data/openhands` for workspace persistence
+   - Secrets: `OH_SECRET_KEY`, `DB_PASS` via ECS native injection
 
-// NOT verbose format (exceeds 16KB)
-'cat > /etc/systemd/system/openhands.service << SERVICE',
-'[Unit]',
-'Description=...',
-'SERVICE',
-```
-
-### IAM Token Refresh
-
-Aurora IAM tokens expire every 15 minutes. A systemd timer refreshes every 10 minutes:
-
-```typescript
-// Token refresh script location
-'/usr/local/bin/refresh-db-token.sh'
-
-// Output file consumed by OpenHands
-'/data/openhands/config/database.env'
-// Contains: DATABASE_URL=postgresql://openhands_iam:<token>@<host>:5432/openhands?sslmode=require
-
-// Systemd timer
-'db-token-refresh.timer'  // Runs every 10 minutes
-```
+2. **OpenResty Service** (`openhands-openresty`): 0.25 vCPU / 512 MB ARM64
+   - Runtime proxy on port 8080
+   - Routes `/runtime/{convId}/{port}/...` to sandbox Fargate tasks
 
 ### Docker Image Versions
 
 ```typescript
-const DEFAULT_OPENHANDS_VERSION = '1.1.0';
-const DEFAULT_RUNTIME_VERSION = '1.1-nikolaik';
+const DEFAULT_OPENHANDS_VERSION = '1.3.0';
+const DEFAULT_RUNTIME_VERSION = '1.3-nikolaik';
 ```
 
 Update these when upgrading OpenHands.
 
-### nginx Runtime Proxy (Port 8080)
+### Database Credentials
 
-Proxies `/runtime/{port}/` to localhost containers:
-
-```nginx
-location ~ ^/runtime/(?<target_port>\d+)(?<remaining_path>/.*)?$ {
-    proxy_pass http://127.0.0.1:$target_port$proxy_path;
-}
-```
-
-**Dynamic Port Support**: Agent-server containers run with `network_mode='host'` (via Patch 7 in apply-patch.sh), allowing dynamic ports from user applications (Flask apps, etc.) to be accessible via `/runtime/{port}/`.
+DB password is injected via ECS native secrets (from Secrets Manager `openhands/database/proxy-user`).
+No token refresh needed — RDS Proxy handles connection pooling.
 
 ## edge-stack.ts
 
@@ -312,43 +294,36 @@ const vpcOrigin = new cloudfront.origins.VpcOrigin(alb, {
 ### Verify Database Connectivity
 
 ```bash
-# SSH to EC2
-aws ssm start-session --target <instance-id> --region <region>
+# ECS exec into app container
+aws ecs execute-command --cluster <cluster-name> --task <task-id> \
+  --container openhands-app --interactive --command "/bin/bash" --region <region>
 
-# Check token refresh
-cat /data/openhands/config/database.env
-
-# Test connection
-source /data/openhands/config/database.env
-psql "$DATABASE_URL" -c "SELECT 1"
+# Check DB_PASS is injected
+echo $DB_PASS | head -c 5
 ```
 
-### Check User Data Size
+### Force Service Redeployment
 
 ```bash
-npm run build
-# Check cdk.out for user data size
-wc -c cdk.out/OpenHands-Compute.template.json
+aws ecs update-service --cluster <cluster-name> \
+  --service openhands-app --force-new-deployment --region <region>
 ```
 
-### Force Instance Replacement
+### Check Cloud Map DNS
 
 ```bash
-aws autoscaling terminate-instance-in-auto-scaling-group \
-  --instance-id <id> \
-  --should-decrement-desired-capacity false \
-  --region <region>
+aws servicediscovery discover-instances \
+  --namespace-name openhands.local --service-name app --region <region>
 ```
 
 ## Troubleshooting
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| User data exceeds 16384 bytes | Verbose comments/scripts | Compact using `\n` in template literals |
-| Database connection refused | IAM user not created | Run one-time SQL setup |
-| Token expired errors | Timer not running | Check `systemctl status db-token-refresh.timer` |
-| 502 on /runtime/{port}/ | Patch 7 not applied | Check apply-patch.sh logs, verify network_mode='host' |
+| Database connection refused | DB user not created | Run one-time SQL setup |
+| 502 on /runtime/{port}/ | Sandbox task not running | Check orchestrator logs |
 | Lambda@Edge can't delete | Replicas still exist | Wait 1-2 hours, retry |
+| Service stuck in PROVISIONING | No available Fargate capacity | Check service events |
 
 ## Security Notes
 

@@ -801,6 +801,94 @@ exports[`OpenHands Infrastructure Stacks AuthStack matches snapshot 1`] = `
 }
 `;
 
+exports[`OpenHands Infrastructure Stacks ClusterStack matches snapshot 1`] = `
+{
+  "Outputs": {
+    "ClusterArn": {
+      "Description": "Shared ECS Cluster ARN",
+      "Value": {
+        "Fn::GetAtt": [
+          "ClusterEB0386A7",
+          "Arn",
+        ],
+      },
+    },
+    "ClusterName": {
+      "Description": "Shared ECS Cluster name",
+      "Value": {
+        "Ref": "ClusterEB0386A7",
+      },
+    },
+    "NamespaceName": {
+      "Description": "Cloud Map private DNS namespace",
+      "Value": "openhands.local",
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "ClusterEB0386A7": {
+      "Properties": {
+        "ClusterName": "openhands-example-com",
+        "ClusterSettings": [
+          {
+            "Name": "containerInsights",
+            "Value": "enabled",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Component",
+            "Value": "ecs-cluster",
+          },
+        ],
+      },
+      "Type": "AWS::ECS::Cluster",
+    },
+    "Namespace9B63B8C8": {
+      "Properties": {
+        "Description": "Private DNS for OpenHands services (app, orchestrator)",
+        "Name": "openhands.local",
+        "Vpc": "vpc-12345",
+      },
+      "Type": "AWS::ServiceDiscovery::PrivateDnsNamespace",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
 exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
 {
   "Outputs": {
@@ -819,10 +907,22 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
         ],
       },
     },
-    "AsgName": {
-      "Description": "Auto Scaling Group Name",
+    "AppServiceName": {
+      "Description": "App Fargate Service Name",
       "Value": {
-        "Ref": "OpenHandsAsgASG16C624EA",
+        "Fn::GetAtt": [
+          "AppServiceA2F9036C",
+          "Name",
+        ],
+      },
+    },
+    "OpenRestyServiceName": {
+      "Description": "OpenResty Fargate Service Name",
+      "Value": {
+        "Fn::GetAtt": [
+          "OpenRestyService0A1011FD",
+          "Name",
+        ],
       },
     },
     "SandboxClusterArn": {
@@ -855,10 +955,6 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       "Default": "/cdk-bootstrap/hnb659fds/version",
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
       "Type": "AWS::SSM::Parameter::Value<String>",
-    },
-    "SsmParameterValueawsserviceamiamazonlinuxlatestal2023amikernel61arm64C96584B6F00A464EAD1953AFF4B05118Parameter": {
-      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64",
-      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
     },
   },
   "Resources": {
@@ -914,26 +1010,35 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       },
       "Type": "AWS::IAM::Role",
     },
-    "CpuAlarm87CA37A9": {
+    "AppCpuAlarm52B1C360": {
       "Properties": {
         "AlarmActions": [
           {
             "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
           },
         ],
-        "AlarmDescription": "CPU utilization exceeds 80%",
+        "AlarmDescription": "App service CPU utilization exceeds 80%",
         "ComparisonOperator": "GreaterThanThreshold",
         "Dimensions": [
           {
-            "Name": "AutoScalingGroupName",
+            "Name": "ClusterName",
             "Value": {
-              "Ref": "OpenHandsAsgASG16C624EA",
+              "Fn::ImportValue": "TestClusterStack:ExportsOutputRefClusterEB0386A796A0E3FE",
+            },
+          },
+          {
+            "Name": "ServiceName",
+            "Value": {
+              "Fn::GetAtt": [
+                "AppServiceA2F9036C",
+                "Name",
+              ],
             },
           },
         ],
         "EvaluationPeriods": 2,
         "MetricName": "CPUUtilization",
-        "Namespace": "AWS/EC2",
+        "Namespace": "AWS/ECS",
         "Period": 300,
         "Statistic": "Average",
         "Threshold": 80,
@@ -941,30 +1046,65 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       },
       "Type": "AWS::CloudWatch::Alarm",
     },
-    "DiskAlarm26803A32": {
+    "AppEgressToApp": {
+      "Properties": {
+        "Description": "Allow outbound to app on port 3000",
+        "DestinationSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "FromPort": 3000,
+        "GroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "IpProtocol": "tcp",
+        "ToPort": 3000,
+      },
+      "Type": "AWS::EC2::SecurityGroupEgress",
+    },
+    "AppIngressFromApp": {
+      "Properties": {
+        "Description": "Allow OpenResty to reach app on port 3000",
+        "FromPort": 3000,
+        "GroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+        },
+        "ToPort": 3000,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "AppMemoryAlarmE47EA10B": {
       "Properties": {
         "AlarmActions": [
           {
             "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
           },
         ],
-        "AlarmDescription": "Disk usage exceeds 85%",
+        "AlarmDescription": "App service memory utilization exceeds 85%",
         "ComparisonOperator": "GreaterThanThreshold",
         "Dimensions": [
           {
-            "Name": "AutoScalingGroupName",
+            "Name": "ClusterName",
             "Value": {
-              "Ref": "OpenHandsAsgASG16C624EA",
+              "Fn::ImportValue": "TestClusterStack:ExportsOutputRefClusterEB0386A796A0E3FE",
             },
           },
           {
-            "Name": "path",
-            "Value": "/data",
+            "Name": "ServiceName",
+            "Value": {
+              "Fn::GetAtt": [
+                "AppServiceA2F9036C",
+                "Name",
+              ],
+            },
           },
         ],
         "EvaluationPeriods": 2,
-        "MetricName": "disk_used_percent",
-        "Namespace": "CWAgent",
+        "MetricName": "MemoryUtilization",
+        "Namespace": "AWS/ECS",
         "Period": 300,
         "Statistic": "Average",
         "Threshold": 85,
@@ -972,32 +1112,432 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       },
       "Type": "AWS::CloudWatch::Alarm",
     },
-    "MemoryAlarm2E786DB4": {
+    "AppServiceA2F9036C": {
+      "DependsOn": [
+        "OpenHandsAlbHttpListenerVerifiedMainRuleRule40A43613",
+      ],
       "Properties": {
-        "AlarmActions": [
-          {
-            "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
+        "Cluster": {
+          "Fn::ImportValue": "TestClusterStack:ExportsOutputRefClusterEB0386A796A0E3FE",
+        },
+        "DeploymentConfiguration": {
+          "Alarms": {
+            "AlarmNames": [],
+            "Enable": false,
+            "Rollback": false,
           },
-        ],
-        "AlarmDescription": "Memory utilization exceeds 85%",
-        "ComparisonOperator": "GreaterThanThreshold",
-        "Dimensions": [
+          "MaximumPercent": 200,
+          "MinimumHealthyPercent": 100,
+        },
+        "DesiredCount": 1,
+        "EnableECSManagedTags": true,
+        "EnableExecuteCommand": true,
+        "HealthCheckGracePeriodSeconds": 60,
+        "LaunchType": "FARGATE",
+        "LoadBalancers": [
           {
-            "Name": "AutoScalingGroupName",
-            "Value": {
-              "Ref": "OpenHandsAsgASG16C624EA",
+            "ContainerName": "openhands-app",
+            "ContainerPort": 3000,
+            "TargetGroupArn": {
+              "Ref": "AppTargetGroup3D716DB6",
             },
           },
         ],
-        "EvaluationPeriods": 2,
-        "MetricName": "mem_used_percent",
-        "Namespace": "CWAgent",
-        "Period": 300,
-        "Statistic": "Average",
-        "Threshold": 85,
-        "TreatMissingData": "notBreaching",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "AssignPublicIp": "DISABLED",
+            "SecurityGroups": [
+              {
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+              },
+            ],
+            "Subnets": [
+              "p-12345",
+              "p-67890",
+            ],
+          },
+        },
+        "PropagateTags": "TASK_DEFINITION",
+        "ServiceName": "openhands-app",
+        "ServiceRegistries": [
+          {
+            "RegistryArn": {
+              "Fn::GetAtt": [
+                "AppServiceCloudmapService5FDC5AA1",
+                "Arn",
+              ],
+            },
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Component",
+            "Value": "openhands-app",
+          },
+        ],
+        "TaskDefinition": {
+          "Ref": "AppTaskDef32F3E122",
+        },
       },
-      "Type": "AWS::CloudWatch::Alarm",
+      "Type": "AWS::ECS::Service",
+    },
+    "AppServiceCloudmapService5FDC5AA1": {
+      "Properties": {
+        "DnsConfig": {
+          "DnsRecords": [
+            {
+              "TTL": 10,
+              "Type": "A",
+            },
+          ],
+          "NamespaceId": {
+            "Fn::ImportValue": "TestClusterStack:ExportsOutputFnGetAttNamespace9B63B8C8Id4C69F815",
+          },
+          "RoutingPolicy": "MULTIVALUE",
+        },
+        "HealthCheckCustomConfig": {
+          "FailureThreshold": 1,
+        },
+        "Name": "app",
+        "NamespaceId": {
+          "Fn::ImportValue": "TestClusterStack:ExportsOutputFnGetAttNamespace9B63B8C8Id4C69F815",
+        },
+        "Tags": [
+          {
+            "Key": "Component",
+            "Value": "openhands-app",
+          },
+        ],
+      },
+      "Type": "AWS::ServiceDiscovery::Service",
+    },
+    "AppTargetGroup3D716DB6": {
+      "Properties": {
+        "HealthCheckIntervalSeconds": 30,
+        "HealthCheckPath": "/api/health",
+        "HealthCheckTimeoutSeconds": 5,
+        "HealthyThresholdCount": 2,
+        "Port": 3000,
+        "Protocol": "HTTP",
+        "TargetGroupAttributes": [
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "30",
+          },
+          {
+            "Key": "stickiness.enabled",
+            "Value": "false",
+          },
+        ],
+        "TargetType": "ip",
+        "UnhealthyThresholdCount": 3,
+        "VpcId": "vpc-12345",
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+    },
+    "AppTaskDef32F3E122": {
+      "Properties": {
+        "ContainerDefinitions": [
+          {
+            "Command": [
+              "echo "$OPENHANDS_CONFIG_TOML" > /app/config.toml && exec /bin/sh /opt/apply-startup.sh uvicorn openhands.server.listen:app --host 0.0.0.0 --port 3000",
+            ],
+            "EntryPoint": [
+              "/bin/bash",
+              "-c",
+            ],
+            "Environment": [
+              {
+                "Name": "SANDBOX_USER_ID",
+                "Value": "0",
+              },
+              {
+                "Name": "SANDBOX_RUNTIME_CONTAINER_IMAGE",
+                "Value": {
+                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
+                },
+              },
+              {
+                "Name": "WORKSPACE_MOUNT_PATH",
+                "Value": "/data/openhands/workspace",
+              },
+              {
+                "Name": "WORKSPACE_BASE",
+                "Value": "/data/openhands/workspace",
+              },
+              {
+                "Name": "LOG_ALL_EVENTS",
+                "Value": "true",
+              },
+              {
+                "Name": "HIDE_LLM_SETTINGS",
+                "Value": "true",
+              },
+              {
+                "Name": "USER_AUTH_CLASS",
+                "Value": "openhands.server.user_auth.cognito_user_auth.CognitoUserAuth",
+              },
+              {
+                "Name": "LLM_MODEL",
+                "Value": "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+              },
+              {
+                "Name": "LLM_AWS_REGION_NAME",
+                "Value": "us-west-2",
+              },
+              {
+                "Name": "AWS_REGION",
+                "Value": "us-west-2",
+              },
+              {
+                "Name": "AWS_DEFAULT_REGION",
+                "Value": "us-west-2",
+              },
+              {
+                "Name": "AWS_S3_BUCKET",
+                "Value": {
+                  "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+                },
+              },
+              {
+                "Name": "FILE_STORE",
+                "Value": "s3",
+              },
+              {
+                "Name": "FILE_STORE_PATH",
+                "Value": {
+                  "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
+                },
+              },
+              {
+                "Name": "AGENT_SERVER_IMAGE_REPOSITORY",
+                "Value": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "123456789012.dkr.ecr.us-west-2.",
+                      {
+                        "Ref": "AWS::URLSuffix",
+                      },
+                      "/cdk-hnb659fds-container-assets-123456789012-us-west-2",
+                    ],
+                  ],
+                },
+              },
+              {
+                "Name": "AGENT_SERVER_IMAGE_TAG",
+                "Value": "cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf",
+              },
+              {
+                "Name": "AGENT_ENABLE_BROWSING",
+                "Value": "false",
+              },
+              {
+                "Name": "AGENT_ENABLE_MCP",
+                "Value": "true",
+              },
+              {
+                "Name": "RUNTIME",
+                "Value": "remote",
+              },
+              {
+                "Name": "SANDBOX_REMOTE_RUNTIME_API_URL",
+                "Value": "http://orchestrator.openhands.local:8081",
+              },
+              {
+                "Name": "SANDBOX_API_KEY",
+                "Value": "local",
+              },
+              {
+                "Name": "SANDBOX_START_TIMEOUT",
+                "Value": "300",
+              },
+              {
+                "Name": "SANDBOX_RUNTIME_STARTUP_ENV_VARS",
+                "Value": "{"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"us-west-2","OH_SECRET_KEY":"$OH_SECRET_KEY"}",
+              },
+              {
+                "Name": "USER_CONFIG_ENABLED",
+                "Value": "true",
+              },
+              {
+                "Name": "USER_SECRETS_KMS_KEY_ID",
+                "Value": {
+                  "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefUserSecretsKmsKey2BAFA35EBEB4D071",
+                },
+              },
+              {
+                "Name": "DB_HOST",
+                "Value": "mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com",
+              },
+              {
+                "Name": "DB_PORT",
+                "Value": "5432",
+              },
+              {
+                "Name": "DB_NAME",
+                "Value": "openhands",
+              },
+              {
+                "Name": "DB_USER",
+                "Value": "openhands_proxy",
+              },
+              {
+                "Name": "DB_SSL",
+                "Value": "require",
+              },
+              {
+                "Name": "DB_CLUSTER_ENDPOINT",
+                "Value": "mock-cluster.cluster-abc123.us-west-2.rds.amazonaws.com",
+              },
+              {
+                "Name": "OPENHANDS_CONFIG_TOML",
+                "Value": "[core]
+workspace_base = "/data/openhands/workspace"
+max_concurrent_conversations = 10
+send_telemetry = false
+conversation_max_age_seconds = 15552000
+default_agent = "CodeActAgent"
+[llm]
+model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+api_key = "placeholder-not-used-for-bedrock-iam-auth"
+aws_region_name = "us-west-2"
+[sandbox]
+timeout = 300
+volumes = "/data/openhands/workspace:/workspace:rw"
+[agent]
+enable_browsing = false
+enable_mcp = true
+[mcp]
+shttp_servers = [
+    { url = "https://knowledge-mcp.global.api.aws" }
+]
+stdio_servers = [
+    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium", "--chrome-arg=--no-sandbox", "--chrome-arg=--disable-gpu", "--chrome-arg=--disable-dev-shm-usage"] }
+]
+[security]
+confirmation_mode = false
+security_analyzer = "llm"",
+              },
+            ],
+            "Essential": true,
+            "HealthCheck": {
+              "Command": [
+                "CMD-SHELL",
+                "curl -f http://localhost:3000/api/health || exit 1",
+              ],
+              "Interval": 30,
+              "Retries": 3,
+              "StartPeriod": 120,
+              "Timeout": 10,
+            },
+            "Image": {
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9735e97672846e8b58b1bd6c4a7d0c145d5adc36ea6a57ad6d7d61ad35ae0dff",
+            },
+            "LogConfiguration": {
+              "LogDriver": "awslogs",
+              "Options": {
+                "awslogs-group": "/openhands/application",
+                "awslogs-region": "us-west-2",
+                "awslogs-stream-prefix": "app",
+              },
+            },
+            "MountPoints": [
+              {
+                "ContainerPath": "/data/openhands",
+                "ReadOnly": false,
+                "SourceVolume": "workspace",
+              },
+            ],
+            "Name": "openhands-app",
+            "PortMappings": [
+              {
+                "ContainerPort": 3000,
+                "Protocol": "tcp",
+              },
+            ],
+            "Secrets": [
+              {
+                "Name": "OH_SECRET_KEY",
+                "ValueFrom": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition",
+                      },
+                      ":secretsmanager:us-west-2:123456789012:secret:openhands/sandbox-secret-key",
+                    ],
+                  ],
+                },
+              },
+              {
+                "Name": "DB_PASS",
+                "ValueFrom": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition",
+                      },
+                      ":secretsmanager:us-west-2:123456789012:secret:openhands/database/proxy-user:password::",
+                    ],
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+        "Cpu": "4096",
+        "ExecutionRoleArn": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppExecutionRoleBDDAF861Arn9CA1CF07",
+        },
+        "Family": "openhands-app",
+        "Memory": "8192",
+        "NetworkMode": "awsvpc",
+        "RequiresCompatibilities": [
+          "FARGATE",
+        ],
+        "RuntimePlatform": {
+          "CpuArchitecture": "ARM64",
+          "OperatingSystemFamily": "LINUX",
+        },
+        "TaskRoleArn": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttOpenHandsEc2RoleD4668748Arn7A231DF5",
+        },
+        "Volumes": [
+          {
+            "EFSVolumeConfiguration": {
+              "AuthorizationConfig": {
+                "AccessPointId": {
+                  "Ref": "WorkspaceAccessPointA307771F",
+                },
+                "IAM": "ENABLED",
+              },
+              "FilesystemId": {
+                "Ref": "WorkspaceFileSystem5CB98ACC",
+              },
+              "TransitEncryption": "ENABLED",
+            },
+            "Name": "workspace",
+          },
+        ],
+      },
+      "Type": "AWS::ECS::TaskDefinition",
+    },
+    "MigrationAppTaskRoleName3A38AB49": {
+      "Properties": {
+        "Description": "Temporary: preserves SecurityStack Ref export during migration",
+        "Name": "/openhands/migration/app-task-role-name",
+        "Tier": "Standard",
+        "Type": "String",
+        "Value": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefOpenHandsEc2RoleD46687489963EFBC",
+        },
+      },
+      "Type": "AWS::SSM::Parameter",
     },
     "OpenHandsAlb343FAEDA": {
       "Properties": {
@@ -1046,7 +1586,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
         "Actions": [
           {
             "TargetGroupArn": {
-              "Ref": "OpenHandsTargetGroupB296B707",
+              "Ref": "AppTargetGroup3D716DB6",
             },
             "Type": "forward",
           },
@@ -1105,441 +1645,6 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       },
       "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
     },
-    "OpenHandsAsgASG16C624EA": {
-      "Properties": {
-        "HealthCheckGracePeriod": 600,
-        "HealthCheckType": "ELB",
-        "LaunchTemplate": {
-          "LaunchTemplateId": {
-            "Ref": "OpenHandsLaunchTemplate41AB5D4E",
-          },
-          "Version": {
-            "Fn::GetAtt": [
-              "OpenHandsLaunchTemplate41AB5D4E",
-              "LatestVersionNumber",
-            ],
-          },
-        },
-        "MaxSize": "1",
-        "MinSize": "1",
-        "NewInstancesProtectedFromScaleIn": false,
-        "TargetGroupARNs": [
-          {
-            "Ref": "OpenHandsTargetGroupB296B707",
-          },
-          {
-            "Ref": "RuntimeTargetGroup77A6315C",
-          },
-        ],
-        "VPCZoneIdentifier": [
-          "p-12345",
-          "p-67890",
-        ],
-      },
-      "Type": "AWS::AutoScaling::AutoScalingGroup",
-      "UpdatePolicy": {
-        "AutoScalingRollingUpdate": {
-          "SuspendProcesses": [
-            "HealthCheck",
-            "ReplaceUnhealthy",
-            "AZRebalance",
-            "AlarmNotification",
-            "ScheduledActions",
-            "InstanceRefresh",
-          ],
-        },
-        "AutoScalingScheduledAction": {
-          "IgnoreUnmodifiedGroupSizeProperties": true,
-        },
-      },
-    },
-    "OpenHandsLaunchTemplate41AB5D4E": {
-      "Properties": {
-        "LaunchTemplateData": {
-          "BlockDeviceMappings": [
-            {
-              "DeviceName": "/dev/xvda",
-              "Ebs": {
-                "Encrypted": true,
-                "Iops": 3000,
-                "Throughput": 125,
-                "VolumeSize": 30,
-                "VolumeType": "gp3",
-              },
-            },
-            {
-              "DeviceName": "/dev/sdf",
-              "Ebs": {
-                "DeleteOnTermination": false,
-                "Encrypted": true,
-                "Iops": 3000,
-                "Throughput": 125,
-                "VolumeSize": 100,
-                "VolumeType": "gp3",
-              },
-            },
-          ],
-          "IamInstanceProfile": {
-            "Arn": {
-              "Fn::GetAtt": [
-                "OpenHandsLaunchTemplateProfile0C9EFCAE",
-                "Arn",
-              ],
-            },
-          },
-          "ImageId": {
-            "Ref": "SsmParameterValueawsserviceamiamazonlinuxlatestal2023amikernel61arm64C96584B6F00A464EAD1953AFF4B05118Parameter",
-          },
-          "InstanceType": "m7g.xlarge",
-          "MetadataOptions": {
-            "HttpTokens": "required",
-          },
-          "SecurityGroupIds": [
-            {
-              "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
-            },
-          ],
-          "TagSpecifications": [
-            {
-              "ResourceType": "instance",
-              "Tags": [
-                {
-                  "Key": "Name",
-                  "Value": "TestComputeStack/OpenHandsLaunchTemplate",
-                },
-              ],
-            },
-            {
-              "ResourceType": "volume",
-              "Tags": [
-                {
-                  "Key": "Name",
-                  "Value": "TestComputeStack/OpenHandsLaunchTemplate",
-                },
-              ],
-            },
-          ],
-          "UserData": {
-            "Fn::Base64": {
-              "Fn::Join": [
-                "",
-                [
-                  "#!/bin/bash
-#!/bin/bash
-set -ex
-exec > >(tee /var/log/user-data.log) 2>&1
-TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
-REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
-error_handler() { aws sns publish --topic-arn "",
-                  {
-                    "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefAlertTopic2720D5359ADB6D3E",
-                  },
-                  "" --region "$REGION" --subject "OpenHands EC2 Failed" --message "Instance: $INSTANCE_ID, Line: $1" || true; exit 1; }
-trap 'error_handler $LINENO' ERR
-retry() { for i in 1 2 3; do "$@" && return 0; sleep 10; done; return 1; }
-retry dnf install -y docker
-retry dnf install -y amazon-efs-utils
-mkdir -p /etc/docker
-VPC_DNS=$(grep "^nameserver" /etc/resolv.conf | head -1 | awk '{print $2}')
-echo "{\\"dns\\":[\\"$VPC_DNS\\"],\\"default-address-pools\\":[{\\"base\\":\\"172.17.0.0/12\\",\\"size\\":24}],\\"log-driver\\":\\"json-file\\",\\"log-opts\\":{\\"max-size\\":\\"100m\\",\\"max-file\\":\\"3\\"}}" > /etc/docker/daemon.json
-systemctl enable --now docker
-usermod -aG docker ec2-user
-chmod 666 /var/run/docker.sock
-curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-Linux-aarch64" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
-retry dnf install -y amazon-cloudwatch-agent
-echo '{"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"cpu":{"measurement":["cpu_usage_idle","cpu_usage_user"],"metrics_collection_interval":60,"totalcpu":true},"mem":{"measurement":["mem_used_percent"],"metrics_collection_interval":60},"disk":{"measurement":["disk_used_percent"],"metrics_collection_interval":60,"resources":["/","/data"]}},"append_dimensions":{"AutoScalingGroupName":"\${aws:AutoScalingGroupName}","InstanceId":"\${aws:InstanceId}"}}}' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-for i in {1..60}; do [ -e /dev/nvme1n1 ] && break; sleep 5; done; [ -e /dev/nvme1n1 ] || exit 1
-blkid /dev/nvme1n1 || mkfs -t xfs /dev/nvme1n1
-mkdir -p /data && mount /dev/nvme1n1 /data && echo "/dev/nvme1n1 /data xfs defaults,nofail 0 2" >> /etc/fstab
-# Mount EFS at /data/openhands (persists workspaces across EC2 replacement)
-mkdir -p /data/openhands
-echo "",
-                  {
-                    "Ref": "WorkspaceFileSystem5CB98ACC",
-                  },
-                  ":/ /data/openhands efs _netdev,tls,iam,accesspoint=",
-                  {
-                    "Ref": "WorkspaceAccessPointA307771F",
-                  },
-                  " 0 0" >> /etc/fstab
-retry mount -a
-mountpoint -q /data/openhands || exit 1
-mkdir -p /data/openhands/{config,workspace,.openhands} && chown -R ec2-user:ec2-user /data/openhands
-set +x
-echo "Retrieving sandbox secret key..."
-OH_SECRET_KEY=$(aws secretsmanager get-secret-value --secret-id openhands/sandbox-secret-key --region "$REGION" --query SecretString --output text)
-[ -n "$OH_SECRET_KEY" ] || { echo "ERROR: Failed to retrieve sandbox secret key" >&2; exit 1; }
-export OH_SECRET_KEY
-echo "Sandbox secret key configured"
-set -x
-cat > /data/openhands/docker-compose.yml << EOF
-services:
-  openresty:
-    image: ",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9fdb39acfa2edffd42dcebbdff5efd0c0cd747e8598634e603b4023f92e37cb1",
-                  },
-                  "
-    container_name: openresty-proxy
-    restart: always
-    ports:
-      - "8080:8080"
-    environment:
-      - ORCHESTRATOR_URL=http://orchestrator.openhands.local:8081
-    depends_on:
-      - openhands
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "3"
-
-  openhands:
-    image: ",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:df4eb244ca0b6b853ad60399e7bba228a7870d5f4319200eb5ccea93ffe7ded9",
-                  },
-                  "
-    container_name: openhands-app
-    restart: unless-stopped
-    environment:
-      - SANDBOX_USER_ID=0
-      - SANDBOX_RUNTIME_CONTAINER_IMAGE=",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
-                  },
-                  "
-      - SANDBOX_VOLUMES=/data/openhands/workspace:/workspace:rw
-      - WORKSPACE_MOUNT_PATH=/data/openhands/workspace
-      - WORKSPACE_BASE=/data/openhands/workspace
-      - LOG_ALL_EVENTS=true
-      - HIDE_LLM_SETTINGS=true
-      - USER_AUTH_CLASS=openhands.server.user_auth.cognito_user_auth.CognitoUserAuth
-      - LLM_MODEL=bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
-      - LLM_AWS_REGION_NAME=us-west-2
-      - AWS_REGION=$REGION
-      - AWS_DEFAULT_REGION=$REGION
-      - AWS_S3_BUCKET=",
-                  {
-                    "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
-                  },
-                  "
-      - FILE_STORE=s3
-      - FILE_STORE_PATH=",
-                  {
-                    "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefDataBucketE3889A50250F5285",
-                  },
-                  "
-      - USER_CONFIG_ENABLED=true
-      - USER_SECRETS_KMS_KEY_ID=",
-                  {
-                    "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefUserSecretsKmsKey2BAFA35EBEB4D071",
-                  },
-                  "
-      - OH_SECRET_KEY=$OH_SECRET_KEY
-      - SANDBOX_DOCKER_RUNTIME_KWARGS={"extra_hosts":{"host.docker.internal":"host-gateway"},"environment":{"OH_SECRET_KEY":"$OH_SECRET_KEY"}}
-      - AGENT_SERVER_IMAGE_REPOSITORY=123456789012.dkr.ecr.us-west-2.",
-                  {
-                    "Ref": "AWS::URLSuffix",
-                  },
-                  "/cdk-hnb659fds-container-assets-123456789012-us-west-2
-      - AGENT_SERVER_IMAGE_TAG=cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf
-      - AGENT_ENABLE_BROWSING=false
-      - AGENT_ENABLE_MCP=true
-      - RUNTIME=remote
-      - SANDBOX_REMOTE_RUNTIME_API_URL=http://orchestrator.openhands.local:8081
-      - SANDBOX_API_KEY=local
-      - SANDBOX_START_TIMEOUT=300
-      - SANDBOX_RUNTIME_STARTUP_ENV_VARS={"OH_PRELOAD_TOOLS":"false","AWS_DEFAULT_REGION":"$REGION","OH_SECRET_KEY":"$OH_SECRET_KEY"}
-      - DB_HOST=mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com
-      - DB_PORT=5432
-      - DB_NAME=openhands
-      - DB_USER=openhands_proxy
-      - DB_SSL=require
-      - DB_CLUSTER_ENDPOINT=mock-cluster.cluster-abc123.us-west-2.rds.amazonaws.com
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.docker:/root/.docker:ro
-      - /data/openhands/.openhands:/root/.openhands
-      - /data/openhands/workspace:/data/openhands/workspace
-      - /data/openhands/config/config.toml:/app/config.toml:ro
-      - /data/openhands/config/database.env:/app/database.env:ro
-    ports:
-      - "3000:3000"
-    env_file:
-      - /data/openhands/config/database.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-
-  watchtower:
-    image: containrrr/watchtower:1.7.1
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=86400
-    command: openhands-app openresty-proxy
-EOF
-
-# Create config.toml (loaded from config/config.toml at CDK synth time)
-cat > /data/openhands/config/config.toml << CONFIG
-[core]
-workspace_base = "/data/openhands/workspace"
-max_concurrent_conversations = 10
-send_telemetry = false
-conversation_max_age_seconds = 15552000
-default_agent = "CodeActAgent"
-[llm]
-model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
-api_key = "placeholder-not-used-for-bedrock-iam-auth"
-aws_region_name = "\${REGION}"
-[sandbox]
-timeout = 300
-volumes = "/data/openhands/workspace:/workspace:rw"
-[agent]
-enable_browsing = false
-enable_mcp = true
-[mcp]
-shttp_servers = [
-    { url = "https://knowledge-mcp.global.api.aws" }
-]
-stdio_servers = [
-    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest", "--isolated", "--headless", "-e", "/usr/bin/chromium", "--chrome-arg=--no-sandbox", "--chrome-arg=--disable-gpu", "--chrome-arg=--disable-dev-shm-usage"] }
-]
-[security]
-confirmation_mode = false
-security_analyzer = "llm"
-CONFIG
-
-cat > /usr/local/bin/setup-db-credentials.sh << 'DBSCRIPT'
-#!/bin/bash
-set -e
-DB_HOST="mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com"
-DB_PORT="5432"
-DB_USER="openhands_proxy"
-DB_NAME="openhands"
-TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
-# Get password from Secrets Manager
-SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id openhands/database/proxy-user --region "$REGION" --query SecretString --output text 2>/dev/null || echo "")
-if [ -z "$SECRET_VALUE" ]; then echo "ERROR: Failed to retrieve database secret"; exit 1; fi
-DB_PASS=$(echo "$SECRET_VALUE" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
-ENCODED_PASS=$(python3 -c "import urllib.parse; print(urllib.parse.quote(\\"$DB_PASS\\", safe=\\"\\"))")
-mkdir -p /data/openhands/config
-echo "DB_HOST=$DB_HOST" > /data/openhands/config/database.env
-echo "DB_PORT=$DB_PORT" >> /data/openhands/config/database.env
-echo "DB_NAME=$DB_NAME" >> /data/openhands/config/database.env
-echo "DB_USER=$DB_USER" >> /data/openhands/config/database.env
-echo "DB_PASS=$DB_PASS" >> /data/openhands/config/database.env
-echo "DB_SSL=require" >> /data/openhands/config/database.env
-echo "DATABASE_URL=postgresql://\${DB_USER}:\${ENCODED_PASS}@\${DB_HOST}:\${DB_PORT}/\${DB_NAME}?sslmode=require" >> /data/openhands/config/database.env
-chmod 600 /data/openhands/config/database.env
-echo "Database credentials configured successfully"
-DBSCRIPT
-chmod +x /usr/local/bin/setup-db-credentials.sh
-/usr/local/bin/setup-db-credentials.sh
-cat > /etc/systemd/system/openhands.service << SERVICE
-[Unit]
-Description=OpenHands
-After=docker.service
-Requires=docker.service
-[Service]
-Type=simple
-WorkingDirectory=/data/openhands
-ExecStart=/usr/local/bin/docker-compose up
-ExecStop=/usr/local/bin/docker-compose down
-Restart=always
-User=root
-[Install]
-WantedBy=multi-user.target
-SERVICE
-aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ",
-                  {
-                    "Ref": "AWS::AccountId",
-                  },
-                  ".dkr.ecr.$REGION.amazonaws.com
-pull_with_retry() { local img=$1; for i in 1 2 3; do docker pull "$img" && return 0; sleep 15; done; return 1; }
-pull_with_retry "",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:df4eb244ca0b6b853ad60399e7bba228a7870d5f4319200eb5ccea93ffe7ded9",
-                  },
-                  ""
-pull_with_retry "",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9fdb39acfa2edffd42dcebbdff5efd0c0cd747e8598634e603b4023f92e37cb1",
-                  },
-                  ""
-pull_with_retry "",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
-                  },
-                  ""
-pull_with_retry "",
-                  {
-                    "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf",
-                  },
-                  ""
-set +e; trap - ERR; pull_with_retry "containrrr/watchtower:1.7.1" || echo "Watchtower pull failed, auto-updates disabled"; set -e; trap 'error_handler $LINENO' ERR
-systemctl daemon-reload && systemctl enable openhands && systemctl start openhands
-for i in {1..30}; do docker inspect openhands-app >/dev/null 2>&1 && break; sleep 2; done
-echo "OpenHands setup complete!"",
-                ],
-              ],
-            },
-          },
-        },
-        "TagSpecifications": [
-          {
-            "ResourceType": "launch-template",
-            "Tags": [
-              {
-                "Key": "Name",
-                "Value": "TestComputeStack/OpenHandsLaunchTemplate",
-              },
-            ],
-          },
-        ],
-      },
-      "Type": "AWS::EC2::LaunchTemplate",
-    },
-    "OpenHandsLaunchTemplateProfile0C9EFCAE": {
-      "Properties": {
-        "Roles": [
-          {
-            "Fn::ImportValue": "TestSecurityStack:ExportsOutputRefOpenHandsEc2RoleD46687489963EFBC",
-          },
-        ],
-      },
-      "Type": "AWS::IAM::InstanceProfile",
-    },
-    "OpenHandsTargetGroupB296B707": {
-      "Properties": {
-        "HealthCheckIntervalSeconds": 30,
-        "HealthCheckPath": "/api/health",
-        "HealthCheckTimeoutSeconds": 5,
-        "HealthyThresholdCount": 2,
-        "Port": 3000,
-        "Protocol": "HTTP",
-        "TargetGroupAttributes": [
-          {
-            "Key": "deregistration_delay.timeout_seconds",
-            "Value": "30",
-          },
-          {
-            "Key": "stickiness.enabled",
-            "Value": "false",
-          },
-        ],
-        "TargetType": "instance",
-        "UnhealthyThresholdCount": 3,
-        "VpcId": "vpc-12345",
-      },
-      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
-    },
     "OpenHandsVersionParam702B5340": {
       "Properties": {
         "Description": "OpenHands Docker image version tag",
@@ -1550,9 +1655,133 @@ echo "OpenHands setup complete!"",
       },
       "Type": "AWS::SSM::Parameter",
     },
-    "OrchestratorIngressFromEc2": {
+    "OpenRestyService0A1011FD": {
+      "DependsOn": [
+        "OpenHandsAlbHttpListenerVerifiedRuntimeRuleRule1C3988A0",
+      ],
       "Properties": {
-        "Description": "Allow EC2 to reach sandbox orchestrator Fargate service",
+        "Cluster": {
+          "Fn::ImportValue": "TestClusterStack:ExportsOutputRefClusterEB0386A796A0E3FE",
+        },
+        "DeploymentConfiguration": {
+          "Alarms": {
+            "AlarmNames": [],
+            "Enable": false,
+            "Rollback": false,
+          },
+          "MaximumPercent": 200,
+          "MinimumHealthyPercent": 100,
+        },
+        "DesiredCount": 1,
+        "EnableECSManagedTags": true,
+        "EnableExecuteCommand": true,
+        "HealthCheckGracePeriodSeconds": 60,
+        "LaunchType": "FARGATE",
+        "LoadBalancers": [
+          {
+            "ContainerName": "openresty-proxy",
+            "ContainerPort": 8080,
+            "TargetGroupArn": {
+              "Ref": "RuntimeTargetGroup77A6315C",
+            },
+          },
+        ],
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "AssignPublicIp": "DISABLED",
+            "SecurityGroups": [
+              {
+                "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttEc2SecurityGroup55889913GroupId170771B5",
+              },
+            ],
+            "Subnets": [
+              "p-12345",
+              "p-67890",
+            ],
+          },
+        },
+        "PropagateTags": "TASK_DEFINITION",
+        "ServiceName": "openhands-openresty",
+        "Tags": [
+          {
+            "Key": "Component",
+            "Value": "openresty-proxy",
+          },
+        ],
+        "TaskDefinition": {
+          "Ref": "OpenRestyTaskDef8DEC8161",
+        },
+      },
+      "Type": "AWS::ECS::Service",
+    },
+    "OpenRestyTaskDef8DEC8161": {
+      "Properties": {
+        "ContainerDefinitions": [
+          {
+            "Environment": [
+              {
+                "Name": "ORCHESTRATOR_URL",
+                "Value": "http://orchestrator.openhands.local:8081",
+              },
+              {
+                "Name": "APP_URL",
+                "Value": "http://app.openhands.local:3000",
+              },
+            ],
+            "Essential": true,
+            "HealthCheck": {
+              "Command": [
+                "CMD-SHELL",
+                "curl -f http://localhost:8080/health || exit 1",
+              ],
+              "Interval": 30,
+              "Retries": 3,
+              "StartPeriod": 30,
+              "Timeout": 5,
+            },
+            "Image": {
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:710de61fd844f4eb8aaffc590ebcd84df56eee8b61af7ba0c6bba30dea48b5de",
+            },
+            "LogConfiguration": {
+              "LogDriver": "awslogs",
+              "Options": {
+                "awslogs-group": "/openhands/openresty",
+                "awslogs-region": "us-west-2",
+                "awslogs-stream-prefix": "openresty",
+              },
+            },
+            "Name": "openresty-proxy",
+            "PortMappings": [
+              {
+                "ContainerPort": 8080,
+                "Protocol": "tcp",
+              },
+            ],
+          },
+        ],
+        "Cpu": "256",
+        "ExecutionRoleArn": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppExecutionRoleBDDAF861Arn9CA1CF07",
+        },
+        "Family": "openhands-openresty",
+        "Memory": "512",
+        "NetworkMode": "awsvpc",
+        "RequiresCompatibilities": [
+          "FARGATE",
+        ],
+        "RuntimePlatform": {
+          "CpuArchitecture": "ARM64",
+          "OperatingSystemFamily": "LINUX",
+        },
+        "TaskRoleArn": {
+          "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttOpenHandsEc2RoleD4668748Arn7A231DF5",
+        },
+      },
+      "Type": "AWS::ECS::TaskDefinition",
+    },
+    "OrchestratorIngressFromApp": {
+      "Properties": {
+        "Description": "Allow app service to reach sandbox orchestrator",
         "FromPort": 8081,
         "GroupId": "sg-orchestrator123",
         "IpProtocol": "tcp",
@@ -1591,7 +1820,7 @@ echo "OpenHands setup complete!"",
             "Value": "false",
           },
         ],
-        "TargetType": "instance",
+        "TargetType": "ip",
         "UnhealthyThresholdCount": 3,
         "VpcId": "vpc-12345",
       },
@@ -1607,9 +1836,9 @@ echo "OpenHands setup complete!"",
       },
       "Type": "AWS::SSM::Parameter",
     },
-    "SandboxIngressFromEc2": {
+    "SandboxIngressFromApp": {
       "Properties": {
-        "Description": "Allow all TCP from EC2 (OpenResty routes to sandbox ports)",
+        "Description": "Allow all TCP from app service (OpenResty routes to sandbox ports)",
         "FromPort": 1,
         "GroupId": "sg-sandbox123",
         "IpProtocol": "tcp",
@@ -3971,8 +4200,17 @@ exports[`OpenHands Infrastructure Stacks NetworkStack matches snapshot 1`] = `
 exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
 {
   "Outputs": {
-    "Ec2RoleArn": {
-      "Description": "EC2 Instance Role ARN",
+    "AppExecutionRoleArn": {
+      "Description": "Fargate App Execution Role ARN",
+      "Value": {
+        "Fn::GetAtt": [
+          "AppExecutionRoleBDDAF861",
+          "Arn",
+        ],
+      },
+    },
+    "AppTaskRoleArn": {
+      "Description": "Fargate App Task Role ARN",
       "Value": {
         "Fn::GetAtt": [
           "OpenHandsEc2RoleD4668748",
@@ -4050,7 +4288,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
     },
     "AlbSecurityGrouptoTestSecurityStackEc2SecurityGroup55A42D318080E731A33C": {
       "Properties": {
-        "Description": "Allow traffic to nginx runtime proxy",
+        "Description": "Allow traffic to OpenResty runtime proxy",
         "DestinationSecurityGroupId": {
           "Fn::GetAtt": [
             "Ec2SecurityGroup55889913",
@@ -4069,13 +4307,99 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupEgress",
     },
+    "AppExecutionRoleBDDAF861": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for OpenHands Fargate tasks (image pull, logs, secrets)",
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+              ],
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AppExecutionRoleDefaultPolicyADA54813": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:",
+                    {
+                      "Ref": "AWS::Partition",
+                    },
+                    ":secretsmanager:us-west-2:123456789012:secret:openhands/sandbox-secret-key-??????",
+                  ],
+                ],
+              },
+            },
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:",
+                    {
+                      "Ref": "AWS::Partition",
+                    },
+                    ":secretsmanager:us-west-2:123456789012:secret:openhands/database/proxy-user-??????",
+                  ],
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AppExecutionRoleDefaultPolicyADA54813",
+        "Roles": [
+          {
+            "Ref": "AppExecutionRoleBDDAF861",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
     "Ec2SecurityGroup55889913": {
       "Properties": {
         "GroupDescription": "Security group for OpenHands EC2 instances",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
-            "Description": "Allow HTTPS outbound for Docker registry",
+            "Description": "Allow HTTPS outbound for external services",
             "FromPort": 443,
             "IpProtocol": "tcp",
             "ToPort": 443,
@@ -4108,7 +4432,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
     },
     "Ec2SecurityGroupfromTestSecurityStackAlbSecurityGroupF68B86B18080E114F9D4": {
       "Properties": {
-        "Description": "Allow traffic from ALB to nginx runtime proxy",
+        "Description": "Allow traffic from ALB to OpenResty runtime proxy",
         "FromPort": 8080,
         "GroupId": {
           "Fn::GetAtt": [
@@ -4184,7 +4508,7 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
     },
     "EfsSecurityGroupfromTestSecurityStackEc2SecurityGroup55A42D3120497A775441": {
       "Properties": {
-        "Description": "Allow NFS from OpenHands EC2 instances",
+        "Description": "Allow NFS from OpenHands Fargate app service",
         "FromPort": 2049,
         "GroupId": {
           "Fn::GetAtt": [
@@ -4211,39 +4535,13 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
               "Action": "sts:AssumeRole",
               "Effect": "Allow",
               "Principal": {
-                "Service": "ec2.amazonaws.com",
+                "Service": "ecs-tasks.amazonaws.com",
               },
             },
           ],
           "Version": "2012-10-17",
         },
-        "Description": "IAM role for OpenHands EC2 instances",
-        "ManagedPolicyArns": [
-          {
-            "Fn::Join": [
-              "",
-              [
-                "arn:",
-                {
-                  "Ref": "AWS::Partition",
-                },
-                ":iam::aws:policy/AmazonSSMManagedInstanceCore",
-              ],
-            ],
-          },
-          {
-            "Fn::Join": [
-              "",
-              [
-                "arn:",
-                {
-                  "Ref": "AWS::Partition",
-                },
-                ":iam::aws:policy/CloudWatchAgentServerPolicy",
-              ],
-            ],
-          },
-        ],
+        "Description": "IAM task role for OpenHands Fargate app service",
       },
       "Type": "AWS::IAM::Role",
     },
@@ -4267,28 +4565,14 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
             },
             {
               "Action": [
-                "secretsmanager:GetSecretValue",
-                "secretsmanager:DescribeSecret",
+                "ssmmessages:CreateControlChannel",
+                "ssmmessages:CreateDataChannel",
+                "ssmmessages:OpenControlChannel",
+                "ssmmessages:OpenDataChannel",
               ],
               "Effect": "Allow",
-              "Resource": {
-                "Fn::Join": [
-                  "",
-                  [
-                    "arn:",
-                    {
-                      "Ref": "AWS::Partition",
-                    },
-                    ":secretsmanager:us-west-2:123456789012:secret:openhands/sandbox-secret-key-??????",
-                  ],
-                ],
-              },
-            },
-            {
-              "Action": "ecr:GetAuthorizationToken",
-              "Effect": "Allow",
               "Resource": "*",
-              "Sid": "EcrAuthorizationToken",
+              "Sid": "EcsExecAccess",
             },
             {
               "Action": [
@@ -4361,16 +4645,6 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
         ],
       },
       "Type": "AWS::IAM::Policy",
-    },
-    "OpenHandsInstanceProfile": {
-      "Properties": {
-        "Roles": [
-          {
-            "Ref": "OpenHandsEc2RoleD4668748",
-          },
-        ],
-      },
-      "Type": "AWS::IAM::InstanceProfile",
     },
     "UserSecretsKmsKey2BAFA35E": {
       "DeletionPolicy": "Retain",

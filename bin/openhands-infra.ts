@@ -9,6 +9,7 @@ import { ComputeStack } from '../lib/compute-stack.js';
 import { AuthStack } from '../lib/auth-stack.js';
 import { EdgeStack } from '../lib/edge-stack.js';
 import { UserConfigStack } from '../lib/user-config-stack.js';
+import { ClusterStack } from '../lib/cluster-stack.js';
 import { SandboxStack } from '../lib/sandbox-stack.js';
 import { OpenHandsConfig } from '../lib/interfaces.js';
 
@@ -102,7 +103,6 @@ const authCallbackDomains = parseDomainList(authCallbackDomainsRaw, [fullDomain]
 const authDomainPrefixSuffix = getContextString('authDomainPrefixSuffix', 'shared') as string;
 
 // Warn if deploying shared Auth stack with only one callback domain
-// This prevents accidental overwrite of multi-domain Cognito configuration
 if (!authCallbackDomainsRaw && authDomainPrefixSuffix === 'shared') {
   console.warn(`
 ⚠️  WARNING: Deploying shared Auth stack with only one callback domain.
@@ -112,13 +112,12 @@ if (!authCallbackDomainsRaw && authDomainPrefixSuffix === 'shared') {
 
    To deploy without changing Auth stack, exclude it:
    npx cdk deploy --all --exclusively OpenHands-Network OpenHands-Monitoring \\
-     OpenHands-Security OpenHands-Database OpenHands-UserConfig OpenHands-Compute OpenHands-Edge
+     OpenHands-Security OpenHands-Database OpenHands-UserConfig \\
+     OpenHands-Cluster OpenHands-Sandbox OpenHands-Compute OpenHands-Edge
 `);
 }
 const edgeStackSuffix = getContextString('edgeStackSuffix', undefined);
 
-// Backwards-compatible default: if no suffix is provided, keep the legacy stack name `OpenHands-Edge`
-// so existing deployments can be updated in-place without Route 53 record conflicts.
 const edgeStackId = edgeStackSuffix
   ? `${prefix}-Edge-${edgeStackSuffix}`
   : `${prefix}-Edge`;
@@ -127,7 +126,6 @@ const skipS3Endpoint = app.node.tryGetContext('skipS3Endpoint') === 'true' ||
   app.node.tryGetContext('skipS3Endpoint') === true;
 
 // Sandbox AWS access configuration
-// When enabled, sandbox containers receive scoped AWS credentials
 const sandboxAwsAccess = app.node.tryGetContext('sandboxAwsAccess') === 'true' ||
   app.node.tryGetContext('sandboxAwsAccess') === true;
 const sandboxAwsPolicyFile = getContextString('sandboxAwsPolicyFile', undefined);
@@ -160,7 +158,7 @@ const authStack = new AuthStack(app, `${prefix}-Auth`, {
 const networkStack = new NetworkStack(app, `${prefix}-Network`, {
   env: mainEnv,
   config,
-  skipS3Endpoint,  // Skip if VPC already has S3 endpoint
+  skipS3Endpoint,
   description: 'OpenHands Network Infrastructure - VPC Endpoints',
   crossRegionReferences: true,
 });
@@ -187,14 +185,12 @@ const securityStack = new SecurityStack(app, `${prefix}-Security`, {
 securityStack.addDependency(networkStack);
 securityStack.addDependency(monitoringStack);
 
-// 4. Database Stack - Aurora Serverless v2 PostgreSQL with IAM Auth (REQUIRED)
-//    Provides self-healing architecture - persists conversation history across EC2 replacements
-//    CRITICAL: Database is mandatory for production ASG deployments to prevent data loss
+// 4. Database Stack - Aurora Serverless v2 PostgreSQL with IAM Auth
 const databaseStack = new DatabaseStack(app, `${prefix}-Database`, {
   env: mainEnv,
   networkOutput: networkStack.output,
   securityOutput: securityStack.output,
-  ec2RoleArn: securityStack.output.ec2Role.roleArn,  // Pass ARN for IAM auth grant (avoids cyclic deps)
+  appTaskRoleArn: securityStack.output.appTaskRole.roleArn,
   description: 'OpenHands Database Infrastructure - Aurora Serverless v2 PostgreSQL',
   crossRegionReferences: true,
 });
@@ -202,8 +198,6 @@ databaseStack.addDependency(networkStack);
 databaseStack.addDependency(securityStack);
 
 // 4.5. User Config Stack - User Configuration API (MCP, Secrets, Integrations)
-//      Provides per-user configuration management with KMS-encrypted secrets
-//      Creates Lambda function that will be integrated with ALB in ComputeStack
 const userConfigStack = new UserConfigStack(app, `${prefix}-UserConfig`, {
   env: mainEnv,
   config,
@@ -215,11 +209,28 @@ const userConfigStack = new UserConfigStack(app, `${prefix}-UserConfig`, {
 userConfigStack.addDependency(monitoringStack);
 userConfigStack.addDependency(securityStack);
 
-// 4.6. Sandbox Stack - ECS Fargate Sandbox Infrastructure
-//      Provides per-conversation sandbox tasks on Fargate with DynamoDB registry
-//      Replaces Docker-socket-based sandbox creation with RUNTIME=remote
+// 4.6. Cluster Stack - Shared ECS Cluster and Cloud Map Namespace
+// During migration, pass existing namespace details to avoid ConflictingDomainExists error
+// when SandboxStack still owns the Cloud Map namespace.
+// Usage: --context existingNamespaceArn=arn:... --context existingNamespaceId=ns-... --context existingNamespaceName=openhands.local
+const existingNamespaceArn = getContextString('existingNamespaceArn', undefined);
+const existingNamespaceId = getContextString('existingNamespaceId', undefined);
+const existingNamespaceName = getContextString('existingNamespaceName', undefined);
+
+const clusterStack = new ClusterStack(app, `${prefix}-Cluster`, {
+  env: mainEnv,
+  config,
+  networkOutput: networkStack.output,
+  existingNamespaceArn,
+  existingNamespaceId,
+  existingNamespaceName,
+  description: 'OpenHands Cluster Infrastructure - Shared ECS Cluster and Cloud Map',
+  crossRegionReferences: true,
+});
+clusterStack.addDependency(networkStack);
+
+// 4.7. Sandbox Stack - ECS Fargate Sandbox Infrastructure
 const warmPoolSize = parseInt(app.node.tryGetContext('warmPoolSize') || '2', 10);
-// Idle timeout: staging=10min (faster testing), production=30min (default)
 const idleTimeoutDefault = config.domainName.startsWith('test.') ? 10 : 30;
 const idleTimeoutMinutes = parseInt(app.node.tryGetContext('idleTimeoutMinutes') || String(idleTimeoutDefault), 10);
 
@@ -228,6 +239,7 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   config,
   networkOutput: networkStack.output,
   monitoringOutput: monitoringStack.output,
+  clusterOutput: clusterStack.output,
   sandboxAwsAccess,
   sandboxAwsPolicyFile,
   warmPoolSize,
@@ -237,33 +249,32 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
 });
 sandboxStack.addDependency(networkStack);
 sandboxStack.addDependency(monitoringStack);
+sandboxStack.addDependency(clusterStack);
 
-// 5. Compute Stack - ASG, Launch Template, ALB
-//    Also integrates User Config API Lambda via ALB target group for /api/v1/user-config/*
+// 5. Compute Stack - Fargate Services, ALB
 const computeStack = new ComputeStack(app, `${prefix}-Compute`, {
   env: mainEnv,
   config,
   networkOutput: networkStack.output,
   securityOutput: securityStack.output,
   monitoringOutput: monitoringStack.output,
+  clusterOutput: clusterStack.output,
   databaseOutput: databaseStack.output,
   sandboxAwsAccess,
   sandboxOutput: sandboxStack.output,
-  userConfigFunction: userConfigStack.userConfigFunction,  // Lambda for /api/v1/user-config/*
-  description: 'OpenHands Compute Infrastructure - EC2 ASG and ALB',
+  userConfigFunction: userConfigStack.userConfigFunction,
+  description: 'OpenHands Compute Infrastructure - ECS Fargate Services and ALB',
   crossRegionReferences: true,
 });
 computeStack.addDependency(networkStack);
 computeStack.addDependency(securityStack);
 computeStack.addDependency(monitoringStack);
 computeStack.addDependency(databaseStack);
-computeStack.addDependency(userConfigStack);  // Needs Lambda function from UserConfigStack
+computeStack.addDependency(userConfigStack);
+computeStack.addDependency(clusterStack);
 computeStack.addDependency(sandboxStack);
 
-// 6. Edge Stack (us-east-1) - Cognito, Lambda@Edge, CloudFront, WAF, Route 53
-//    This merged stack combines Auth and CDN to avoid cross-stack reference issues
-//    ALB DNS name and origin secret are read from SSM parameters in us-east-1 (written by ComputeStack)
-//    User Config API is now routed through ALB (no separate API Gateway needed)
+// 6. Edge Stack (us-east-1) - Lambda@Edge, CloudFront, WAF, Route 53
 const edgeStack = new EdgeStack(app, edgeStackId, {
   env: usEast1Env,
   config,
@@ -277,8 +288,6 @@ edgeStack.addDependency(computeStack);
 edgeStack.addDependency(authStack);
 
 // Add tags to all stacks for cost allocation
-// STAGE is auto-detected from domainName: test.* = staging, otherwise production
-// Can be overridden via --context stage=<value>
 const autoStage = config.domainName.startsWith('test.') ? 'staging' : 'production';
 const stage = getContextString('stage', autoStage) as string;
 const project = getContextString('project', 'OpenHands') as string;

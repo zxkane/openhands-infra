@@ -14,21 +14,19 @@ export interface DatabaseStackProps extends cdk.StackProps {
   networkOutput: NetworkStackOutput;
   securityOutput: SecurityStackOutput;
   /**
-   * EC2 role ARN to grant RDS IAM authentication permission.
+   * App task role ARN to grant RDS IAM authentication and proxy secret read permission.
    * Uses string ARN to avoid cross-stack L2 construct token references that cause cyclic dependencies.
    */
-  ec2RoleArn: string;
+  appTaskRoleArn: string;
 }
 
 export { DatabaseStackOutput };
 
 /**
- * DatabaseStack - Aurora Serverless v2 PostgreSQL with IAM Authentication
+ * DatabaseStack - Aurora Serverless v2 PostgreSQL with RDS Proxy
  *
- * Uses IAM role-based authentication instead of username/password:
- * - No secrets to manage or rotate
- * - EC2 instance uses its IAM role to authenticate
- * - Connection token generated dynamically via AWS SDK
+ * Primary connection path: App -> RDS Proxy (password-based, via Secrets Manager)
+ * Backup connection path: IAM authentication for direct cluster access (admin tasks)
  */
 export class DatabaseStack extends cdk.Stack {
   public readonly output: DatabaseStackOutput;
@@ -48,24 +46,24 @@ export class DatabaseStack extends cdk.Stack {
       allowAllOutbound: false,
     });
 
-    // Import EC2 security group
-    const ec2Sg = ec2.SecurityGroup.fromSecurityGroupId(
+    // Import Fargate app service security group
+    const appServiceSg = ec2.SecurityGroup.fromSecurityGroupId(
       this,
-      'Ec2Sg',
-      props.securityOutput.ec2SecurityGroupId,
+      'AppServiceSg',
+      props.securityOutput.appServiceSecurityGroupId,
       { mutable: true, allowAllOutbound: false }
     );
 
-    // Allow inbound from EC2 security group
+    // Allow inbound from Fargate app service security group
     dbSecurityGroup.addIngressRule(
-      ec2Sg,
+      appServiceSg,
       ec2.Port.tcp(5432),
-      'Allow PostgreSQL from EC2'
+      'Allow PostgreSQL from Fargate app service'
     );
 
-    // Allow EC2 security group egress to Aurora
+    // Allow Fargate app service egress to Aurora
     // Note: Must be added here (not in SecurityStack) to avoid cyclic dependency
-    ec2Sg.addEgressRule(
+    appServiceSg.addEgressRule(
       dbSecurityGroup,
       ec2.Port.tcp(5432),
       'Allow PostgreSQL to Aurora'
@@ -227,12 +225,12 @@ export class DatabaseStack extends cdk.Stack {
     dbBootstrap.node.addDependency(this.cluster);
     dbBootstrap.node.addDependency(proxyUserSecret);
 
-    // Grant IAM authentication permission to EC2 role for direct cluster access (backup)
+    // Grant IAM authentication permission to app task role for direct cluster access (backup)
     // Import role by ARN (using string) to avoid cross-stack token references
-    const ec2RoleFromArn = iam.Role.fromRoleArn(this, 'Ec2RoleRef', props.ec2RoleArn, {
+    const appTaskRoleFromArn = iam.Role.fromRoleArn(this, 'AppTaskRoleRef', props.appTaskRoleArn, {
       mutable: true,  // Allow policy attachment
     });
-    ec2RoleFromArn.addToPrincipalPolicy(new iam.PolicyStatement({
+    appTaskRoleFromArn.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['rds-db:connect'],
       resources: [
         `arn:aws:rds-db:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:dbuser:${this.cluster.clusterResourceIdentifier}/${iamDatabaseUser}`,
@@ -248,16 +246,16 @@ export class DatabaseStack extends cdk.Stack {
       allowAllOutbound: false,
     });
 
-    // Allow EC2 to connect to proxy
+    // Allow Fargate app service to connect to proxy
     proxySecurityGroup.addIngressRule(
-      ec2Sg,
+      appServiceSg,
       ec2.Port.tcp(5432),
-      'Allow PostgreSQL from EC2'
+      'Allow PostgreSQL from Fargate app service'
     );
 
-    // Allow EC2 security group egress to RDS Proxy
+    // Allow Fargate app service egress to RDS Proxy
     // Note: Must be added here (not in SecurityStack) because the proxy SG is created in this stack.
-    ec2Sg.addEgressRule(
+    appServiceSg.addEgressRule(
       proxySecurityGroup,
       ec2.Port.tcp(5432),
       'Allow PostgreSQL to RDS Proxy'
@@ -300,8 +298,8 @@ export class DatabaseStack extends cdk.Stack {
       maxIdleConnectionsPercent: 50,
     });
 
-    // Grant EC2 role permission to read proxy user secret
-    proxyUserSecret.grantRead(ec2RoleFromArn);
+    // Grant app task role permission to read proxy user secret
+    proxyUserSecret.grantRead(appTaskRoleFromArn);
 
     // Outputs - use proxy user for connections
     this.output = {
@@ -361,7 +359,5 @@ export class DatabaseStack extends cdk.Stack {
       value: `export PGPASSWORD=$(aws rds generate-db-auth-token --hostname ${this.cluster.clusterEndpoint.hostname} --port 5432 --username ${iamDatabaseUser} --region ${this.region}) && psql "host=${this.cluster.clusterEndpoint.hostname} port=5432 dbname=${databaseName} user=${iamDatabaseUser} sslmode=require"`,
       description: 'Example command to connect directly to cluster using IAM auth (for admin tasks)',
     });
-
-    // Post-deployment setup instructions
   }
 }
