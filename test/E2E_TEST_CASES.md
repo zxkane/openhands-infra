@@ -618,7 +618,7 @@ nginx: proxy_pass http://172.17.0.X:5000/
      → 200 OK
 ```
 
-**Key Point**: No Docker port mapping required. EC2 host routes directly to container IP via Docker bridge network.
+**Key Point**: In the ECS Fargate architecture, runtime requests are routed via CloudFront → Lambda@Edge → ALB → sandbox Fargate task (discovered via Cloud Map service discovery).
 
 ### Timeout Configuration
 
@@ -1071,11 +1071,10 @@ User B → CloudFront → Lambda@Edge (verify JWT, inject X-Cognito-User-Id: <us
 
 **Prerequisite for Full Authorization**: OpenHands core must add `user_id` label when creating sandbox containers. Without this label, containers allow access from any authenticated user (backwards compatibility).
 
-To verify the container has the user_id label:
+To verify the sandbox task has the user_id label, check CloudWatch application logs:
 ```bash
-# SSH to EC2
-docker inspect <container-name> | grep -A5 "Labels"
-# Should show: "user_id": "<user-a-cognito-sub>"
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep -i "user_id.*label\|sandbox.*user"
 ```
 
 ---
@@ -1093,7 +1092,7 @@ Verify that unauthenticated requests to runtime URLs return 401 Unauthorized.
 
 1. Use curl to test unauthenticated access (no cookies)
    ```bash
-   # From local machine or EC2
+   # From local machine
    curl -v "https://5000-<convId>.runtime.<subdomain>.<domain>/"
    ```
 
@@ -1209,10 +1208,10 @@ Verify that main application authentication still works correctly after authoriz
 
 ---
 
-## TC-014: Verify Archived Conversation Resume After EC2 Replacement
+## TC-014: Verify Archived Conversation Resume After ECS Task Recycling
 
 ### Description
-Verify that an archived (existing) conversation can be re-opened via the UI and continued after the ASG replaces the EC2 instance (e.g., due to deployment, health checks, or manual termination).
+Verify that an archived (existing) conversation can be re-opened via the UI and continued after the ECS Fargate app task is stopped and replaced (e.g., due to deployment, health checks, or manual stop).
 
 ### Prerequisites
 - Infrastructure deployed with persistent workspaces (EFS mounted at `/data/openhands`)
@@ -1230,57 +1229,47 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
 2. Record the conversation id (`convId`)
    - Use the URL, runtime URL, or conversation list item id to capture `<convId>` for the next steps
 
-3. Find the current ASG instance and terminate it via AWS API (forces replacement)
+3. Stop the current ECS app task to force replacement
 
-   > **Tip for automated E2E testing**: EC2 termination can be performed entirely via
-   > AWS CLI/API without SSH access. Use `aws autoscaling terminate-instance-in-auto-scaling-group`
-   > to trigger replacement, then poll the ALB target health until `healthy`. This enables
-   > fully automated EC2 replacement testing from CI/CD or Claude Code sessions.
+   > **Tip for automated E2E testing**: ECS task stop can be performed entirely via
+   > AWS CLI/API. Use `aws ecs stop-task` to terminate the running task. The ECS service
+   > will automatically launch a replacement task. Then poll the ECS service until
+   > `runningCount` equals `desiredCount` to confirm the new task is healthy.
 
    ```bash
-   ASG_NAME=$(aws cloudformation describe-stacks \
-     --stack-name OpenHands-Compute \
-     --region $DEPLOY_REGION \
-     --query 'Stacks[0].Outputs[?OutputKey==`AsgName`].OutputValue' \
-     --output text)
+   CLUSTER_NAME="<cluster-name>"  # e.g., openhands-test-kane-mx
 
-   INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
-     --auto-scaling-group-names "$ASG_NAME" \
+   # Find the running app task
+   TASK_ARN=$(aws ecs list-tasks \
+     --cluster "$CLUSTER_NAME" \
+     --service-name openhands-app \
      --region $DEPLOY_REGION \
-     --query 'AutoScalingGroups[0].Instances[0].InstanceId' \
-     --output text)
+     --query 'taskArns[0]' --output text)
 
-   aws autoscaling terminate-instance-in-auto-scaling-group \
-     --instance-id "$INSTANCE_ID" \
-     --no-should-decrement-desired-capacity \
+   echo "Stopping task: $TASK_ARN"
+   aws ecs stop-task \
+     --cluster "$CLUSTER_NAME" \
+     --task "$TASK_ARN" \
+     --reason "E2E test: TC-014 task recycling" \
      --region $DEPLOY_REGION
    ```
 
-4. Wait for the replacement instance to become healthy
+4. Wait for the replacement task to become healthy
 
-   Option A: Use ASG waiter (blocks until InService)
+   Poll ECS service until the new task is running and the ALB target is healthy:
    ```bash
-   aws autoscaling wait group-in-service \
-     --auto-scaling-group-names "$ASG_NAME" \
+   # Wait for ECS service to stabilize (new task running)
+   aws ecs wait services-stable \
+     --cluster "$CLUSTER_NAME" \
+     --services openhands-app \
      --region $DEPLOY_REGION
-   ```
 
-   Option B: Poll ALB target health (more reliable for E2E — confirms app is serving)
-   ```bash
-   TG_ARN=$(aws elbv2 describe-target-groups \
-     --load-balancer-arn "<alb-arn>" \
+   # Verify service is running
+   aws ecs describe-services \
+     --cluster "$CLUSTER_NAME" \
+     --services openhands-app \
      --region $DEPLOY_REGION \
-     --query 'TargetGroups[?Port==`3000`].TargetGroupArn' --output text)
-
-   for i in $(seq 1 60); do
-     STATUS=$(aws elbv2 describe-target-health \
-       --target-group-arn "$TG_ARN" \
-       --region $DEPLOY_REGION \
-       --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text)
-     echo "[$i/60] $STATUS"
-     [ "$STATUS" = "healthy" ] && break
-     sleep 15
-   done
+     --query 'services[0].{running:runningCount,desired:desiredCount,status:status}'
    ```
 
 5. Navigate to home page and click on the archived conversation
@@ -1324,22 +1313,16 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
    mcp__chrome-devtools__take_snapshot({})
    ```
 
-9. Optional: Host-level verification (EFS-backed per-sandbox directory)
-   ```bash
-   # SSH to EC2 and check file directly
-   cat /data/openhands/workspace/<convId>/project/persist_check.txt
-   ```
-
 ### Acceptance Criteria
 
 | # | Criteria | Verification |
 |---|----------|--------------|
-| 1 | Conversation list loads after EC2 replacement | "Recent Conversations" displays previous sessions |
+| 1 | Conversation list loads after ECS task recycling | "Recent Conversations" displays previous sessions |
 | 2 | Archived conversation clickable in UI | Click navigates to conversation page |
 | 3 | Chat history loads without errors | Previous messages visible; URL contains conversation ID |
 | 4 | Sandbox auto-resumes | Status shows "Waiting for task" (sandbox is active) |
-| 5 | Workspace contents persist | `persist_check.txt` exists with original content |
-| 6 | Conversation can continue | New agent actions execute successfully after replacement |
+| 5 | Workspace contents persist | `persist_check.txt` exists with original content (EFS-backed) |
+| 6 | Conversation can continue | New agent actions execute successfully after task recycling |
 
 ---
 
@@ -1483,7 +1466,7 @@ Use this checklist to track test execution:
 | TC-011 | Cross-User Access Denied | [ ] | Requires 2 test users |
 | TC-012 | Unauthenticated Access Denied | [ ] | Runtime returns 401 |
 | TC-013 | Main App Access Works | [ ] | Regression test |
-| TC-014 | Resume After EC2 Replacement | [ ] | Conversation + workspace persistence |
+| TC-014 | Resume After ECS Task Recycling | [ ] | Conversation + workspace persistence |
 | TC-015 | AWS Docs MCP Server | [ ] | Verify awsdocs shttp server |
 | TC-016 | Chrome DevTools MCP Server | [ ] | Verify chrome-devtools stdio server |
 | TC-017 | Sandbox AWS Access | [ ] | Verify sandbox can access AWS (S3) and deny IAM |
@@ -1491,7 +1474,7 @@ Use this checklist to track test execution:
 | TC-019 | Secrets Page User Isolation | [x] | User-scoped S3 storage enabled via S3SecretsStore |
 | TC-020 | Settings Pages User Isolation | [x] | User-scoped S3 storage enabled via S3SettingsStore |
 | TC-022 | Conversation List User Isolation | [ ] | Multi-tenant DB isolation (Patch 27) |
-| TC-021 | Secrets Re-injection After EC2 Replace | [ ] | Patch 22/23/28/29: secrets re-injected into resumed sandbox |
+| TC-021 | Secrets Re-injection After ECS Task Recycling | [ ] | Patch 22/23/28/29: secrets re-injected into resumed sandbox |
 
 ---
 
@@ -1594,21 +1577,16 @@ The agent should:
 3. Retrieve relevant documentation about Lambda function URLs
 4. Synthesize the information into a coherent response
 
-### Verification via EC2 Logs
+### Verification via CloudWatch Logs
 
 ```bash
-# SSH to EC2
-INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names OpenHands-Compute-* \
-  --region $DEPLOY_REGION \
-  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --target $INSTANCE_ID --region $DEPLOY_REGION
-
 # Check MCP configuration loaded
-docker logs openhands-app 2>&1 | grep -i mcp
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep -i mcp
 
 # Check for MCP tool invocations
-docker logs openhands-app 2>&1 | grep -i "shttp\|aws.*mcp\|knowledge-mcp"
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep -i "shttp\|aws.*mcp\|knowledge-mcp"
 ```
 
 ### Troubleshooting
@@ -1753,28 +1731,20 @@ mcp__chrome-devtools__fill({
 
 Expected response should mention "Example Domain" (the title of example.com).
 
-### Verification via EC2 Logs
+### Verification via CloudWatch Logs
 
 ```bash
-# SSH to EC2
-INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names OpenHands-Compute-* \
-  --region $DEPLOY_REGION \
-  --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --target $INSTANCE_ID --region $DEPLOY_REGION
-
 # Check custom runtime image is being used
-docker logs openhands-app 2>&1 | grep -i "runtime.*image\|sandbox.*image"
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep -i "runtime.*image\|sandbox.*image"
 
 # Check for Chromium-related logs
-docker logs openhands-app 2>&1 | grep -i "chromium\|chrome\|browser"
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep -i "chromium\|chrome\|browser"
 
 # Check MCP stdio server logs
-docker logs openhands-app 2>&1 | grep -i "chrome-devtools\|stdio.*mcp"
-
-# Verify custom runtime image has Chromium
-docker run --rm <custom-runtime-image> which chromium
-# Should output: /usr/bin/chromium
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep -i "chrome-devtools\|stdio.*mcp"
 ```
 
 ### Troubleshooting
@@ -1793,16 +1763,9 @@ docker run --rm <custom-runtime-image> which chromium
 To verify the custom runtime image is correctly built and deployed:
 
 ```bash
-# Check the deployed runtime image URI
-docker logs openhands-app 2>&1 | head -50 | grep SANDBOX_RUNTIME
-
-# Pull and inspect the custom runtime image
-docker pull <custom-runtime-image-uri>
-docker run --rm <custom-runtime-image-uri> chromium --version
-# Should output: Chromium <version>
-
-# Verify required environment variables
-docker run --rm <custom-runtime-image-uri> env | grep -E "CHROME|CHROMIUM|PLAYWRIGHT|PUPPETEER"
+# Check the deployed runtime image URI via CloudWatch
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep SANDBOX_RUNTIME
 ```
 
 ---
@@ -1816,19 +1779,16 @@ Verify that sandbox containers can access AWS services using scoped IAM credenti
 - Infrastructure deployed with `--context sandboxAwsAccess=true`
 - TC-003 completed (logged in)
 - TC-005 completed (new conversation ready with "Waiting for task" status)
-- Sandbox credentials refresh timer active on EC2 instance
-
 ### Configuration Requirements
 
 The following must be configured for sandbox AWS access:
 
 1. **CDK Context**: `sandboxAwsAccess=true`
 2. **Sandbox Role**: `OpenHandsSandboxRole` created with allow-all policy + explicit deny
-3. **Credentials File**: `/data/openhands/config/sandbox-credentials` mounted to containers
+3. **Sandbox Task Role**: ECS Fargate sandbox tasks assume the sandbox IAM role
 4. **Environment Variables**:
-   - `AWS_SHARED_CREDENTIALS_FILE=/data/sandbox-credentials`
-   - `AWS_DEFAULT_REGION=us-west-2`
-5. **Docker Runtime Kwargs**: Environment variables passed via `SANDBOX_DOCKER_RUNTIME_KWARGS`
+   - `AWS_DEFAULT_REGION` set on sandbox task definition
+   - `SANDBOX_RUNTIME_STARTUP_ENV_VARS` passes AWS config to sandbox containers
 
 ### Deployment Command
 
@@ -1854,17 +1814,11 @@ npx cdk deploy \
      --query 'Roles[?contains(RoleName, `SandboxRole`)].RoleName' \
      --output text | head -1) --region $DEPLOY_REGION
 
-   # Check EC2 has credentials refresh timer
-   INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
-     --auto-scaling-group-names <asg-name> \
+   # Check sandbox task definition has the sandbox role
+   aws ecs describe-task-definition \
+     --task-definition openhands-sandbox \
      --region $DEPLOY_REGION \
-     --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-
-   aws ssm send-command \
-     --instance-ids "$INSTANCE_ID" \
-     --document-name "AWS-RunShellScript" \
-     --parameters 'commands=["systemctl status refresh-sandbox-credentials.timer"]' \
-     --region $DEPLOY_REGION
+     --query 'taskDefinition.taskRoleArn'
    ```
 
 2. Start a new conversation
@@ -1971,35 +1925,27 @@ npx cdk deploy \
 | Organizations | * | ❌ AccessDenied |
 | Billing | * | ❌ AccessDenied |
 
-### Verification via EC2 Logs
+### Verification via CloudWatch Logs
 
 ```bash
-# SSH to EC2
-aws ssm start-session --target $INSTANCE_ID --region $DEPLOY_REGION
+# Check sandbox task role configuration
+aws ecs describe-task-definition \
+  --task-definition openhands-sandbox \
+  --region $DEPLOY_REGION \
+  --query 'taskDefinition.{taskRole:taskRoleArn,containers:containerDefinitions[*].{name:name,env:environment[?name==`AWS_DEFAULT_REGION`]}}'
 
-# Check credentials file exists and has valid content
-cat /data/openhands/config/sandbox-credentials
-# Should show: [default], aws_access_key_id, aws_secret_access_key, aws_session_token
-
-# Check credentials refresh timer status
-systemctl status refresh-sandbox-credentials.timer
-
-# Check docker-compose has correct environment
-grep SANDBOX_DOCKER_RUNTIME_KWARGS /data/openhands/docker-compose.yml
-# Should show: "environment":{"AWS_SHARED_CREDENTIALS_FILE":"/data/sandbox-credentials"...}
-
-# Check openhands-app container has the env var
-docker inspect openhands-app | grep -A5 SANDBOX_DOCKER_RUNTIME_KWARGS
+# Check application logs for sandbox AWS access
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep -i "sandbox.*credential\|aws.*access"
 ```
 
 ### Troubleshooting
 
 | Issue | Possible Cause | Resolution |
 |-------|----------------|------------|
-| "No credentials" | Credentials file not mounted | Verify `SANDBOX_VOLUMES` includes credentials mount |
 | "AccessDenied" on S3 | Sandbox role policy issue | Check role policy in IAM console |
-| "Region not configured" | `AWS_DEFAULT_REGION` missing | Verify `SANDBOX_DOCKER_RUNTIME_KWARGS` has environment |
-| Credentials expired | Timer not running | Check `refresh-sandbox-credentials.timer` status |
+| "Region not configured" | `AWS_DEFAULT_REGION` missing | Verify sandbox task definition has region env var |
+| Credentials expired | ECS task role issue | Check sandbox task role trust policy |
 | Agent can't find AWS CLI | AWS CLI not in runtime image | Verify custom runtime image has `awscli` installed |
 
 ### AWS CLI Verification
@@ -2470,9 +2416,15 @@ Verify that the conversation list is scoped per-user via the CognitoSQLAppConver
 4. **Phase 4: Database verification**
 
    ```bash
-   # SSH to EC2 and check database
-   # Verify user_id column exists and is populated
-   docker exec -it openhands-app python3 -c "
+   # ECS exec into app container to check database
+   CLUSTER_NAME="<cluster-name>"
+   TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER_NAME" \
+     --service-name openhands-app --region $DEPLOY_REGION \
+     --query 'taskArns[0]' --output text)
+
+   aws ecs execute-command --cluster "$CLUSTER_NAME" --task "$TASK_ARN" \
+     --container openhands-app --interactive --region $DEPLOY_REGION \
+     --command "python3 -c \"
    import asyncio, os
    from sqlalchemy.ext.asyncio import create_async_engine
    from sqlalchemy import text
@@ -2485,7 +2437,7 @@ Verify that the conversation list is scoped per-user via the CognitoSQLAppConver
                print(f'  conv={row[0][:8]}... user_id={row[1]}')
        await engine.dispose()
    asyncio.run(check())
-   "
+   \""
    ```
 
 ### Acceptance Criteria
@@ -2498,7 +2450,7 @@ Verify that the conversation list is scoped per-user via the CognitoSQLAppConver
 | 4 | User A cannot see User B's conversation | User A's home page does not show User B's conversations |
 | 5 | Database has user_id | `SELECT user_id FROM conversation_metadata` returns non-null values |
 | 6 | Event paths work correctly | Conversations have correct event storage paths |
-| 7 | Resume works with user_id | After EC2 replacement, sandbox recreated with correct user_id label |
+| 7 | Resume works with user_id | After ECS task recycling, sandbox recreated with correct user_id label |
 
 ### API Verification
 
@@ -2529,34 +2481,33 @@ Verify that the conversation list is scoped per-user via the CognitoSQLAppConver
 | Issue | Possible Cause | Resolution |
 |-------|----------------|------------|
 | Certificate not issued | DNS validation pending | Wait up to 30 minutes, check Route 53 CNAME records |
-| 502 Bad Gateway | EC2 instance unhealthy | Check ASG, target group health |
+| 502 Bad Gateway | ECS task unhealthy | Check ECS service events, target group health |
 | Login redirect loop | Cookie not setting | Check cookie domain, SameSite settings |
-| Agent not starting | Container pull failed | Check EC2 logs: `docker logs openhands-app` |
-| Runtime URL 503 | Container not running | Verify agent started Flask app |
+| Agent not starting | Container pull failed | Check CloudWatch logs: `/openhands/application` |
+| Runtime URL 503 | Sandbox task not running | Verify agent started Flask app, check sandbox orchestrator |
 | In-app routes broken | Path prefix issue | Verify runtime subdomain routing is active |
+| Service not starting | No Fargate capacity | Check ECS service events in AWS Console |
 
 ### Log Locations
 
 ```bash
-# EC2 instance logs
-aws ssm start-session --target <instance-id> --region $DEPLOY_REGION
-docker logs openhands-app 2>&1 | tail -100
+# Application logs (ECS Fargate → CloudWatch)
+aws logs tail /openhands/application --region $DEPLOY_REGION --follow
 
 # Lambda@Edge logs (check multiple regions)
 aws logs tail '/aws/lambda/us-east-1.OpenHands-Edge-AuthFunction*' \
   --region $DEPLOY_REGION --since 1h
-
-# CloudWatch application logs
-aws logs tail /openhands/application --region $DEPLOY_REGION --follow
 ```
 
 ### Quick Health Check Commands
 
 ```bash
-# Check EC2 health
-aws autoscaling describe-auto-scaling-groups \
+# Check ECS service health
+aws ecs describe-services \
+  --cluster <cluster-name> \
+  --services openhands-app openhands-openresty \
   --region $DEPLOY_REGION \
-  --query 'AutoScalingGroups[?contains(Tags[?Key==`Project`].Value, `OpenHands`)].Instances[*].[InstanceId,HealthStatus]'
+  --query 'services[].{name:serviceName,status:status,running:runningCount,desired:desiredCount}'
 
 # Check target group health
 aws elbv2 describe-target-health \
@@ -2599,8 +2550,9 @@ dig +short 5000-test123abc.runtime.$FULL_DOMAIN
 aws s3 ls s3://<bucket>/users/ --recursive | grep -E "(settings|secrets)\.json"
 # Expected: users/{user_id}/settings.json, users/{user_id}/secrets.json
 
-# Check container logs for isolation verification
-docker logs openhands-app 2>&1 | grep "Patch 21"
+# Check CloudWatch logs for isolation verification
+aws logs tail /openhands/application --since 30m --region $DEPLOY_REGION \
+  --format short | grep "Patch 21"
 # Expected: "Patch 21: Multi-tenant isolation ENABLED"
 ```
 
@@ -2621,10 +2573,10 @@ docker logs openhands-app 2>&1 | grep "Patch 21"
 
 ---
 
-## TC-021: Verify Secrets Re-injection After EC2 Replacement
+## TC-021: Verify Secrets Re-injection After ECS Task Recycling
 
 ### Description
-Verify that user secrets are re-injected and usable in resumed conversations after EC2 replacement. This tests the full secret lifecycle across sandbox recreation:
+Verify that user secrets are re-injected and usable in resumed conversations after ECS Fargate app task recycling. This tests the full secret lifecycle across sandbox recreation:
 
 - **Patch 22**: Injects `OH_SECRET_KEY` into sandbox for secret decryption
 - **Patch 23/25/26**: Skip masked secrets during resume (prevents crash)
@@ -2640,11 +2592,11 @@ Verify that user secrets are re-injected and usable in resumed conversations aft
 ```
 Phase 1: Create secret → Start conversation → Verify secret accessible
      ↓
-Phase 2: Terminate EC2 → Wait for ASG replacement → Verify healthy
+Phase 2: Stop ECS app task → Wait for replacement task → Verify healthy
      ↓
 Phase 3: Navigate to conversation → Sandbox resumes → Verify secret re-injected
      ↓
-Phase 4: Verify via EC2 logs (Patches 22/23/28/29 applied)
+Phase 4: Verify via CloudWatch logs (Patches 22/23/28/29 applied)
 ```
 
 ### Steps
@@ -2688,29 +2640,39 @@ Phase 4: Verify via EC2 logs (Patches 22/23/28/29 applied)
 
    1.3. Record conversation ID from URL (`/conversations/<uuid>`)
 
-2. **Phase 2: Terminate EC2 and wait for replacement**
+2. **Phase 2: Stop ECS app task and wait for replacement**
 
    ```bash
-   ASG_NAME="<asg-name>"
+   CLUSTER_NAME="<cluster-name>"  # e.g., openhands-test-kane-mx
    DEPLOY_REGION="<region>"
 
-   INSTANCE_ID=$(aws autoscaling describe-auto-scaling-groups \
-     --auto-scaling-group-names "$ASG_NAME" --region $DEPLOY_REGION \
-     --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
+   # Find the running app task
+   TASK_ARN=$(aws ecs list-tasks \
+     --cluster "$CLUSTER_NAME" \
+     --service-name openhands-app \
+     --region $DEPLOY_REGION \
+     --query 'taskArns[0]' --output text)
 
-   echo "Terminating instance: $INSTANCE_ID"
-   aws autoscaling terminate-instance-in-auto-scaling-group \
-     --instance-id "$INSTANCE_ID" --no-should-decrement-desired-capacity \
+   echo "Stopping task: $TASK_ARN"
+   aws ecs stop-task \
+     --cluster "$CLUSTER_NAME" \
+     --task "$TASK_ARN" \
+     --reason "E2E test: TC-021 task recycling for secrets re-injection" \
      --region $DEPLOY_REGION
 
-   # Wait for replacement
-   aws autoscaling wait group-in-service --auto-scaling-group-names "$ASG_NAME" --region $DEPLOY_REGION
-   sleep 60  # Wait for app startup
+   # Wait for replacement task to become healthy
+   aws ecs wait services-stable \
+     --cluster "$CLUSTER_NAME" \
+     --services openhands-app \
+     --region $DEPLOY_REGION
 
-   NEW_INSTANCE=$(aws autoscaling describe-auto-scaling-groups \
-     --auto-scaling-group-names "$ASG_NAME" --region $DEPLOY_REGION \
-     --query 'AutoScalingGroups[0].Instances[0].InstanceId' --output text)
-   echo "New instance: $NEW_INSTANCE (was: $INSTANCE_ID)"
+   # Verify new task is running
+   NEW_TASK_ARN=$(aws ecs list-tasks \
+     --cluster "$CLUSTER_NAME" \
+     --service-name openhands-app \
+     --region $DEPLOY_REGION \
+     --query 'taskArns[0]' --output text)
+   echo "New task: $NEW_TASK_ARN (was: $TASK_ARN)"
    ```
 
 3. **Phase 3: Resume conversation and verify secret re-injection**
@@ -2747,12 +2709,12 @@ Phase 4: Verify via EC2 logs (Patches 22/23/28/29 applied)
    mcp__chrome-devtools__take_screenshot({})
    ```
 
-4. **Phase 4: Verify patches via EC2 logs**
+4. **Phase 4: Verify patches via CloudWatch logs**
 
    ```bash
-   aws ssm send-command --instance-ids "$NEW_INSTANCE" --document-name "AWS-RunShellScript" \
-     --parameters 'commands=["docker logs openhands-app 2>&1 | grep -E \"Patch (22|23|28|29)\" | head -10"]' \
-     --region $DEPLOY_REGION --output text --query 'Command.CommandId'
+   # Check patch application in CloudWatch logs
+   aws logs tail /openhands/application --since 10m --region $DEPLOY_REGION \
+     --format short | grep -E "Patch (22|23|28|29)" | head -10
    ```
 
    Expected output:
@@ -2765,7 +2727,8 @@ Phase 4: Verify via EC2 logs (Patches 22/23/28/29 applied)
 
    Also verify re-injection happened:
    ```bash
-   docker logs openhands-app 2>&1 | grep "Patch 29: Re-injected"
+   aws logs tail /openhands/application --since 10m --region $DEPLOY_REGION \
+     --format short | grep "Patch 29: Re-injected"
    # Expected: "Patch 29: Re-injected N secrets into resumed sandbox <conversation-id>"
    ```
 
@@ -2775,11 +2738,11 @@ Phase 4: Verify via EC2 logs (Patches 22/23/28/29 applied)
 |---|----------|--------------|
 | 1 | Secret created successfully | Visible on /settings/secrets page |
 | 2 | Secret accessible in new conversation | Agent prints "e2e-s" |
-| 3 | EC2 replaced successfully | New instance ID differs from original |
+| 3 | ECS task recycled successfully | New task ARN differs from original |
 | 4 | Conversation resumes without crash | No Pydantic ValidationError in logs |
 | 5 | Chat history loads | Previous messages visible |
 | 6 | **Secret accessible after resume** | **Agent prints "e2e-s" (Patch 29 re-injection)** |
-| 7 | Patches 22/23/28/29 applied | Log output matches expected |
+| 7 | Patches 22/23/28/29 applied | CloudWatch log output matches expected |
 | 8 | Re-injection logged | "Patch 29: Re-injected N secrets" in logs |
 
 ### Technical Details
@@ -2815,8 +2778,8 @@ Resumed Conversation (with Patch 29):
 
 | Issue | Possible Cause | Resolution |
 |-------|----------------|------------|
-| "ValidationError" on resume | Patch 23 not applied | Check `docker logs` for "Patch 23" |
-| Secret not found after resume | Patch 29 not applied | Check `docker logs` for "Patch 29" |
+| "ValidationError" on resume | Patch 23 not applied | Check CloudWatch logs for "Patch 23" |
+| Secret not found after resume | Patch 29 not applied | Check CloudWatch logs for "Patch 29" |
 | "Patch 29: Sandbox not running" | Sandbox slow to start | Increase wait time or retry |
 | "Patch 29: Secret injection returned 4xx" | API endpoint changed | Check sandbox OpenAPI schema |
 | IntegrityError in webhook logs | Patch 28 not applied | Check `docker logs` for "Patch 28" |
@@ -2945,7 +2908,7 @@ The bug is fixed by Patch 8 in `docker/patch-fix.js` (temporary React fiber fix)
 
 | Issue | Possible Cause | Resolution |
 |-------|----------------|------------|
-| Skeleton stuck > 15s | Patch 8 not injected | Check `docker logs openhands-app` for "Patch 8" |
+| Skeleton stuck > 15s | Patch 8 not injected | Check CloudWatch `/openhands/application` for "Patch 8" |
 | Messages load on desktop but not mobile | Upstream bug not patched | Verify `patch-fix.js` includes skeleton fix IIFE |
 | "[Patch 8] Could not find React fiber" | React DOM structure changed | Upstream version may have changed component tree |
 | "[Patch 8] Max retries reached" | Fiber hook search failing | May need to adjust hook detection logic |

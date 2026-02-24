@@ -88,7 +88,7 @@ Run `test/select-e2e-tests.sh` to automatically determine which tests to run bas
 | **Core (always)** | Any | TC-003, TC-004, TC-005 |
 | **Auth/Lambda@Edge** | `lib/lambda-edge/`, `edge-stack.ts` | + TC-011, TC-012, TC-013, TC-018 |
 | **Compute/Docker** | `docker/`, `compute-stack.ts` | + TC-006, TC-007, TC-008, TC-009, TC-010 |
-| **EC2/Persistence** | `compute-stack.ts`, EFS config | + TC-014, TC-021 |
+| **ECS/Persistence** | `compute-stack.ts`, EFS config | + TC-014, TC-021 |
 | **Sandbox AWS** | `security-stack.ts`, sandbox role | + TC-017 |
 | **MCP Config** | `config/config.toml`, MCP settings | + TC-015, TC-016 |
 | **User Config** | `user-config-stack.ts`, `lambda/user-config/` | + TC-019, TC-020 |
@@ -110,14 +110,14 @@ Run `test/select-e2e-tests.sh` to automatically determine which tests to run bas
 | TC-011 | Cross-User Access Denied | Auth/authorization changes |
 | TC-012 | Unauthenticated Access Denied | Auth changes |
 | TC-013 | Main App Access Works | Auth changes (regression) |
-| TC-014 | Resume After EC2 Replacement | EC2/persistence changes |
+| TC-014 | Resume After ECS Task Recycling | ECS/persistence changes |
 | TC-015 | AWS Docs MCP Server | MCP config changes |
 | TC-016 | Chrome DevTools MCP Server | MCP/runtime image changes |
 | TC-017 | Sandbox AWS Access | Sandbox credentials changes |
 | TC-018 | Logout Functionality | Auth/patch-fix.js changes |
 | TC-019 | Secrets Page User Isolation | User config changes |
 | TC-020 | Settings Pages User Isolation | User config changes |
-| TC-021 | Secrets Persist After EC2 | EC2/secrets changes |
+| TC-021 | Secrets Persist After ECS Task Recycling | ECS/persistence changes |
 
 ### Using the Test Selector
 
@@ -138,8 +138,8 @@ Run `test/select-e2e-tests.sh` to automatically determine which tests to run bas
 #
 # Additional tests based on changes:
 #   TC-007: Verify Runtime Accessible (docker/ changes)
-#   TC-014: Resume After EC2 Replacement (compute-stack changes)
-#   TC-021: Secrets Persist After EC2 (docker/ changes)
+#   TC-014: Resume After ECS Task Recycling (compute-stack changes)
+#   TC-021: Secrets Persist After ECS Task Recycling (docker/ changes)
 ```
 
 ## PR Description Template

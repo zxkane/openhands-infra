@@ -51,9 +51,9 @@ RUNTIME_TESTS=(
     "TC-010:Verify VS Code URL Rewriting"
 )
 
-EC2_PERSISTENCE_TESTS=(
-    "TC-014:Resume After EC2 Replacement"
-    "TC-021:Secrets Persist After EC2"
+ECS_PERSISTENCE_TESTS=(
+    "TC-014:Resume After ECS Task Recycling"
+    "TC-021:Secrets Persist After ECS Task Recycling"
 )
 
 SANDBOX_AWS_TESTS=(
@@ -74,7 +74,7 @@ USER_CONFIG_TESTS=(
 # Detect change categories
 HAS_AUTH_CHANGES=false
 HAS_RUNTIME_CHANGES=false
-HAS_EC2_CHANGES=false
+HAS_ECS_CHANGES=false
 HAS_SANDBOX_AWS_CHANGES=false
 HAS_MCP_CHANGES=false
 HAS_USER_CONFIG_CHANGES=false
@@ -83,7 +83,7 @@ HAS_USER_CONFIG_CHANGES=false
 if $RUN_ALL; then
     HAS_AUTH_CHANGES=true
     HAS_RUNTIME_CHANGES=true
-    HAS_EC2_CHANGES=true
+    HAS_ECS_CHANGES=true
     HAS_SANDBOX_AWS_CHANGES=true
     HAS_MCP_CHANGES=true
     HAS_USER_CONFIG_CHANGES=true
@@ -100,9 +100,9 @@ for file in $CHANGED_FILES; do
         HAS_RUNTIME_CHANGES=true
     fi
 
-    # EC2/Persistence changes
-    if [[ "$file" =~ compute-stack\.ts ]] || [[ "$file" =~ ^docker/.*Dockerfile ]] || [[ "$file" =~ apply-patch\.sh ]]; then
-        HAS_EC2_CHANGES=true
+    # ECS/Persistence changes
+    if [[ "$file" =~ compute-stack\.ts ]] || [[ "$file" =~ ^docker/.*Dockerfile ]] || [[ "$file" =~ cluster-stack\.ts ]] || [[ "$file" =~ sandbox-stack\.ts ]]; then
+        HAS_ECS_CHANGES=true
     fi
 
     # Sandbox AWS changes (task role, credentials, orchestrator)
@@ -164,10 +164,10 @@ if $HAS_RUNTIME_CHANGES; then
     done
 fi
 
-if $HAS_EC2_CHANGES; then
+if $HAS_ECS_CHANGES; then
     echo ""
-    echo "## EC2/Persistence changes detected:"
-    for test in "${EC2_PERSISTENCE_TESTS[@]}"; do
+    echo "## ECS/Persistence changes detected:"
+    for test in "${ECS_PERSISTENCE_TESTS[@]}"; do
         tc="${test%%:*}"
         name="${test#*:}"
         echo "  - $tc: $name"
