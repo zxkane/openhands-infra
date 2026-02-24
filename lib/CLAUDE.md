@@ -240,8 +240,8 @@ Two separate ECS Fargate services run the application:
 ### Docker Image Versions
 
 ```typescript
-const DEFAULT_OPENHANDS_VERSION = '1.3.0';
-const DEFAULT_RUNTIME_VERSION = '1.3-nikolaik';
+const DEFAULT_OPENHANDS_VERSION = '1.4.0';
+const DEFAULT_RUNTIME_VERSION = '1.4-nikolaik';
 ```
 
 Update these when upgrading OpenHands.

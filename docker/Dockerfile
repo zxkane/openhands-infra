@@ -15,7 +15,7 @@
 
 # Pin to specific version for stability
 # Check https://github.com/All-Hands-AI/OpenHands/releases for latest releases
-ARG OPENHANDS_VERSION=1.3.0
+ARG OPENHANDS_VERSION=1.4.0
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
 
 # Install boto3 for AWS Bedrock support (required by litellm for AWS authentication)
@@ -25,9 +25,9 @@ RUN pip install --no-cache-dir boto3
 # Replaces the old apply-patch.sh (2000+ line regex patching at startup).
 # The fork (zxkane/openhands) has clean per-feature commits against the release tag.
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
-# Pin to commit SHA for reproducible builds (tag: custom-v1.3.0-fargate-r1)
+# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r1)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
-ARG FORK_REF=8ad819b5483a19d482d720de4b707a0f2dae7289
+ARG FORK_REF=26b639fc02c7f5a664da1bf83f9bf2b3f8da8825
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 

@@ -4,7 +4,7 @@
 # The runtime image is used as the sandbox container where agent code executes.
 # Chrome/Chromium is needed for chrome-devtools-mcp and browser automation tools.
 
-ARG RUNTIME_VERSION=1.2-nikolaik
+ARG RUNTIME_VERSION=1.4-nikolaik
 FROM docker.openhands.dev/openhands/runtime:${RUNTIME_VERSION}
 
 # Install Chromium and required dependencies for headless browser operation
