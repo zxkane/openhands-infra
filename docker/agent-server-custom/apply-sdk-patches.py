@@ -336,15 +336,16 @@ def patch_26_conversation_state(build_dir: Path) -> bool:
 
 '''
 
-    # Insert BEFORE existing _handle_secrets_manager_alias validator
-    existing_validator_pattern = r'(\s+@model_validator\(mode="before"\)\s+@classmethod\s+def _handle_secrets_manager_alias)'
+    # Insert BEFORE existing model_validator in ConversationState
+    # v1.8.x: _handle_secrets_manager_alias, v1.11.x+: _handle_legacy_fields
+    existing_validator_pattern = r'(\s+@model_validator\(mode="before"\)\s+@classmethod\s+def _handle_(?:secrets_manager_alias|legacy_fields))'
     match = re.search(existing_validator_pattern, content)
     if match:
         insert_pos = match.start()
         content = content[:insert_pos] + patch_code + content[insert_pos:]
         print("Patch 26: Added _filter_invalid_secret_sources validator")
     else:
-        print("ERROR: Patch 26 - Could not find existing _handle_secrets_manager_alias validator")
+        print("ERROR: Patch 26 - Could not find existing model_validator in ConversationState")
         return False
 
     state_file.write_text(content)

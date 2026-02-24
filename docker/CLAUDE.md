@@ -47,8 +47,8 @@ After (current):
 
 Upstream file modifications live as clean per-feature git commits in the fork:
 
-- **Branch**: `custom/v1.3.0` (branched from tag `v1.3.0`)
-- **Tag**: `custom-v1.3.0-r1` (referenced by `download-fork-patches.sh`)
+- **Branch**: `custom/v1.4.0-fargate` (branched from tag `1.4.0`)
+- **Tag**: `custom-v1.4.0-fargate-r1` (referenced by `download-fork-patches.sh`)
 - **Files**: 9 upstream Python files with ~13 feature commits
 
 | # | Feature | Upstream Files |
@@ -85,12 +85,12 @@ Targets `software-agent-sdk` (not OpenHands). Applied at build time in `agent-se
 
 ### Upgrade Workflow
 
-When upstream releases a new version (e.g., v1.4.0):
+When upstream releases a new version (e.g., v1.5.0):
 
-1. In fork: `git checkout -b custom/v1.4.0 v1.4.0`
-2. `git cherry-pick` each commit from `custom/v1.3.0` — conflicts isolated per feature
-3. Resolve, test, tag as `custom-v1.4.0-r1`
-4. In openhands-infra: update `OPENHANDS_VERSION=1.4.0` and `FORK_REF=custom-v1.4.0-r1`
+1. In fork: `git checkout -b custom/v1.5.0-fargate 1.5.0`
+2. `git cherry-pick` each commit from `custom/v1.4.0-fargate` — conflicts isolated per feature
+3. Resolve, test, tag as `custom-v1.5.0-fargate-r1`
+4. In openhands-infra: update `OPENHANDS_VERSION=1.5.0` and `FORK_REF=<new-commit-sha>`
 5. Remove any patches accepted upstream
 
 ### Critical Patch Failure Handling

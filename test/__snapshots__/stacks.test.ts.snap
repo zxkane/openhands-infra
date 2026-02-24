@@ -1254,7 +1254,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               {
                 "Name": "SANDBOX_RUNTIME_CONTAINER_IMAGE",
                 "Value": {
-                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:5f6b907d8983900b568721977d2cb422a249a8e9e579302b5417af06cd056bd8",
+                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c0d52754f0dd74e49028cbe1dc06dc154f755592fa4840c778601400ef829a17",
                 },
               },
               {
@@ -1326,7 +1326,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "AGENT_SERVER_IMAGE_TAG",
-                "Value": "cdd517ccf7bd0098c5ae335b6209d59678e9875b797a9a5a120aa6f2cb3fdabf",
+                "Value": "a8cb2d3755616f2e3741f6072fd3230fa7b9f8ac0e50fcf78474a053625d0da5",
               },
               {
                 "Name": "AGENT_ENABLE_BROWSING",
@@ -1432,7 +1432,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:9735e97672846e8b58b1bd6c4a7d0c145d5adc36ea6a57ad6d7d61ad35ae0dff",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f29374bbf7b658e93a13914f7e344589e36486c519df9e511578a7ef876ab2e3",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
@@ -1651,7 +1651,7 @@ security_analyzer = "llm"",
         "Name": "/openhands/docker/openhands-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.3.0",
+        "Value": "1.4.0",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -1832,7 +1832,7 @@ security_analyzer = "llm"",
         "Name": "/openhands/docker/runtime-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.3-nikolaik",
+        "Value": "1.4-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
     },
