@@ -433,7 +433,7 @@ export class ComputeStack extends cdk.Stack {
       HIDE_LLM_SETTINGS: 'true',
       USER_AUTH_CLASS: 'openhands.server.user_auth.cognito_user_auth.CognitoUserAuth',
       LLM_MODEL: 'bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0',
-      LLM_AWS_REGION_NAME: 'us-west-2',
+      LLM_AWS_REGION_NAME: config.region,
       AWS_REGION: config.region,
       AWS_DEFAULT_REGION: config.region,
       AWS_S3_BUCKET: dataBucket.bucketName,
