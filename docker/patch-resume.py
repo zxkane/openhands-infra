@@ -4,11 +4,9 @@ Removes incompatible user_id parameter from start_sandbox() calls in the
 resume endpoint. RemoteSandboxService.start_sandbox() only accepts
 sandbox_id — user_id is obtained internally via UserContext.
 
-NOTE: Full agent-server conversation initialization is NOT handled here.
-The Fargate sandbox task starts but the agent-server doesn't have the
-conversation registered, so WebSocket connections fail. This requires a
-fork-level fix in app_conversation_router.py to use the full
-_resume_or_start_conversation flow. See: TODO fork PR.
+Agent-server conversation registration is handled in the fork
+(custom-v1.4.0-fargate-r2) via resume_conversation() method which calls
+POST /api/conversations on the agent-server after sandbox recreation.
 """
 import sys
 
