@@ -1323,6 +1323,7 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
 | 4 | Sandbox auto-resumes | Status shows "Waiting for task" (sandbox is active) |
 | 5 | Workspace contents persist | `persist_check.txt` exists with original content (EFS-backed) |
 | 6 | Conversation can continue | New agent actions execute successfully after task recycling |
+| 7 | Agent responds to new message after resume | Agent reads `persist_check.txt` and prints `hello-from-before-replace` in response |
 
 ---
 
