@@ -59,6 +59,7 @@ ECS_PERSISTENCE_TESTS=(
 SANDBOX_AWS_TESTS=(
     "TC-017:Sandbox AWS Access"
     "TC-024:Sandbox Idle Timeout"
+    "TC-025:Resume After Sandbox Stop"
 )
 
 MCP_TESTS=(

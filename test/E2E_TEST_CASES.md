@@ -3010,3 +3010,128 @@ Verify that sandbox Fargate tasks are automatically stopped after the configured
 |-------------|-------------|----------|
 | Staging (`test.*`) | 10 minutes | `--context idleTimeoutMinutes=<N>` |
 | Production | 30 minutes | `--context idleTimeoutMinutes=<N>` |
+
+---
+
+## TC-025: Verify Conversation Resume After Sandbox Stop
+
+### Description
+Verify that a conversation can be fully resumed (accepting new messages) after its sandbox Fargate task is stopped — either by idle timeout, manual stop, or ECS task failure. Unlike TC-014 which tests app task recycling (where sandbox status becomes MISSING), this test covers the case where the sandbox is STOPPED/PAUSED but the app remains running.
+
+This is a distinct code path: the frontend's sandbox polling triggers the orchestrator `/resume` endpoint directly (not the app-level `/app-conversations/{id}/resume`), so the auto-registration logic in `_build_app_conversations` must detect the unregistered conversation and register it with the new agent-server.
+
+### Prerequisites
+- Infrastructure deployed with sandbox orchestrator
+- Logged in as a valid Cognito user (see TC-003)
+- At least one existing conversation with a running sandbox
+
+### Steps
+
+1. Create a new conversation and write a marker file
+   ```javascript
+   // Create new conversation (TC-005)
+   // Send prompt:
+   mcp__chrome-devtools__fill({ uid: "<chat-input>", value: "Create /workspace/project/resume_test.txt with content: sandbox-stop-resume-check" })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   // Wait for agent to complete
+   mcp__chrome-devtools__wait_for({ text: "resume_test.txt", timeout: 120000 })
+   ```
+
+2. Record the conversation ID and verify sandbox is RUNNING
+   ```bash
+   CONV_ID="<conversation-id-from-url>"
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --region $DEPLOY_REGION \
+     --query 'Item.{status:status.S,task_arn:task_arn.S}'
+   # Expected: status=RUNNING
+   ```
+
+3. Stop the sandbox Fargate task (simulating idle timeout or manual stop)
+   ```bash
+   TASK_ARN=$(aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --region $DEPLOY_REGION \
+     --query 'Item.task_arn.S' --output text)
+
+   aws ecs stop-task \
+     --cluster <cluster> \
+     --task "$TASK_ARN" \
+     --reason "E2E test: TC-025 sandbox stop resume" \
+     --region $DEPLOY_REGION
+   ```
+
+4. Wait for DynamoDB status to become STOPPED
+   ```bash
+   # Poll until status changes (task-state Lambda processes the ECS event)
+   for i in $(seq 1 12); do
+     STATUS=$(aws dynamodb get-item \
+       --table-name <registry-table> \
+       --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+       --region $DEPLOY_REGION \
+       --query 'Item.status.S' --output text)
+     echo "Attempt $i: status=$STATUS"
+     [ "$STATUS" = "STOPPED" ] && break
+     sleep 5
+   done
+   # Expected: status=STOPPED
+   ```
+
+5. Navigate to the conversation in the browser
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/conversations/<conv-id>",
+     type: "url"
+   })
+   ```
+
+6. Wait for sandbox to auto-resume and conversation to become ready
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "Waiting for task",
+     timeout: 240000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+   > **Note**: This may take 60-120 seconds. The flow is: frontend polling detects
+   > STOPPED sandbox → orchestrator `/resume` creates new Fargate task → sandbox
+   > becomes RUNNING → `_build_app_conversations` detects missing conversation →
+   > auto-registers via `resume_conversation()` → conversation becomes ready.
+
+7. Send a new message and verify agent responds
+   ```javascript
+   mcp__chrome-devtools__click({ uid: "<chat-input-uid>" })
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Read resume_test.txt and print its content"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+
+   mcp__chrome-devtools__wait_for({
+     text: "sandbox-stop-resume-check",
+     timeout: 120000
+   })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Sandbox stops successfully | DynamoDB status=STOPPED after ECS task stop |
+| 2 | Conversation page loads | Chat history visible, URL contains conversation ID |
+| 3 | Sandbox auto-resumes | Status transitions from Starting to "Waiting for task" |
+| 4 | Conversation auto-registered with agent-server | App logs show "Auto-registering conversation" message |
+| 5 | Workspace files persist | `resume_test.txt` exists with original content (EFS-backed) |
+| 6 | Agent responds to new message | Agent reads file and prints `sandbox-stop-resume-check` |
+
+### Difference from TC-014
+
+| | TC-014 (App Task Recycling) | TC-025 (Sandbox Stop) |
+|---|---|---|
+| **What stops** | App ECS task (OpenHands server) | Sandbox ECS task (agent-server) |
+| **Sandbox status** | `MISSING` (no orchestrator record) | `STOPPED`/`PAUSED` |
+| **Resume trigger** | App-level `/app-conversations/{id}/resume` | Frontend polling → orchestrator `/sandboxes/{id}/resume` |
+| **Registration path** | Router `resume_app_conversation` → `resume_conversation()` | `_build_app_conversations` → `_auto_register_missing_conversations` |
