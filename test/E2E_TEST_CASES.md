@@ -1313,6 +1313,20 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
    mcp__chrome-devtools__take_snapshot({})
    ```
 
+9. Verify agent knows previous conversation context
+   ```javascript
+   // Ask the agent about what was done previously in this conversation
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "What file did I ask you to create earlier in this conversation?"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   mcp__chrome-devtools__wait_for({
+     text: "persist_check",  // Agent should reference the previously created file
+     timeout: 120000
+   })
+   ```
+
 ### Acceptance Criteria
 
 | # | Criteria | Verification |
@@ -1324,6 +1338,7 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
 | 5 | Workspace contents persist | `persist_check.txt` exists with original content (EFS-backed) |
 | 6 | Conversation can continue | New agent actions execute successfully after task recycling |
 | 7 | Agent responds to new message after resume | Agent reads `persist_check.txt` and prints `hello-from-before-replace` in response |
+| 8 | LLM retains conversation history | Agent knows about previously created file without being told its name |
 
 ---
 
@@ -3116,6 +3131,20 @@ This is a distinct code path: the frontend's sandbox polling triggers the orches
    mcp__chrome-devtools__take_snapshot({})
    ```
 
+8. Verify agent knows previous conversation context
+   ```javascript
+   // Ask the agent about what was done previously in this conversation
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "What file did I ask you to create earlier in this conversation?"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   mcp__chrome-devtools__wait_for({
+     text: "resume_test",  // Agent should reference the previously created file
+     timeout: 120000
+   })
+   ```
+
 ### Acceptance Criteria
 
 | # | Criteria | Verification |
@@ -3126,6 +3155,7 @@ This is a distinct code path: the frontend's sandbox polling triggers the orches
 | 4 | Conversation auto-registered with agent-server | App logs show "Auto-registering conversation" message |
 | 5 | Workspace files persist | `resume_test.txt` exists with original content (EFS-backed) |
 | 6 | Agent responds to new message | Agent reads file and prints `sandbox-stop-resume-check` |
+| 7 | LLM retains conversation history | Agent knows about previously created file without being told its name |
 
 ### Difference from TC-014
 
