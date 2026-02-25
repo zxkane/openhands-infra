@@ -13,7 +13,7 @@ FORK_REPO="${FORK_REPO:-zxkane/openhands}"
 # Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r2)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
 # r2: Added resume_conversation() for agent-server registration on conversation resume
-FORK_REF="${FORK_REF:-b517dcf2ad3ad2eb0b00730a90a459d1cc10387b}"
+FORK_REF="${FORK_REF:-085ae2f11c2ca19c3205018c27a2231382101762}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
 # 10 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
