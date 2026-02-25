@@ -1208,93 +1208,88 @@ Verify that main application authentication still works correctly after authoriz
 
 ---
 
-## TC-014: Verify Archived Conversation Resume After ECS Task Recycling
+## TC-014: Verify Conversation Resume After Sandbox Stop
 
 ### Description
-Verify that an archived (existing) conversation can be re-opened via the UI and continued after the ECS Fargate app task is stopped and replaced (e.g., due to deployment, health checks, or manual stop).
+Verify that a conversation can be fully resumed after its sandbox Fargate task is stopped (by idle timeout, manual stop, or ECS task failure). The resumed conversation must accept new messages, retain workspace files on EFS, and the LLM must know the previous conversation history.
+
+**Note**: At the app layer, both STOPPED and PAUSED sandbox states map to `SandboxStatus.MISSING`. The app is stateless — all sandbox state is in DynamoDB (orchestrator registry), workspace files on EFS, and conversation metadata in PostgreSQL. Stopping the sandbox task is sufficient to test the full resume path.
 
 ### Prerequisites
-- Infrastructure deployed with persistent workspaces (EFS mounted at `/data/openhands`)
+- Infrastructure deployed with sandbox orchestrator and EFS
 - Logged in as a valid Cognito user (see TC-003)
-- At least one existing conversation with files created in the workspace
 
 ### Steps
 
 1. Create a new conversation and write a marker file
-   - In the OpenHands UI, start a new conversation (TC-005)
-   - Prompt the agent to create a file, e.g.:
-     - `Create /workspace/project/persist_check.txt with content: hello-from-before-replace`
-     - `List files in /workspace/project and confirm persist_check.txt exists`
-
-2. Record the conversation id (`convId`)
-   - Use the URL, runtime URL, or conversation list item id to capture `<convId>` for the next steps
-
-3. Stop the current ECS app task to force replacement
-
-   > **Tip for automated E2E testing**: ECS task stop can be performed entirely via
-   > AWS CLI/API. Use `aws ecs stop-task` to terminate the running task. The ECS service
-   > will automatically launch a replacement task. Then poll the ECS service until
-   > `runningCount` equals `desiredCount` to confirm the new task is healthy.
-
-   ```bash
-   CLUSTER_NAME="<cluster-name>"  # e.g., openhands-test-kane-mx
-
-   # Find the running app task
-   TASK_ARN=$(aws ecs list-tasks \
-     --cluster "$CLUSTER_NAME" \
-     --service-name openhands-app \
-     --region $DEPLOY_REGION \
-     --query 'taskArns[0]' --output text)
-
-   echo "Stopping task: $TASK_ARN"
-   aws ecs stop-task \
-     --cluster "$CLUSTER_NAME" \
-     --task "$TASK_ARN" \
-     --reason "E2E test: TC-014 task recycling" \
-     --region $DEPLOY_REGION
-   ```
-
-4. Wait for the replacement task to become healthy
-
-   Poll ECS service until the new task is running and the ALB target is healthy:
-   ```bash
-   # Wait for ECS service to stabilize (new task running)
-   aws ecs wait services-stable \
-     --cluster "$CLUSTER_NAME" \
-     --services openhands-app \
-     --region $DEPLOY_REGION
-
-   # Verify service is running
-   aws ecs describe-services \
-     --cluster "$CLUSTER_NAME" \
-     --services openhands-app \
-     --region $DEPLOY_REGION \
-     --query 'services[0].{running:runningCount,desired:desiredCount,status:status}'
-   ```
-
-5. Navigate to home page and click on the archived conversation
    ```javascript
-   // Navigate to home page
+   // Create new conversation (TC-005)
+   // Send prompt:
+   mcp__chrome-devtools__fill({ uid: "<chat-input>", value: "Create /workspace/project/persist_check.txt with content: hello-from-before-replace" })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   // Wait for agent to complete
+   mcp__chrome-devtools__wait_for({ text: "Waiting for task", timeout: 120000 })
+   ```
+
+2. Record the conversation ID and verify sandbox is RUNNING
+   ```bash
+   CONV_ID="<conversation-id-from-url>"
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --region $DEPLOY_REGION \
+     --query 'Item.{status:status.S,task_arn:task_arn.S}'
+   # Expected: status=RUNNING
+   ```
+
+3. Stop the sandbox Fargate task (simulating idle timeout)
+   ```bash
+   TASK_ARN=$(aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --region $DEPLOY_REGION \
+     --query 'Item.task_arn.S' --output text)
+
+   aws ecs stop-task \
+     --cluster <cluster> \
+     --task "$TASK_ARN" \
+     --reason "E2E test: TC-014 sandbox stop for resume" \
+     --region $DEPLOY_REGION
+   ```
+
+4. Wait for DynamoDB status to become STOPPED
+   ```bash
+   for i in $(seq 1 12); do
+     STATUS=$(aws dynamodb get-item \
+       --table-name <registry-table> \
+       --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+       --region $DEPLOY_REGION \
+       --query 'Item.status.S' --output text)
+     echo "Attempt $i: status=$STATUS"
+     [ "$STATUS" = "STOPPED" ] && break
+     sleep 5
+   done
+   # Expected: status=STOPPED
+   ```
+
+5. Navigate to the conversation (full page load to trigger resume)
+   ```javascript
    mcp__chrome-devtools__navigate_page({
-     url: "https://<subdomain>.<domain>/",
+     url: "https://<subdomain>.<domain>/conversations/<conv-id>",
      type: "url"
    })
-   mcp__chrome-devtools__take_snapshot({})
-
-   // Find the archived conversation in "Recent Conversations" list and click it
-   mcp__chrome-devtools__click({ uid: "<conversation-link-uid>" })
    ```
 
-6. Wait for conversation to load and verify chat history appears
+6. Wait for sandbox to auto-resume and conversation to become ready
    ```javascript
    mcp__chrome-devtools__wait_for({
      text: "Waiting for task",
-     timeout: 180000
+     timeout: 240000
    })
    mcp__chrome-devtools__take_snapshot({})
    ```
 
-7. Send a new prompt to resume the conversation
+7. Send a new prompt and verify workspace file persisted
    ```javascript
    mcp__chrome-devtools__click({ uid: "<chat-input-uid>" })
    mcp__chrome-devtools__fill({
@@ -1302,20 +1297,14 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
      value: "Read persist_check.txt and print its content"
    })
    mcp__chrome-devtools__press_key({ key: "Enter" })
-   ```
-
-8. Wait for agent response and verify workspace file still exists
-   ```javascript
    mcp__chrome-devtools__wait_for({
-     text: "hello-from-before-replace",  // File content should appear
+     text: "hello-from-before-replace",
      timeout: 120000
    })
-   mcp__chrome-devtools__take_snapshot({})
    ```
 
-9. Verify agent knows previous conversation context
+8. Verify agent retains previous conversation context
    ```javascript
-   // Ask the agent about what was done previously in this conversation
    mcp__chrome-devtools__fill({
      uid: "<chat-input-uid>",
      value: "What file did I ask you to create earlier in this conversation?"
@@ -1331,14 +1320,12 @@ Verify that an archived (existing) conversation can be re-opened via the UI and 
 
 | # | Criteria | Verification |
 |---|----------|--------------|
-| 1 | Conversation list loads after ECS task recycling | "Recent Conversations" displays previous sessions |
-| 2 | Archived conversation clickable in UI | Click navigates to conversation page |
-| 3 | Chat history loads without errors | Previous messages visible; URL contains conversation ID |
-| 4 | Sandbox auto-resumes | Status shows "Waiting for task" (sandbox is active) |
-| 5 | Workspace contents persist | `persist_check.txt` exists with original content (EFS-backed) |
-| 6 | Conversation can continue | New agent actions execute successfully after task recycling |
-| 7 | Agent responds to new message after resume | Agent reads `persist_check.txt` and prints `hello-from-before-replace` in response |
-| 8 | LLM retains conversation history | Agent knows about previously created file without being told its name |
+| 1 | Conversation visible after sandbox stop | Conversation appears in "Recent Conversations" list |
+| 2 | Conversation page loads | Chat history visible; URL contains conversation ID |
+| 3 | Sandbox auto-resumes | Status transitions to "Waiting for task" |
+| 4 | Workspace files persist (EFS) | `persist_check.txt` exists with original content |
+| 5 | Agent responds to new message | Agent reads file and prints `hello-from-before-replace` |
+| 6 | LLM retains conversation history | Agent knows about previously created file without being told its name |
 
 ---
 
@@ -3026,142 +3013,3 @@ Verify that sandbox Fargate tasks are automatically stopped after the configured
 | Staging (`test.*`) | 10 minutes | `--context idleTimeoutMinutes=<N>` |
 | Production | 30 minutes | `--context idleTimeoutMinutes=<N>` |
 
----
-
-## TC-025: Verify Conversation Resume After Sandbox Stop
-
-### Description
-Verify that a conversation can be fully resumed (accepting new messages) after its sandbox Fargate task is stopped — either by idle timeout, manual stop, or ECS task failure. Unlike TC-014 which tests app task recycling (where sandbox status becomes MISSING), this test covers the case where the sandbox is STOPPED/PAUSED but the app remains running.
-
-This is a distinct code path: the frontend's sandbox polling triggers the orchestrator `/resume` endpoint directly (not the app-level `/app-conversations/{id}/resume`), so the auto-registration logic in `_build_app_conversations` must detect the unregistered conversation and register it with the new agent-server.
-
-### Prerequisites
-- Infrastructure deployed with sandbox orchestrator
-- Logged in as a valid Cognito user (see TC-003)
-- At least one existing conversation with a running sandbox
-
-### Steps
-
-1. Create a new conversation and write a marker file
-   ```javascript
-   // Create new conversation (TC-005)
-   // Send prompt:
-   mcp__chrome-devtools__fill({ uid: "<chat-input>", value: "Create /workspace/project/resume_test.txt with content: sandbox-stop-resume-check" })
-   mcp__chrome-devtools__press_key({ key: "Enter" })
-   // Wait for agent to complete
-   mcp__chrome-devtools__wait_for({ text: "resume_test.txt", timeout: 120000 })
-   ```
-
-2. Record the conversation ID and verify sandbox is RUNNING
-   ```bash
-   CONV_ID="<conversation-id-from-url>"
-   aws dynamodb get-item \
-     --table-name <registry-table> \
-     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
-     --region $DEPLOY_REGION \
-     --query 'Item.{status:status.S,task_arn:task_arn.S}'
-   # Expected: status=RUNNING
-   ```
-
-3. Stop the sandbox Fargate task (simulating idle timeout or manual stop)
-   ```bash
-   TASK_ARN=$(aws dynamodb get-item \
-     --table-name <registry-table> \
-     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
-     --region $DEPLOY_REGION \
-     --query 'Item.task_arn.S' --output text)
-
-   aws ecs stop-task \
-     --cluster <cluster> \
-     --task "$TASK_ARN" \
-     --reason "E2E test: TC-025 sandbox stop resume" \
-     --region $DEPLOY_REGION
-   ```
-
-4. Wait for DynamoDB status to become STOPPED
-   ```bash
-   # Poll until status changes (task-state Lambda processes the ECS event)
-   for i in $(seq 1 12); do
-     STATUS=$(aws dynamodb get-item \
-       --table-name <registry-table> \
-       --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
-       --region $DEPLOY_REGION \
-       --query 'Item.status.S' --output text)
-     echo "Attempt $i: status=$STATUS"
-     [ "$STATUS" = "STOPPED" ] && break
-     sleep 5
-   done
-   # Expected: status=STOPPED
-   ```
-
-5. Navigate to the conversation in the browser
-   ```javascript
-   mcp__chrome-devtools__navigate_page({
-     url: "https://<subdomain>.<domain>/conversations/<conv-id>",
-     type: "url"
-   })
-   ```
-
-6. Wait for sandbox to auto-resume and conversation to become ready
-   ```javascript
-   mcp__chrome-devtools__wait_for({
-     text: "Waiting for task",
-     timeout: 240000
-   })
-   mcp__chrome-devtools__take_snapshot({})
-   ```
-   > **Note**: This may take 60-120 seconds. The flow is: frontend polling detects
-   > STOPPED sandbox → orchestrator `/resume` creates new Fargate task → sandbox
-   > becomes RUNNING → `_build_app_conversations` detects missing conversation →
-   > auto-registers via `resume_conversation()` → conversation becomes ready.
-
-7. Send a new message and verify agent responds
-   ```javascript
-   mcp__chrome-devtools__click({ uid: "<chat-input-uid>" })
-   mcp__chrome-devtools__fill({
-     uid: "<chat-input-uid>",
-     value: "Read resume_test.txt and print its content"
-   })
-   mcp__chrome-devtools__press_key({ key: "Enter" })
-
-   mcp__chrome-devtools__wait_for({
-     text: "sandbox-stop-resume-check",
-     timeout: 120000
-   })
-   mcp__chrome-devtools__take_snapshot({})
-   ```
-
-8. Verify agent knows previous conversation context
-   ```javascript
-   // Ask the agent about what was done previously in this conversation
-   mcp__chrome-devtools__fill({
-     uid: "<chat-input-uid>",
-     value: "What file did I ask you to create earlier in this conversation?"
-   })
-   mcp__chrome-devtools__press_key({ key: "Enter" })
-   mcp__chrome-devtools__wait_for({
-     text: "resume_test",  // Agent should reference the previously created file
-     timeout: 120000
-   })
-   ```
-
-### Acceptance Criteria
-
-| # | Criteria | Verification |
-|---|----------|--------------|
-| 1 | Sandbox stops successfully | DynamoDB status=STOPPED after ECS task stop |
-| 2 | Conversation page loads | Chat history visible, URL contains conversation ID |
-| 3 | Sandbox auto-resumes | Status transitions from Starting to "Waiting for task" |
-| 4 | Conversation auto-registered with agent-server | App logs show "Auto-registering conversation" message |
-| 5 | Workspace files persist | `resume_test.txt` exists with original content (EFS-backed) |
-| 6 | Agent responds to new message | Agent reads file and prints `sandbox-stop-resume-check` |
-| 7 | LLM retains conversation history | Agent knows about previously created file without being told its name |
-
-### Difference from TC-014
-
-| | TC-014 (App Task Recycling) | TC-025 (Sandbox Stop) |
-|---|---|---|
-| **What stops** | App ECS task (OpenHands server) | Sandbox ECS task (agent-server) |
-| **Sandbox status** | `MISSING` (no orchestrator record) | `STOPPED`/`PAUSED` |
-| **Resume trigger** | App-level `/app-conversations/{id}/resume` | Frontend polling → orchestrator `/sandboxes/{id}/resume` |
-| **Registration path** | Router `resume_app_conversation` → `resume_conversation()` | `_build_app_conversations` → `_auto_register_missing_conversations` |

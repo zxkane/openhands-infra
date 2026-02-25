@@ -52,14 +52,13 @@ RUNTIME_TESTS=(
 )
 
 ECS_PERSISTENCE_TESTS=(
-    "TC-014:Resume After ECS Task Recycling"
+    "TC-014:Conversation Resume After Sandbox Stop"
     "TC-021:Secrets Persist After ECS Task Recycling"
 )
 
 SANDBOX_AWS_TESTS=(
     "TC-017:Sandbox AWS Access"
     "TC-024:Sandbox Idle Timeout"
-    "TC-025:Resume After Sandbox Stop"
 )
 
 MCP_TESTS=(
