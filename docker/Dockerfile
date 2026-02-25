@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir boto3
 # Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r2)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
 # r2: Added resume_conversation() for agent-server registration on conversation resume
-ARG FORK_REF=31843c287442c72880c3d9f8a99695d5d8e58c7d
+ARG FORK_REF=03f3ff7c817a521b651695be095d4c74c47f0e4c
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
