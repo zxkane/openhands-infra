@@ -1017,6 +1017,7 @@ describe('OpenHands Infrastructure Stacks', () => {
                 'elasticfilesystem:CreateAccessPoint',
                 'elasticfilesystem:DeleteAccessPoint',
                 'elasticfilesystem:DescribeAccessPoints',
+                'elasticfilesystem:TagResource',
               ],
             }),
           ]),

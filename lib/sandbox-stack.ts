@@ -419,6 +419,7 @@ export class SandboxStack extends cdk.Stack {
         'elasticfilesystem:CreateAccessPoint',
         'elasticfilesystem:DeleteAccessPoint',
         'elasticfilesystem:DescribeAccessPoints',
+        'elasticfilesystem:TagResource',
       ],
       resources: [workspaceFileSystem.fileSystemArn],
     }));
