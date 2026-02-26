@@ -54,6 +54,7 @@ const mockSandboxOutput: SandboxStackOutput = {
   orchestratorImageUri: '123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-orchestrator:latest',
   sandboxExecutionRoleArn: 'arn:aws:iam::123456789012:role/mock-execution-role',
   sandboxTaskRoleArn: 'arn:aws:iam::123456789012:role/mock-task-role',
+  efsFileSystemId: 'fs-mock12345',
 };
 
 // Mock auth output for EdgeStack tests (shared Cognito from AuthStack)
@@ -993,6 +994,149 @@ describe('OpenHands Infrastructure Stacks', () => {
           }),
         },
       });
+    });
+
+    test('orchestrator has EFS access point management permissions', () => {
+      const stack = new SandboxStack(app, 'TestSandboxEfs', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Sid: 'EfsAccessPointManagement',
+              Effect: 'Allow',
+              Action: [
+                'elasticfilesystem:CreateAccessPoint',
+                'elasticfilesystem:DeleteAccessPoint',
+                'elasticfilesystem:DescribeAccessPoints',
+                'elasticfilesystem:TagResource',
+              ],
+            }),
+          ]),
+        },
+      });
+    });
+
+    test('orchestrator has ECS task definition management permissions', () => {
+      const stack = new SandboxStack(app, 'TestSandboxTaskDef', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Sid: 'EcsTaskDefinitionManagement',
+              Effect: 'Allow',
+              Action: [
+                'ecs:RegisterTaskDefinition',
+                'ecs:DescribeTaskDefinition',
+                'ecs:DeregisterTaskDefinition',
+                'ecs:TagResource',
+              ],
+            }),
+          ]),
+        },
+      });
+    });
+
+    test('orchestrator environment includes EFS_FILE_SYSTEM_ID', () => {
+      const stack = new SandboxStack(app, 'TestSandboxEfsEnv', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Orchestrator container should have EFS_FILE_SYSTEM_ID env var
+      template.hasResourceProperties('AWS::ECS::TaskDefinition', Match.objectLike({
+        Family: 'openhands-sandbox-orchestrator',
+        ContainerDefinitions: Match.arrayWith([
+          Match.objectLike({
+            Name: 'orchestrator',
+            Environment: Match.arrayWith([
+              Match.objectLike({ Name: 'EFS_FILE_SYSTEM_ID' }),
+            ]),
+          }),
+        ]),
+      }));
+    });
+
+    test('idle monitor Lambda has EFS cleanup permissions', () => {
+      const stack = new SandboxStack(app, 'TestSandboxIdleEfs', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Sid: 'EfsAccessPointCleanup',
+              Effect: 'Allow',
+              Action: Match.arrayWith([
+                'elasticfilesystem:DeleteAccessPoint',
+              ]),
+            }),
+          ]),
+        },
+      });
+    });
+
+    test('task state handler Lambda has EFS cleanup permissions', () => {
+      const stack = new SandboxStack(app, 'TestSandboxTaskStateEfs', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+
+      // Should have at least 2 policies with EFS cleanup (idle monitor + task state handler)
+      const templateJson = template.toJSON() as Record<string, unknown>;
+      const resources = templateJson.Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
+      const efsCleanupPolicies = Object.entries(resources).filter(([, r]) => {
+        if (r.Type !== 'AWS::IAM::Policy') return false;
+        const stmts = (r.Properties?.PolicyDocument as any)?.Statement ?? [];
+        return stmts.some((s: any) => s.Sid === 'EfsAccessPointCleanup');
+      });
+      expect(efsCleanupPolicies.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test('efsFileSystemId is in stack output', () => {
+      const stack = new SandboxStack(app, 'TestSandboxEfsOutput', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+      });
+
+      expect(stack.output.efsFileSystemId).toBeDefined();
     });
   });
 

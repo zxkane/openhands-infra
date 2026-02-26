@@ -9,5 +9,6 @@ export const config = {
   region: process.env.AWS_REGION_NAME || process.env.AWS_DEFAULT_REGION || 'us-east-1',
   sandboxImage: process.env.SANDBOX_IMAGE || '',
   warmPoolServiceName: process.env.WARM_POOL_SERVICE_NAME || '',
+  efsFileSystemId: process.env.EFS_FILE_SYSTEM_ID || '',
   port: parseInt(process.env.PORT || '8081', 10),
 } as const;

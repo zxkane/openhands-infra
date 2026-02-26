@@ -83,6 +83,44 @@ EdgeStack (us-east-1) ← depends on Compute + Auth
 
 **Self-healing**: Aurora PostgreSQL + S3 + EFS preserve data across Fargate task replacements.
 
+## Conversation Data Storage
+
+Dual storage architecture — app-server writes to S3 (authority), sandbox SDK writes to EFS (cache):
+
+| Data Type | Storage | Written By | Notes |
+|-----------|---------|-----------|-------|
+| Conversation metadata | Aurora PostgreSQL | App server | User ID, title, timestamps |
+| Conversation events | **S3** (`FILE_STORE=s3`) | App server | Authority for UI display |
+| User settings / secrets | S3 | App server | LLM config, API keys |
+| Workspace code | **EFS** | Sandbox agent-server | `/workspace/project` persisted via access point |
+| SDK conversation cache | **EFS** | Sandbox agent-server SDK | `events/`, `base_state.json` — LLM context restoration |
+
+### SDK Conversation Cache (`OH_CONVERSATIONS_PATH`)
+
+- Entrypoint sets `OH_CONVERSATIONS_PATH=/mnt/efs` in sandbox container
+- **SDK hardcoded behavior**: Creates `<CID_hex>/` subdirectory (UUID without hyphens)
+- Path on EFS: `/sandbox-workspace/<CID>/<CID_hex>/events/` (AP root + SDK subdir)
+- This cache enables fast LLM context restoration on sandbox restart
+- Losing this cache (e.g., migration) is non-fatal — UI history loads from S3, LLM restarts without prior context
+
+### Per-Conversation EFS Isolation
+
+Each sandbox mounts an EFS access point rooted at `/sandbox-workspace/<conversation_id>/`:
+- Container sees `/mnt/efs/` = access point root (cannot traverse to parent/sibling directories)
+- On `/start` and `/resume`: orchestrator creates AP → registers task def → RunTask
+- On `/stop`, `/pause`, crash: cleanup AP + deregister task def
+- Access point lifecycle managed by orchestrator, idle monitor Lambda, and task state Lambda
+
+### IAM Permissions for EFS Access Points
+
+| Action | Required Resource ARN |
+|--------|----------------------|
+| `CreateAccessPoint`, `TagResource` | `arn:...:file-system/<id>` |
+| `DeleteAccessPoint`, `DescribeAccessPoints` | `arn:...:access-point/*` |
+| `ecs:RegisterTaskDefinition` with tags | `ecs:TagResource` on `*` |
+
+Must include **both** file-system and access-point ARNs in IAM policies.
+
 ## Key Files
 
 | File | Purpose |

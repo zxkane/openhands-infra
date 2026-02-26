@@ -3126,3 +3126,69 @@ This validates the security hardening that removed the self-referencing `sandbox
 | 4 | Both sandboxes work via app service | Normal agent tasks succeed |
 | 5 | No self-referencing SG rule | `describe-security-groups` returns empty for self-ref |
 | 6 | Internet access still works | Sandbox can `curl https://httpbin.org/ip` |
+
+---
+
+## TC-026: Verify Cross-Sandbox EFS Isolation
+
+### Description
+Verify that per-conversation EFS access points prevent sandboxes from accessing each other's workspace data. Each sandbox should only see its own files — attempting to traverse to parent directories must be physically blocked by the EFS access point root boundary.
+
+### Prerequisites
+- Infrastructure deployed with per-conversation EFS isolation (access points)
+- Two active conversations (can be same or different users)
+
+### Steps
+
+1. **Create conversation A** and write a marker file:
+   ```
+   Ask the agent: "Create a file at /mnt/efs/project/marker-a.txt with content 'conversation-a-secret'"
+   ```
+
+2. **Create conversation B** and attempt to read conversation A's data:
+   ```
+   Ask the agent: "Run these commands and show me the output:
+   ls -la /mnt/efs/
+   ls -la /mnt/efs/project/
+   cat /mnt/efs/project/marker-a.txt 2>&1 || echo 'NOT FOUND'
+   ls -la /mnt/efs/../ 2>&1 || echo 'CANNOT ESCAPE'"
+   ```
+
+3. **Verify conversation B's own workspace works**:
+   ```
+   Ask the agent: "Create a file at /mnt/efs/project/marker-b.txt with content 'conversation-b-data' and then read it back"
+   ```
+
+4. **Verify access point cleanup after stop**:
+   ```bash
+   # Get the EFS file system ID from the deployment
+   EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Tags[?Key==`Component` && Value==`sandbox-workspace`]].FileSystemId' --output text --region $DEPLOY_REGION)
+
+   # List access points before stop
+   aws efs describe-access-points --file-system-id $EFS_ID --region $DEPLOY_REGION \
+     --query 'AccessPoints[].{Id:AccessPointId,Path:RootDirectory.Path,State:LifeCycleState}'
+
+   # Stop conversation B (via UI or API)
+
+   # Wait 30 seconds, then verify access point was cleaned up
+   sleep 30
+   aws efs describe-access-points --file-system-id $EFS_ID --region $DEPLOY_REGION \
+     --query 'AccessPoints[].{Id:AccessPointId,Path:RootDirectory.Path,State:LifeCycleState}'
+   # Conversation B's access point should be gone
+   ```
+
+5. **Verify resume preserves data**:
+   ```
+   Resume conversation A and ask: "Read /mnt/efs/project/marker-a.txt"
+   # Should still contain 'conversation-a-secret'
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Conversation B cannot see conversation A's files | `ls /mnt/efs/` shows only conversation B's own data |
+| 2 | Parent directory traversal is blocked | `ls /mnt/efs/../` shows same content as `/mnt/efs/` (access point root) |
+| 3 | Both sandboxes work independently | Each can create and read their own files |
+| 4 | Access point cleaned up on stop | `describe-access-points` no longer shows stopped conversation's AP |
+| 5 | Resume preserves workspace data | Previously created files are accessible after resume |

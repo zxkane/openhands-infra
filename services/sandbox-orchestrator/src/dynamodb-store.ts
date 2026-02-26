@@ -119,6 +119,8 @@ export class DynamoDBStore {
     status: SandboxStatus,
     taskIp?: string,
     taskArn?: string,
+    accessPointId?: string,
+    taskDefinitionArn?: string,
   ): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     let updateExpr = 'SET #status = :status, last_activity_at = :now, #ttl = :ttl';
@@ -139,6 +141,14 @@ export class DynamoDBStore {
     if (taskArn !== undefined) {
       updateExpr += ', task_arn = :arn';
       exprValues[':arn'] = taskArn;
+    }
+    if (accessPointId !== undefined) {
+      updateExpr += ', access_point_id = :apId';
+      exprValues[':apId'] = accessPointId;
+    }
+    if (taskDefinitionArn !== undefined) {
+      updateExpr += ', task_definition_arn = :tdArn';
+      exprValues[':tdArn'] = taskDefinitionArn;
     }
 
     await this.docClient.send(
@@ -198,6 +208,8 @@ export class DynamoDBStore {
       sandbox_spec_id: item.sandbox_spec_id?.S ?? '',
       last_activity_at: parseInt(item.last_activity_at?.N ?? '0', 10),
       created_at: parseInt(item.created_at?.N ?? '0', 10),
+      access_point_id: item.access_point_id?.S || undefined,
+      task_definition_arn: item.task_definition_arn?.S || undefined,
     };
   }
 }

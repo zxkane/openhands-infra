@@ -8,6 +8,9 @@ jest.unstable_mockModule('@aws-sdk/client-ecs', () => ({
   RunTaskCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'RunTaskCommand' })),
   StopTaskCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'StopTaskCommand' })),
   DescribeTasksCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'DescribeTasksCommand' })),
+  DescribeTaskDefinitionCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'DescribeTaskDefinitionCommand' })),
+  RegisterTaskDefinitionCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'RegisterTaskDefinitionCommand' })),
+  DeregisterTaskDefinitionCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'DeregisterTaskDefinitionCommand' })),
   ListTasksCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'ListTasksCommand' })),
 }));
 
@@ -180,5 +183,101 @@ describe('EcsManager', () => {
 
     const arns = await manager.listServiceTasks('my-service');
     expect(arns).toEqual(['arn:task-1', 'arn:task-2']);
+  });
+
+  test('runTask uses taskDefinitionOverride when provided', async () => {
+    mockSend.mockResolvedValueOnce({
+      tasks: [
+        {
+          taskArn: 'arn:aws:ecs:us-west-2:123:task/test/override1',
+          lastStatus: 'PROVISIONING',
+        },
+      ],
+      failures: [],
+    });
+
+    await manager.runTask({
+      conversationId: 'conv-override',
+      userId: 'user-1',
+      image: 'img:latest',
+      environment: {},
+      sessionApiKey: 'key-1',
+      taskDefinitionOverride: 'arn:aws:ecs:us-west-2:123:task-definition/openhands-sandbox:42',
+    });
+
+    const cmd = mockSend.mock.calls[0][0] as any;
+    expect(cmd.input.taskDefinition).toBe('arn:aws:ecs:us-west-2:123:task-definition/openhands-sandbox:42');
+  });
+
+  test('registerTaskDefinitionWithAccessPoint copies base and replaces AP', async () => {
+    // First call: DescribeTaskDefinition
+    mockSend.mockResolvedValueOnce({
+      taskDefinition: {
+        family: 'openhands-sandbox',
+        taskRoleArn: 'arn:role/task',
+        executionRoleArn: 'arn:role/exec',
+        networkMode: 'awsvpc',
+        containerDefinitions: [{ name: 'agent-server', image: 'img' }],
+        volumes: [
+          {
+            name: 'workspace',
+            efsVolumeConfiguration: {
+              fileSystemId: 'fs-old',
+              transitEncryption: 'ENABLED',
+              authorizationConfig: {
+                accessPointId: 'fsap-old',
+                iam: 'ENABLED',
+              },
+            },
+          },
+        ],
+        cpu: '2048',
+        memory: '4096',
+        requiresCompatibilities: ['FARGATE'],
+        runtimePlatform: { cpuArchitecture: 'ARM64' },
+      },
+    });
+
+    // Second call: RegisterTaskDefinition
+    mockSend.mockResolvedValueOnce({
+      taskDefinition: {
+        taskDefinitionArn: 'arn:aws:ecs:us-west-2:123:task-definition/openhands-sandbox:99',
+      },
+    });
+
+    const arn = await manager.registerTaskDefinitionWithAccessPoint('fsap-new', 'fs-new');
+
+    expect(arn).toBe('arn:aws:ecs:us-west-2:123:task-definition/openhands-sandbox:99');
+
+    // Verify RegisterTaskDefinition call
+    const regCmd = mockSend.mock.calls[1][0] as any;
+    expect(regCmd.input.family).toBe('openhands-sandbox');
+    expect(regCmd.input.volumes[0].efsVolumeConfiguration.authorizationConfig.accessPointId).toBe('fsap-new');
+    expect(regCmd.input.volumes[0].efsVolumeConfiguration.fileSystemId).toBe('fs-new');
+  });
+
+  test('registerTaskDefinitionWithAccessPoint throws when base not found', async () => {
+    mockSend.mockResolvedValueOnce({ taskDefinition: undefined });
+
+    await expect(
+      manager.registerTaskDefinitionWithAccessPoint('fsap-x', 'fs-x'),
+    ).rejects.toThrow('Task definition not found');
+  });
+
+  test('deregisterTaskDefinition sends command', async () => {
+    mockSend.mockResolvedValueOnce({});
+
+    await manager.deregisterTaskDefinition('arn:task-def:1');
+
+    const cmd = mockSend.mock.calls[0][0] as any;
+    expect(cmd.input.taskDefinition).toBe('arn:task-def:1');
+  });
+
+  test('deregisterTaskDefinition handles InvalidParameterException gracefully', async () => {
+    const err = new Error('inactive');
+    (err as any).name = 'InvalidParameterException';
+    mockSend.mockRejectedValueOnce(err);
+
+    await expect(manager.deregisterTaskDefinition('arn:already-inactive')).resolves.toBeUndefined();
   });
 });
