@@ -5,35 +5,40 @@ AWS CDK TypeScript project for deploying [OpenHands](https://github.com/All-Hand
 ## Architecture Overview
 
 ```
-User → CloudFront (WAF+Lambda@Edge Auth) → HTTP Origin → ALB (origin verified) → EC2 m7g.xlarge Graviton (ASG)
-           │                                                                              ↓
-           └── Cognito (OAuth2, Managed Login v2)                             OpenHands Docker + Watchtower
-                                                                                          ↓
-                                                                        VPC Endpoints → Bedrock / CloudWatch Logs
-                                                                                          ↓
-                                                                        RDS Proxy → Aurora Serverless v2 PostgreSQL
+User → CloudFront (WAF+Lambda@Edge Auth) → ALB (origin verified) → ECS Fargate (App + OpenResty)
+           │                                                                  ↓
+           └── Cognito (OAuth2, Managed Login v2)                  Cloud Map → Sandbox Fargate Tasks
+                                                                              ↓
+                                                        VPC Endpoints → Bedrock / CloudWatch Logs
+                                                                              ↓
+                                                        RDS Proxy → Aurora Serverless v2 PostgreSQL
+
+Sandbox Orchestration:
+App → Orchestrator Lambda → DynamoDB Registry → Sandbox Fargate Tasks (per-conversation EFS isolation)
 
 Runtime Apps:
-{port}-{convId}.runtime.{subdomain}.{domain} → CloudFront → Lambda@Edge → OpenResty → Docker Container
+{port}-{convId}.runtime.{subdomain}.{domain} → CloudFront → Lambda@Edge → OpenResty → Sandbox Fargate Task
 ```
 
 Key features:
+- **ECS Fargate**: Fully serverless compute — App, OpenResty, and sandbox containers all run on Fargate
 - **CloudFront with Origin Verification**: ALB requires X-Origin-Verify header - direct access returns 403
-- **Internet-facing ALB**: Required for WebSocket support (CloudFront VPC Origin doesn't support WebSocket)
-- **Self-Healing Architecture**: Conversation history persists across EC2 instance replacements
+- **Per-Conversation Isolation**: Each sandbox gets a dedicated EFS access point, preventing cross-conversation access
+- **Self-Healing Architecture**: Conversation history persists across Fargate task replacements
 - **Runtime Subdomain Routing**: User apps accessible via `{port}-{convId}.runtime.{subdomain}.{domain}` with proper in-app routing
 
 ## Features
 
-- **Graviton (ARM64)**: Cost-optimized m7g.xlarge instances (~20% cheaper than x86)
+- **ECS Fargate (ARM64)**: Fully serverless compute for App, OpenResty, and sandbox containers
+- **Per-Conversation Sandbox Isolation**: Each conversation gets a dedicated EFS access point and Fargate task
 - **AWS Bedrock**: LLM inference via IAM Role (no API keys)
 - **Aurora Serverless v2**: PostgreSQL database with RDS Proxy for connection pooling and high availability
-- **S3 Data Persistence**: Conversation events, settings stored in S3 (survives instance replacement)
-- **EFS Workspace Persistence**: Sandbox workspaces stored in EFS under `/data/openhands` (survives instance replacement)
-- **Self-Healing**: ASG with ELB health checks + persistent database = no data loss on instance replacement
-- **Auto-updates**: Watchtower for Docker image updates
-- **Security**: Cognito auth (30-day session), WAF, VPC Endpoints, private subnets, Secrets Manager
-- **Monitoring**: CloudWatch Logs, Alarms, Dashboard
+- **S3 Data Persistence**: Conversation events, settings stored in S3 (survives task replacement)
+- **EFS Workspace Persistence**: Per-conversation EFS access points at `/sandbox-workspace/<conversation_id>/`
+- **Self-Healing**: Fargate services + persistent database + S3 + EFS = no data loss on task replacement
+- **Sandbox Orchestrator**: Lambda-based orchestrator manages sandbox lifecycle via DynamoDB registry
+- **Security**: Cognito auth (30-day session), WAF, VPC Endpoints, private subnets, Secrets Manager, KMS
+- **Monitoring**: CloudWatch Logs, Alarms, Container Insights
 - **Backup**: AWS Backup with 14-day retention, Aurora automatic backups (35 days)
 - **Runtime Subdomain**: Apps run at domain root with proper internal routing and cookie isolation
 - **Sandbox AWS Access**: Optional feature enabling sandbox containers to access AWS services with scoped IAM credentials
@@ -41,7 +46,7 @@ Key features:
 ## Prerequisites
 
 - AWS CLI configured with appropriate credentials
-- Node.js 20+ and npm
+- Node.js 22+ and npm
 - Existing VPC with private subnets and NAT Gateway
 - Existing Route 53 Hosted Zone
 
@@ -70,6 +75,9 @@ Required context parameters:
 | `edgeStackSuffix` | Suffix for Edge stack name in us-east-1 (optional; enables multiple Edge stacks) | `my-project` |
 | `sandboxAwsAccess` | Enable sandbox AWS access (optional, defaults to false) | `true` |
 | `sandboxAwsPolicyFile` | Path to custom IAM policy JSON for sandbox (optional) | `config/sandbox-aws-policy.json` |
+| `skipS3Endpoint` | Skip S3 Gateway endpoint if VPC already has one (optional) | `true` |
+| `warmPoolSize` | Number of pre-warmed sandbox Fargate tasks (optional, default: 2) | `3` |
+| `idleTimeoutMinutes` | Minutes before idle sandbox is stopped (optional, default: 30, staging: 10) | `15` |
 
 ### 3. Bootstrap CDK (First Time Only)
 
@@ -113,8 +121,11 @@ npx cdk deploy --all \
 2. Monitoring (main region) - independent, creates S3 data bucket
 3. Security (main region) - depends on Network, Monitoring
 4. Database (main region) - depends on Network, Security
-5. Compute (main region) - depends on Network, Security, Monitoring, Database
-6. Edge (us-east-1) - depends on Compute
+5. UserConfig (main region) - depends on Security, Monitoring
+6. Cluster (main region) - shared ECS cluster + Cloud Map namespace
+7. Sandbox (main region) - depends on Network, Monitoring, Cluster
+8. Compute (main region) - depends on all above
+9. Edge (us-east-1) - depends on Compute, Auth
 
 ### 6. Access OpenHands
 
@@ -129,16 +140,19 @@ https://<subdomain>.<domain-name>
 |-------|--------|-------------|
 | `OpenHands-Auth` | us-east-1 | Cognito User Pool + Managed Login v2 branding |
 | `OpenHands-Network` | Main | VPC import, VPC Endpoints |
-| `OpenHands-Monitoring` | Main | CloudWatch Logs, Alarms, Dashboard, Backup, S3 Data Bucket |
-| `OpenHands-Security` | Main | IAM Roles, Security Groups |
+| `OpenHands-Monitoring` | Main | CloudWatch Logs, Alarms, S3 Data Bucket, Backup |
+| `OpenHands-Security` | Main | IAM Roles, Security Groups, KMS key |
 | `OpenHands-Database` | Main | Aurora Serverless v2 PostgreSQL with RDS Proxy |
-| `OpenHands-Compute` | Main | EC2 ASG, Launch Template, Internal ALB |
-| `OpenHands-Edge-*` | us-east-1 | Lambda@Edge, CloudFront (VPC Origin), WAF, Route 53 (per domain/environment) |
+| `OpenHands-UserConfig` | Main | User Configuration API Lambda (MCP, Secrets, Integrations) |
+| `OpenHands-Cluster` | Main | Shared ECS Cluster + Cloud Map namespace |
+| `OpenHands-Sandbox` | Main | Sandbox Fargate tasks, DynamoDB registry, Orchestrator Lambda |
+| `OpenHands-Compute` | Main | Fargate services (App + OpenResty), ALB, EFS |
+| `OpenHands-Edge-*` | us-east-1 | Lambda@Edge, CloudFront, WAF, Route 53 (per domain/environment) |
 
 **Notes**:
 - Cognito is provisioned in `OpenHands-Auth` so multiple Edge stacks can reuse a single user pool/client.
 - To add another domain/environment, include it in `authCallbackDomains`, deploy `OpenHands-Auth`, then deploy a new `OpenHands-Edge-<edgeStackSuffix>`.
-- The Database stack is **required** for self-healing architecture - it persists conversation history across EC2 instance replacements.
+- The Database stack is **required** for self-healing architecture - it persists conversation history across Fargate task replacements.
 
 ## Multi-Domain Deployment
 
@@ -172,7 +186,7 @@ You can deploy multiple OpenHands instances on different domains, all sharing th
                            ┌─────────────────────────────────────┐
                            │     ComputeStack (main region)      │
                            │  - ALB with origin verification     │
-                           │  - EC2 ASG                          │
+                           │  - Fargate services (App+OpenResty) │
                            │  - SSM parameters in us-east-1      │
                            └─────────────────────────────────────┘
                                               │
@@ -205,7 +219,9 @@ npx cdk deploy OpenHands-Auth \
 Deploy the shared backend infrastructure (only once):
 
 ```bash
-npx cdk deploy OpenHands-Network OpenHands-Monitoring OpenHands-Security OpenHands-Database OpenHands-UserConfig OpenHands-Compute \
+npx cdk deploy OpenHands-Network OpenHands-Monitoring OpenHands-Security \
+  OpenHands-Database OpenHands-UserConfig OpenHands-Cluster \
+  OpenHands-Sandbox OpenHands-Compute \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<primary-hosted-zone-id> \
   --context domainName=<primary-domain> \
@@ -288,21 +304,24 @@ To remove a domain:
 
 ## Cost Estimate
 
-### Base Infrastructure (~$375-420/month)
+### Base Infrastructure (~$350-450/month)
 
 | Component | Monthly Cost (USD) | Usage Assumption |
 |-----------|--------------------|------------------|
-| EC2 m7g.xlarge Graviton | ~$112 | 730 hours (24/7) |
-| EBS gp3 300GB | ~$30 | 300GB storage |
+| Fargate App Service (4 vCPU / 8 GB ARM64) | ~$120 | 730 hours (24/7) |
+| Fargate OpenResty Service (0.25 vCPU / 512 MB) | ~$8 | 730 hours (24/7) |
+| Fargate Sandbox Tasks | ~$0-50 | On-demand, per-conversation |
 | Aurora Serverless v2 | ~$43-80 | 0.5-4 ACU (scales with usage) |
 | RDS Proxy | ~$18 | 730 hours |
+| EFS | ~$1-10 | Per-conversation workspace storage |
 | S3 Data Bucket | ~$1-5 | Depends on usage |
 | NAT Gateway | ~$0-35 | Depends on traffic |
 | CloudFront | ~$85 | 1TB data transfer |
 | ALB | ~$25 | 730 hours + LCUs |
-| VPC Endpoints (8) | ~$50 | 8 endpoints × 730 hours |
-| CloudWatch | ~$5 | Logs, metrics, alarms |
+| VPC Endpoints (10) | ~$60 | 10 endpoints × 730 hours |
+| CloudWatch | ~$5 | Logs, metrics, Container Insights |
 | Route 53 | ~$1 | 1 hosted zone + queries |
+| DynamoDB (Sandbox Registry) | ~$1 | On-demand, low traffic |
 
 ### Bedrock Usage (Variable)
 
@@ -327,14 +346,16 @@ Your existing VPC must have:
 
 ## Data Persistence
 
-OpenHands data is stored durably for self-healing across instance replacements:
+OpenHands data is stored durably for self-healing across Fargate task replacements:
 
 | Data Type | Storage | Persistence |
 |-----------|---------|-------------|
 | Conversation Metadata | Aurora PostgreSQL | Permanent (via RDS Proxy) |
-| Conversation Events | S3 | Permanent (survives instance replacement) |
-| User Settings | S3 | Permanent |
-| Workspace Files | EFS | Persistent (survives instance replacement) |
+| Conversation Events | S3 | Permanent (survives task replacement) |
+| User Settings / Secrets | S3 | Permanent (KMS envelope encryption) |
+| Workspace Files | EFS | Persistent (per-conversation access points) |
+| SDK Conversation Cache | EFS | Persistent (enables LLM context restoration) |
+| Sandbox Registry | DynamoDB | Permanent (task state, user ownership) |
 
 **Aurora Serverless v2 with RDS Proxy**:
 - PostgreSQL 15.8 with RDS Proxy for connection pooling
@@ -360,13 +381,13 @@ OpenHands data is stored durably for self-healing across instance replacements:
 
 ### Conversation Resume (Self-Healing)
 
-When EC2 instances are replaced (ASG scaling, CDK deployment, health check failure), sandbox Docker containers are terminated. OpenHands marks these conversations as `ARCHIVED` because the sandbox is missing. However, all conversation data is preserved:
+When sandbox Fargate tasks stop (idle timeout, crash, or deployment), conversations become `ARCHIVED`. All conversation data is preserved:
 
-| Data | Storage | Survives EC2 Replacement |
-|------|---------|--------------------------|
+| Data | Storage | Survives Task Stop |
+|------|---------|-------------------|
 | Conversation metadata | Aurora PostgreSQL | ✅ Yes |
 | Conversation events/history | S3 | ✅ Yes |
-| Workspace files | EFS (`/data/openhands`) | ✅ Yes |
+| Workspace files | EFS (per-conversation access point) | ✅ Yes |
 
 **Auto-Resume Flow**:
 
@@ -377,10 +398,11 @@ Frontend detects ARCHIVED status
     ↓
 Calls POST /api/v1/app-conversations/{id}/resume
     ↓
-Backend recreates sandbox container with:
-  - Same conversation ID
-  - user_id label (for authorization)
-  - EFS workspace mounted
+App → Orchestrator Lambda:
+  - Creates new EFS access point for conversation
+  - Registers new task definition with access point
+  - Launches Fargate sandbox task
+  - Updates DynamoDB registry
     ↓
 Page reloads → conversation is usable again
 ```
@@ -388,11 +410,11 @@ Page reloads → conversation is usable again
 **What happens automatically**:
 1. User navigates to an archived conversation
 2. Frontend patch detects `status: ARCHIVED` and triggers resume
-3. Backend creates a new sandbox container with the original workspace
-4. Container gets `user_id` label for runtime URL authorization
+3. Orchestrator creates a new EFS access point rooted at `/sandbox-workspace/<conversation_id>/`
+4. New Fargate sandbox task launches with the workspace mounted at `/mnt/efs/`
 5. Page reloads and conversation is ready for use
 
-**Note**: The workspace files on EFS are preserved, so any code or files created in the previous session are still available after resume.
+**Note**: The workspace files on EFS are preserved via the access point, so any code or files created in the previous session are still available after resume.
 
 ## Session Management
 
@@ -436,11 +458,11 @@ CloudFront (matches *.runtime.* wildcard certificate)
     ↓
 Lambda@Edge (viewer-request: parse subdomain, rewrite URI to /runtime/{convId}/{port}/...)
     ↓
-ALB → EC2 → OpenResty
+ALB → OpenResty (Fargate service)
     ↓
-Lua Docker Discovery (find container by convId, route to container IP:port)
+Sandbox Discovery (DynamoDB lookup by convId → Fargate task IP:port, verify user ownership)
     ↓
-User App (Flask/Node.js/etc. inside sandbox container)
+User App (Flask/Node.js/etc. inside sandbox Fargate task)
 ```
 
 ### Security Considerations
@@ -522,21 +544,24 @@ Regardless of what you configure in the policy file, the following actions are *
 
 ### How It Works
 
-1. **IAM Role**: SecurityStack creates `OpenHandsSandboxRole` with your custom policy + explicit denies
-2. **Credential Refresh**: A systemd timer on EC2 refreshes temporary credentials every 10 minutes (15-minute token lifetime)
-3. **Credential Mount**: The credentials file is mounted read-only into sandbox containers at `/data/sandbox-credentials`
-4. **AWS CLI**: The agent-server container includes AWS CLI v2, configured to use the mounted credentials
+1. **IAM Role**: SandboxStack creates a sandbox task role with your custom policy + explicit denies
+2. **Task Role Assignment**: Sandbox Fargate tasks are launched with the scoped IAM role attached directly
+3. **ECS Task Role Credentials**: AWS SDK and CLI in the sandbox container automatically use the task role credentials via the ECS credential provider (no manual credential refresh needed)
+4. **AWS CLI**: The agent-server container includes AWS CLI v2, which automatically uses the Fargate task role
 
 ## Security
 
-- EC2 instances in private subnets only
+- Fargate tasks in private subnets only
+- Per-conversation EFS isolation via access points (no cross-conversation access)
 - All AWS service access via VPC Endpoints
-- IAM Role with least privilege (Bedrock, Logs, SSM, S3, Secrets Manager)
+- IAM Roles with least privilege for each service (App, Sandbox, Orchestrator)
 - Database credentials stored in AWS Secrets Manager
 - RDS Proxy with TLS-encrypted connections
+- User secrets protected by KMS envelope encryption
 - Cognito authentication for all requests (30-day session)
+- Lambda@Edge header spoofing prevention (clears & re-injects verified user headers)
 - WAF protection with rate limiting
-- EBS, S3, and Aurora storage encryption enabled
+- S3 and Aurora storage encryption enabled
 
 ## Useful Commands
 
@@ -568,8 +593,8 @@ Ensure the VPC exists and your AWS credentials have `ec2:DescribeVpcs` permissio
 ### Certificate Validation Pending
 ACM certificates use DNS validation. Ensure the Hosted Zone is correctly configured.
 
-### EC2 Instance Not Starting
-Check CloudWatch Logs at `/openhands/application` for container startup errors.
+### Fargate Task Not Starting
+Check CloudWatch Logs at `/openhands/application` for container startup errors. Check ECS service events for Fargate capacity issues.
 
 ## CI/CD
 
