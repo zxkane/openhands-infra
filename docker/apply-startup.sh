@@ -10,7 +10,6 @@
 #   - Patch 6:  Swap AuthUserContextInjector import in openhands_cloud
 #   - Patch 27a: Database migration DDL (add user_id column if missing)
 #   - Patch 21: Verify multi-tenant store configuration
-#   - Patch 33: Fix git changes API 500 on broken git repos
 #   - Critical patch failure checks
 #
 # SDK patches (apply-sdk-patches.py) are handled separately in agent-server-custom/.
@@ -220,9 +219,6 @@ python3 /opt/patch-vscode-url.py
 
 # ─── Patch 32: Fix exposed_urls for Fargate sandbox mode ─────────────────────
 python3 /opt/patch-exposed-urls.py
-
-# ─── Patch 33: Fix git changes API 500 on broken git repos ────────────────
-python3 /opt/patch-git-changes.py
 
 # ─── Verify security-critical fork patches ───────────────────────────────────
 # These patches are applied at build time via download-fork-patches.sh.
