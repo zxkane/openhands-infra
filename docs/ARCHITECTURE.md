@@ -1,6 +1,51 @@
 # Architecture Deep Dive
 
-This document provides detailed technical knowledge about the authentication, database, and conversation storage systems that enable self-healing across EC2 instance replacements.
+This document provides detailed technical knowledge about the authentication, database, sandbox orchestration, and conversation storage systems that enable self-healing across ECS Fargate task replacements.
+
+## Architecture Overview (10 Stacks)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           us-east-1                                      │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ AuthStack: Cognito User Pool, managed login branding             │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                    │                                     │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ EdgeStack: Lambda@Edge, CloudFront, WAF, Route 53                │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼ (HTTP Origin)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Main Region                                    │
+│                                                                          │
+│  ┌───────────────┐    ┌────────────────┐    ┌──────────────────┐        │
+│  │ NetworkStack  │───▶│ SecurityStack  │───▶│ MonitoringStack  │        │
+│  │ VPC, Endpoints│    │ Fargate roles  │    │ Logs, S3, Alarms │        │
+│  └───────────────┘    │ SGs, KMS       │    └──────────────────┘        │
+│         │             └────────────────┘           │                    │
+│         │                    │                      │                    │
+│         ▼                    ▼                      │                    │
+│  ┌──────────────┐  ┌───────────────────────┐       │                    │
+│  │ ClusterStack │  │    DatabaseStack       │       │                    │
+│  │ ECS Cluster  │  │  Aurora Serverless v2  │       │                    │
+│  │ Cloud Map    │  │  RDS Proxy             │       │                    │
+│  └──────────────┘  └───────────────────────┘       │                    │
+│         │                   │                      │                    │
+│         ├──────▶ ┌──────────────────────────────────────┐              │
+│         │        │           SandboxStack                │              │
+│         │        │  DynamoDB, Orchestrator, Sandbox Tasks │              │
+│         │        │  Idle Monitor, Task State Lambda       │              │
+│         │        └──────────────────────────────────────┘              │
+│         │                   │                                           │
+│         ▼                   ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                      ComputeStack                                │    │
+│  │   Fargate Services (App + OpenResty), ALB, EFS, Lambda TG       │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Authentication System
 
@@ -15,7 +60,7 @@ Lambda@Edge (JWT Validation)
     ↓ (if valid)
 Inject User Headers (X-Cognito-*)
     ↓
-Origin (ALB → EC2)
+Origin (ALB → Fargate)
     ↓
 OpenHands App (CognitoUserAuth)
 ```
@@ -35,17 +80,19 @@ OpenHands App (CognitoUserAuth)
 
 ### Lambda@Edge Authentication Flows
 
-Three authentication flows handled by `lib/lambda-edge/auth-handler.js`:
+Four authentication flows handled by `lib/lambda-edge/auth-handler.js`:
 
 1. **OAuth Callback (`/_callback`)**: Receives auth code → exchanges for tokens → verifies ID token signature via JWKS → sets `id_token` cookie (HttpOnly, Secure, SameSite=Lax) → redirects to destination
 
 2. **Logout (`/_logout`)**: Clears `id_token` cookie → redirects to Cognito logout URL
 
-3. **Request Validation**: Extracts `id_token` from cookie → verifies JWT signature against Cognito JWKS → validates issuer, expiration, audience → **injects user headers** → redirects to login if invalid
+3. **Runtime Subdomain**: Verify JWT → inject `X-Cognito-User-Id` → rewrite URI to `/runtime/{convId}/{port}/...` → allow/redirect
+
+4. **Main Domain Request Validation**: Extracts `id_token` from cookie → verifies JWT signature against Cognito JWKS → validates issuer, expiration, audience → **injects user headers** → redirects to login if invalid
 
 ### User Header Injection
 
-**Critical for conversation persistence**: Lambda@Edge injects verified user information into request headers, clearing any existing headers to prevent spoofing:
+**Critical for conversation persistence and multi-tenant isolation**: Lambda@Edge injects verified user information into request headers, clearing any existing headers to prevent spoofing:
 
 - `X-Cognito-User-Id`: Cognito user ID (UUID from `payload.sub`)
 - `X-Cognito-Email`: User's email address
@@ -71,59 +118,93 @@ USER_AUTH_CLASS=openhands.server.user_auth.cognito_user_auth.CognitoUserAuth
 
 | Setting | Value | Notes |
 |---------|-------|-------|
-| Engine | PostgreSQL 15.4 | Aurora Serverless v2 |
+| Engine | PostgreSQL 15.8 | Aurora Serverless v2 |
 | Min ACU | 0.5 | ~$43/month minimum |
 | Max ACU | 4 | Auto-scales with usage |
-| IAM Auth | Enabled | No passwords required |
+| IAM Auth | Enabled (backup) | For direct cluster admin access |
 | Encryption | Yes | At-rest encryption |
 | Backup | 35 days | Automatic daily backups |
 | Removal Policy | SNAPSHOT | Creates backup on deletion |
 
-### IAM Database Authentication
+### Database Authentication
 
-**Why IAM Auth?**
-- No passwords to store, rotate, or manage
-- EC2 uses its IAM role for authentication
-- Tokens expire after 15 minutes (auto-refreshed)
-- Audit trail via CloudTrail
+**Primary: RDS Proxy with Password Auth**
 
-**Token Generation Flow**:
-1. **Systemd Timer**: Runs every 10 minutes
-2. **Token Script**: `/usr/local/bin/refresh-db-token.sh`
-3. **AWS CLI**: `aws rds generate-db-auth-token`
-4. **Output**: `/data/openhands/config/database.env`
+The application connects through RDS Proxy using password-based authentication via Secrets Manager:
 
-### Database User Setup (One-Time)
+1. **DatabaseStack** creates a proxy user with credentials stored in Secrets Manager (`openhands/database/proxy-user`)
+2. **RDS Proxy** handles connection pooling and credential rotation
+3. **Fargate App Service** receives the DB password via ECS native secret injection
+4. No token refresh needed — RDS Proxy manages connection lifecycle
 
-After first deployment, create the IAM database user in PostgreSQL:
+**Backup: IAM Authentication**
 
-```sql
--- Create the IAM authentication user
-CREATE USER openhands_iam;
-GRANT rds_iam TO openhands_iam;
+IAM auth is also enabled on the cluster for direct admin access:
+- Used by the DB bootstrap Lambda (custom resource) for one-time setup
+- Can be used for manual admin tasks via `aws rds generate-db-auth-token`
 
--- Grant database-level permissions
-GRANT ALL PRIVILEGES ON DATABASE openhands TO openhands_iam;
+### Database Bootstrap (Automated)
 
--- Grant schema-level permissions
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO openhands_iam;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO openhands_iam;
+The `db-bootstrap` Lambda function (custom resource) automatically runs on first deployment:
+- Creates the proxy user with appropriate permissions
+- Grants schema-level permissions for future tables
+- No manual SQL setup required
 
--- Set default privileges for future tables
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO openhands_iam;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO openhands_iam;
+## Sandbox Orchestration
+
+### Architecture
+
 ```
+App Service → Orchestrator Lambda (via Cloud Map DNS)
+                     ↓
+              DynamoDB Registry ← EventBridge (idle monitor, task state)
+                     ↓
+              ECS Fargate Tasks (per-conversation sandbox)
+                     ↓
+              EFS Access Points (per-conversation isolation)
+```
+
+### Sandbox Lifecycle
+
+| Action | Trigger | What Happens |
+|--------|---------|-------------|
+| **Start** | User creates conversation | Orchestrator: create EFS AP → register task def → RunTask → update DynamoDB |
+| **Resume** | User resumes archived conversation | Same as Start (AP may already exist) |
+| **Stop** | User stops conversation | Orchestrator: StopTask → cleanup AP |
+| **Idle Timeout** | EventBridge (5-min schedule) | Idle Monitor Lambda: detect stale tasks → StopTask → delete AP |
+| **Task Crash** | ECS task state change event | Task State Lambda: update DynamoDB → delete AP |
+
+### DynamoDB Sandbox Registry
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `conversation_id` | PK | Conversation UUID |
+| `user_id` | GSI | For user-scoped queries |
+| `status` | GSI | RUNNING, STOPPED, etc. |
+| `task_arn` | String | ECS Fargate task ARN |
+| `access_point_id` | String | EFS access point ID |
+| `task_definition_arn` | String | Per-conversation task def |
+| `last_activity_at` | Number | Unix timestamp for idle detection |
+
+### Per-Conversation EFS Isolation
+
+Each sandbox mounts an EFS access point rooted at `/sandbox-workspace/<conversation_id>/`:
+- Container sees `/mnt/efs/` = access point root (cannot traverse to parent/sibling directories)
+- Workspace files at `/mnt/efs/workspace/` persist across task restarts
+- SDK conversation cache at `/mnt/efs/<CID_hex>/events/` enables LLM context restoration
 
 ## Conversation Storage
 
 ### Storage Locations
 
-| Data Type | Storage | Persistence | Notes |
-|-----------|---------|-------------|-------|
-| Conversation Metadata | Aurora PostgreSQL | Permanent | User ID, title, timestamps |
-| Conversation Events | S3 | Permanent | Agent actions, tool outputs |
-| User Settings | S3 | Permanent | LLM config, preferences |
-| Workspace Files | EFS | Persistent | Code, project files (`/data/openhands/workspace`) |
+| Data Type | Storage | Written By | Persistence |
+|-----------|---------|-----------|-------------|
+| Conversation Metadata | Aurora PostgreSQL | App server | Permanent |
+| Conversation Events | S3 (`FILE_STORE=s3`) | App server | Permanent (authority for UI) |
+| User Settings / Secrets | S3 | App server | Permanent (KMS encrypted) |
+| Workspace Files | EFS | Sandbox agent-server | Persistent (per-conversation AP) |
+| SDK Conversation Cache | EFS | Sandbox SDK | Persistent (LLM context restoration) |
+| Sandbox State | DynamoDB | Orchestrator | Permanent (task registry) |
 
 ### Storage Path Logic
 
@@ -150,16 +231,15 @@ def get_conversation_dir(sid, user_id=None):
 
 ## Self-Healing Data Flow
 
-When a new EC2 instance launches:
+When a Fargate task is replaced (deployment, scaling, health check failure):
 
-1. **User Data Script** runs:
-   - Installs Docker, CloudWatch Agent
-   - Formats fresh EBS volume
-   - Generates IAM auth token for Aurora
-   - Starts OpenHands container
+1. **ECS Service** launches new task:
+   - Fargate pulls container images from ECR
+   - Mounts EFS app workspace at `/data/openhands`
+   - Injects secrets via ECS native secret injection (DB password, sandbox secret key)
 
-2. **OpenHands Startup**:
-   - Connects to Aurora (IAM auth)
+2. **OpenHands App Startup**:
+   - Connects to Aurora via RDS Proxy (password auth, no token refresh)
    - Loads existing conversation metadata
    - Connects to S3 for conversation events
 
@@ -169,23 +249,29 @@ When a new EC2 instance launches:
    - OpenHands retrieves user's conversations from Aurora
    - User sees all previous conversations
 
+4. **Sandbox Resume**:
+   - When user accesses an archived conversation, orchestrator creates new sandbox task
+   - EFS access point preserves workspace files from previous session
+   - SDK conversation cache enables LLM context restoration
+
 ### Testing Self-Healing
 
 ```bash
 # 1. Create a conversation in the application
 
-# 2. Force instance replacement
-aws autoscaling terminate-instance-in-auto-scaling-group \
-  --instance-id <instance-id> \
-  --should-decrement-desired-capacity false \
+# 2. Force Fargate app service redeployment
+aws ecs update-service --cluster <cluster-name> \
+  --service openhands-app --force-new-deployment \
   --region <region>
 
-# 3. Wait for new instance (5-10 minutes)
-watch -n 10 "aws autoscaling describe-auto-scaling-groups \
-  --query 'AutoScalingGroups[0].Instances[*].[InstanceId,HealthStatus]' \
-  --output table"
+# 3. Wait for new task to stabilize (2-5 minutes)
+aws ecs describe-services --cluster <cluster-name> \
+  --services openhands-app \
+  --query 'services[0].{running:runningCount,desired:desiredCount,pending:pendingCount}' \
+  --region <region>
 
 # 4. Verify conversations persist
 # - Log in to application
 # - Previous conversations should be visible
+# - Resume an archived conversation to verify workspace files persist
 ```

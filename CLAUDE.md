@@ -48,6 +48,17 @@ npx cdk diff --all --context ...
 - `subDomain` - Optional, defaults to "openhands"
 - `region` - Optional, defaults to us-east-1
 
+### Optional Context Parameters
+
+- `skipS3Endpoint` - Skip S3 Gateway endpoint if VPC already has one
+- `sandboxAwsAccess` - Enable sandbox AWS access (default: false)
+- `sandboxAwsPolicyFile` - Path to custom IAM policy for sandbox
+- `warmPoolSize` - Pre-warmed sandbox Fargate tasks (default: 2)
+- `idleTimeoutMinutes` - Sandbox idle timeout (default: 30, staging: 10)
+- `edgeStackSuffix` - Suffix for Edge stack name (multi-environment)
+- `authCallbackDomains` - OAuth callback domains (JSON array or comma-separated)
+- `authDomainPrefixSuffix` - Cognito domain prefix suffix (default: "shared")
+
 ### Prerequisites (First-Time Deployment)
 
 Create sandbox secret key before first deployment:
@@ -127,13 +138,17 @@ Must include **both** file-system and access-point ARNs in IAM policies.
 |------|---------|
 | `bin/openhands-infra.ts` | CDK entry point |
 | `lib/interfaces.ts` | Stack I/O interfaces |
-| `lib/*-stack.ts` | Individual stack definitions |
+| `lib/*-stack.ts` | Individual stack definitions (10 stacks) |
 | `lib/cluster-stack.ts` | Shared ECS cluster + Cloud Map |
+| `lib/sandbox-stack.ts` | Sandbox orchestration (DynamoDB, Lambda, Fargate tasks) |
 | `config/config.toml` | OpenHands app config (LLM, sandbox) |
 | `config/sandbox-aws-policy.json` | Customizable IAM policy for sandbox |
 | `docker/patch-fix.js` | Frontend patches (URL rewriting) |
 | `docker/openresty/` | OpenResty proxy container (Fargate service) |
 | `lambda/user-config/` | User config API Lambda |
+| `lambda/sandbox-monitor/` | Sandbox idle monitor Lambda |
+| `lambda/sandbox-task-state/` | ECS task state change handler Lambda |
+| `lambda/db-bootstrap/` | Database bootstrap custom resource Lambda |
 | `lib/lambda-edge/` | Lambda@Edge handlers |
 | `test/E2E_TEST_CASES.md` | E2E test cases |
 | `docs/ARCHITECTURE.md` | Architecture deep dive |
@@ -147,7 +162,7 @@ Per-user customization stored in S3:
 - **Encrypted Secrets**: API keys with KMS envelope encryption
 - **Integrations**: GitHub, Slack with auto-MCP support
 
-Feature flag: `USER_CONFIG_ENABLED` environment variable on EC2.
+Feature flag: `USER_CONFIG_ENABLED` environment variable on Fargate app service (auto-set when KMS key exists).
 
 ## Runtime Subdomain Routing
 

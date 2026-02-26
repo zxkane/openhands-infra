@@ -6,7 +6,7 @@ This document defines the end-to-end test cases for validating the OpenHands inf
 
 - AWS CLI configured with appropriate credentials
 - Chrome browser with DevTools MCP server connected
-- Node.js 20+ installed
+- Node.js 22+ installed
 - CDK bootstrapped in deployment regions
 
 ## Important: Browser Tab Cleanup
@@ -79,7 +79,7 @@ Deploy all OpenHands CDK stacks to the target AWS region.
 
 | # | Criteria | Verification |
 |---|----------|--------------|
-| 1 | All 6 stacks deploy successfully | `cdk deploy` exits with code 0 |
+| 1 | All 10 stacks deploy successfully | `cdk deploy` exits with code 0 |
 | 2 | No CloudFormation rollbacks | Check AWS Console for stack status |
 | 3 | CloudFront distribution is deployed | `aws cloudfront get-distribution --id <dist-id>` shows "Deployed" |
 | 4 | ACM certificate is issued | `aws acm describe-certificate` shows status "ISSUED" |
