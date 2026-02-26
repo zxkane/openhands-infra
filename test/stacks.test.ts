@@ -892,6 +892,48 @@ describe('OpenHands Infrastructure Stacks', () => {
       });
     });
 
+    test('sandbox task SG has no self-referencing ingress rule', () => {
+      const stack = new SandboxStack(app, 'TestSandboxSgIsolation', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+      });
+
+      const template = Template.fromStack(stack);
+      const templateJson = template.toJSON() as Record<string, unknown>;
+      const resources = templateJson.Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
+
+      // Find the sandbox task security group
+      const sgEntries = Object.entries(resources).filter(
+        ([, r]) => r.Type === 'AWS::EC2::SecurityGroup' &&
+          (r.Properties?.GroupDescription as string)?.includes('sandbox Fargate')
+      );
+      expect(sgEntries.length).toBe(1);
+      const [sandboxSgLogicalId] = sgEntries[0];
+
+      // Check for SecurityGroupIngress resources that reference the sandbox SG as both source and target
+      const selfRefIngress = Object.entries(resources).filter(([, r]) => {
+        if (r.Type !== 'AWS::EC2::SecurityGroupIngress') return false;
+        const props = r.Properties;
+        // Both GroupId and SourceSecurityGroupId reference the same SG
+        const groupId = JSON.stringify(props?.GroupId ?? '');
+        const sourceGroupId = JSON.stringify(props?.SourceSecurityGroupId ?? '');
+        return groupId.includes(sandboxSgLogicalId) && sourceGroupId.includes(sandboxSgLogicalId);
+      });
+      expect(selfRefIngress.length).toBe(0);
+
+      // Also check inline SecurityGroupIngress in the SG resource itself
+      const sgResource = resources[sandboxSgLogicalId];
+      const inlineIngress = (sgResource.Properties?.SecurityGroupIngress ?? []) as Array<Record<string, unknown>>;
+      const selfRefInline = inlineIngress.filter((rule) => {
+        const sourceGroupId = JSON.stringify(rule.SourceSecurityGroupId ?? '');
+        return sourceGroupId.includes(sandboxSgLogicalId);
+      });
+      expect(selfRefInline.length).toBe(0);
+    });
+
     test('outputs are correctly defined', () => {
       const stack = new SandboxStack(app, 'TestSandboxStack', {
         env: testEnv,
