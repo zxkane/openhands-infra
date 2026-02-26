@@ -412,6 +412,8 @@ export class SandboxStack extends cdk.Stack {
     }));
 
     // EFS access point management for per-conversation isolation
+    // CreateAccessPoint + TagResource target the file system ARN;
+    // DeleteAccessPoint + DescribeAccessPoints target access point ARNs
     orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       sid: 'EfsAccessPointManagement',
       effect: iam.Effect.ALLOW,
@@ -421,7 +423,10 @@ export class SandboxStack extends cdk.Stack {
         'elasticfilesystem:DescribeAccessPoints',
         'elasticfilesystem:TagResource',
       ],
-      resources: [workspaceFileSystem.fileSystemArn],
+      resources: [
+        workspaceFileSystem.fileSystemArn,
+        `arn:aws:elasticfilesystem:${this.region}:${this.account}:access-point/*`,
+      ],
     }));
 
     // ECS task definition management for per-conversation access point binding
@@ -566,6 +571,7 @@ export class SandboxStack extends cdk.Stack {
     }));
 
     // EFS access point cleanup for per-conversation isolation
+    // DeleteAccessPoint + DescribeAccessPoints target access point ARNs
     idleMonitorLambda.addToRolePolicy(new iam.PolicyStatement({
       sid: 'EfsAccessPointCleanup',
       effect: iam.Effect.ALLOW,
@@ -573,7 +579,10 @@ export class SandboxStack extends cdk.Stack {
         'elasticfilesystem:DeleteAccessPoint',
         'elasticfilesystem:DescribeAccessPoints',
       ],
-      resources: [workspaceFileSystem.fileSystemArn],
+      resources: [
+        workspaceFileSystem.fileSystemArn,
+        `arn:aws:elasticfilesystem:${this.region}:${this.account}:access-point/*`,
+      ],
     }));
 
     // CloudWatch metrics permission for publishing idle stats
@@ -626,7 +635,10 @@ export class SandboxStack extends cdk.Stack {
       sid: 'EfsAccessPointCleanup',
       effect: iam.Effect.ALLOW,
       actions: ['elasticfilesystem:DeleteAccessPoint'],
-      resources: [workspaceFileSystem.fileSystemArn],
+      resources: [
+        workspaceFileSystem.fileSystemArn,
+        `arn:aws:elasticfilesystem:${this.region}:${this.account}:access-point/*`,
+      ],
     }));
 
     // EventBridge rule: ECS task stopped in sandbox cluster
