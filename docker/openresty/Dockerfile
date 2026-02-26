@@ -1,7 +1,7 @@
 # OpenResty runtime proxy
 # Routes /runtime/{conversation_id}/{port}/... to sandbox Fargate task IP:port
 # Discovers sandbox IPs via the Sandbox Orchestrator API (Cloud Map DNS)
-FROM openresty/openresty:1.25.3.1-alpine-fat
+FROM openresty/openresty:1.27.1.2-alpine-fat
 
 # Install lua-resty-http for Orchestrator API communication
 # alpine-fat image includes opm (OpenResty Package Manager)
