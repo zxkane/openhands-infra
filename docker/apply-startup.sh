@@ -214,11 +214,6 @@ else
   echo "Patch 27a: DATABASE_URL not set, skipping database migration (will happen at runtime)"
 fi
 
-# ─── Patch 30: REMOVED ────────────────────────────────────────────────────────
-# Patch 30 (patch-resume.py) previously removed user_id from start_sandbox() calls.
-# No longer needed: fork custom-v1.4.0-fargate-r2 has clean resume endpoint without user_id in start_sandbox().
-# Removed because global string replace was also stripping user_id from resume_conversation() calls.
-
 # ─── Patch 31: Fix VS Code URL for Remote sandbox mode ───────────────────────
 python3 /opt/patch-vscode-url.py
 

@@ -64,7 +64,6 @@ COPY patch-fix.js /opt/patch-fix.js
 #   - Database migration DDL
 #   - Critical patch verification
 COPY apply-startup.sh /opt/apply-startup.sh
-COPY patch-resume.py /opt/patch-resume.py
 COPY patch-vscode-url.py /opt/patch-vscode-url.py
 COPY patch-exposed-urls.py /opt/patch-exposed-urls.py
 
