@@ -52,7 +52,7 @@ RUNTIME_TESTS=(
 )
 
 ECS_PERSISTENCE_TESTS=(
-    "TC-014:Resume After ECS Task Recycling"
+    "TC-014:Conversation Resume After Sandbox Stop"
     "TC-021:Secrets Persist After ECS Task Recycling"
 )
 

@@ -48,7 +48,7 @@ After (current):
 Upstream file modifications live as clean per-feature git commits in the fork:
 
 - **Branch**: `custom/v1.4.0-fargate` (branched from tag `1.4.0`)
-- **Tag**: `custom-v1.4.0-fargate-r1` (referenced by `download-fork-patches.sh`)
+- **Tag**: `custom-v1.4.0-fargate-r2` (referenced by `download-fork-patches.sh`)
 - **Files**: 9 upstream Python files with ~13 feature commits
 
 | # | Feature | Upstream Files |
@@ -66,6 +66,7 @@ Upstream file modifications live as clean per-feature git commits in the fork:
 | 11 | Skip invalid secrets during resume | `secrets.py` |
 | 12 | Conversation isolation and UUID fix | `config.py`, `sql_event_callback_service.py` |
 | 13 | Secrets injection and runtime env vars | `live_status_app_conversation_service.py`, `docker_sandbox_service.py` |
+| 14 | Resume conversation agent-server registration | `live_status_app_conversation_service.py`, `app_conversation_router.py` |
 
 ### Runtime Patches (`apply-startup.sh`)
 

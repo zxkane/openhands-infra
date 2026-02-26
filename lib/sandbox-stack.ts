@@ -306,6 +306,10 @@ export class SandboxStack extends cdk.Stack {
           'mkdir -p /mnt/efs/$CID/project;' +
           'rm -rf /workspace/project;' +
           'ln -s /mnt/efs/$CID/project /workspace/project;' +
+          // Persist agent-server conversation state (base_state.json, events/) on EFS
+          // so LLM retains conversation history across sandbox task restarts.
+          // SDK stores at: <OH_CONVERSATIONS_PATH>/<conversation_id_hex>/
+          'export OH_CONVERSATIONS_PATH=/mnt/efs;' +
         'else ' +
           'mkdir -p /workspace/project;' +
         'fi;' +

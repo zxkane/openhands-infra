@@ -6,18 +6,20 @@
 #
 # Environment variables:
 #   FORK_REPO  - GitHub org/repo (default: zxkane/openhands)
-#   FORK_REF   - Branch or tag   (default: custom-v1.4.0-fargate-r1)
+#   FORK_REF   - Branch or tag   (default: custom-v1.4.0-fargate-r2)
 set -e
 
 FORK_REPO="${FORK_REPO:-zxkane/openhands}"
-# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r1)
+# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r2)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
-FORK_REF="${FORK_REF:-26b639fc02c7f5a664da1bf83f9bf2b3f8da8825}"
+# r2: Added resume_conversation() for agent-server registration on conversation resume
+FORK_REF="${FORK_REF:-03f3ff7c817a521b651695be095d4c74c47f0e4c}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
-# 9 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
+# 10 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
 FILES="
 openhands/app_server/sandbox/remote_sandbox_service.py
+openhands/app_server/app_conversation/app_conversation_service.py
 openhands/app_server/app_conversation/live_status_app_conversation_service.py
 openhands/app_server/app_conversation/app_conversation_router.py
 openhands/app_server/event_callback/webhook_router.py

@@ -214,9 +214,6 @@ else
   echo "Patch 27a: DATABASE_URL not set, skipping database migration (will happen at runtime)"
 fi
 
-# ─── Patch 30: Fix resume flow for Fargate sandboxes ─────────────────────────
-python3 /opt/patch-resume.py
-
 # ─── Patch 31: Fix VS Code URL for Remote sandbox mode ───────────────────────
 python3 /opt/patch-vscode-url.py
 

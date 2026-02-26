@@ -25,9 +25,10 @@ RUN pip install --no-cache-dir boto3
 # Replaces the old apply-patch.sh (2000+ line regex patching at startup).
 # The fork (zxkane/openhands) has clean per-feature commits against the release tag.
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
-# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r1)
+# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r2)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
-ARG FORK_REF=26b639fc02c7f5a664da1bf83f9bf2b3f8da8825
+# r2: Added resume_conversation() for agent-server registration on conversation resume
+ARG FORK_REF=03f3ff7c817a521b651695be095d4c74c47f0e4c
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
@@ -63,7 +64,6 @@ COPY patch-fix.js /opt/patch-fix.js
 #   - Database migration DDL
 #   - Critical patch verification
 COPY apply-startup.sh /opt/apply-startup.sh
-COPY patch-resume.py /opt/patch-resume.py
 COPY patch-vscode-url.py /opt/patch-vscode-url.py
 COPY patch-exposed-urls.py /opt/patch-exposed-urls.py
 
