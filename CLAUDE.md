@@ -121,10 +121,6 @@ Each sandbox mounts an EFS access point rooted at `/sandbox-workspace/<conversat
 
 Must include **both** file-system and access-point ARNs in IAM policies.
 
-### Known Limitation: Sandbox S3 Access
-
-When `sandboxAwsAccess=true`, sandbox task role has `Action: *` (minus deny list). This means sandbox can potentially read/write S3 events — LLM could see tampered history on resume that differs from what the UI shows (UI reads from S3 via app-server). This is a pre-existing issue, not introduced by per-conversation EFS isolation.
-
 ## Key Files
 
 | File | Purpose |
