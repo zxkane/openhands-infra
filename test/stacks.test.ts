@@ -1046,6 +1046,7 @@ describe('OpenHands Infrastructure Stacks', () => {
                 'ecs:RegisterTaskDefinition',
                 'ecs:DescribeTaskDefinition',
                 'ecs:DeregisterTaskDefinition',
+                'ecs:TagResource',
               ],
             }),
           ]),

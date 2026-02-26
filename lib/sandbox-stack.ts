@@ -439,6 +439,7 @@ export class SandboxStack extends cdk.Stack {
         'ecs:RegisterTaskDefinition',
         'ecs:DescribeTaskDefinition',
         'ecs:DeregisterTaskDefinition',
+        'ecs:TagResource',
       ],
       resources: ['*'],
     }));
