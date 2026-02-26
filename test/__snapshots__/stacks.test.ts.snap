@@ -1326,7 +1326,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "AGENT_SERVER_IMAGE_TAG",
-                "Value": "a8cb2d3755616f2e3741f6072fd3230fa7b9f8ac0e50fcf78474a053625d0da5",
+                "Value": "c926a3a08e7cb0ca2099776a93d31fa69ada89c1a9140f4a362b00f7054229c4",
               },
               {
                 "Name": "AGENT_ENABLE_BROWSING",

@@ -208,6 +208,13 @@ RUN mkdir -p /workspace/project && \
 USER openhands
 WORKDIR /workspace
 
+# Trust all git directories regardless of ownership.
+# After sandbox resume, EFS-mounted workspace directories may have .git owned
+# by a different user (e.g., 'pn' from base image vs 'openhands'), causing git
+# to reject operations with "detected dubious ownership". This wildcard config
+# avoids 500 errors on /api/git/changes/ after conversation resume.
+RUN git config --global --add safe.directory '*'
+
 # Default command
 ENTRYPOINT ["/sbin/docker-init", "--", "/usr/local/bin/openhands-agent-server"]
 CMD ["--port", "8000"]
