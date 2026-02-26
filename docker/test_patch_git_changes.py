@@ -39,7 +39,9 @@ PATCHED_GIT_CHANGES_SNIPPET = '''\
         changed_files = run(
             f'git --no-pager diff --name-status {ref}', repo_dir
         ).splitlines()
-    except RuntimeError:
+    except RuntimeError as e:
+        import logging
+        logging.warning(f'Git diff failed in get_changes_in_repo(): {e}')
         return []
 '''
 
@@ -90,7 +92,8 @@ class TestPatchGitChanges:
         with open(fake_git_changes, 'r') as f:
             content = f.read()
 
-        assert "except RuntimeError:" in content
+        assert "except RuntimeError as e:" in content
+        assert "logging.warning" in content
         assert "return []" in content
         assert "git object database may be corrupted (Patch 33)" in content
 
@@ -139,5 +142,6 @@ class TestPatchGitChanges:
 
         # The try block should wrap the run() call
         assert "    try:\n        changed_files = run(" in content
-        # The except should return empty list
-        assert "    except RuntimeError:\n        return []" in content
+        # The except should log and return empty list
+        assert "    except RuntimeError as e:" in content
+        assert "logging.warning" in content

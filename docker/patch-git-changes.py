@@ -34,7 +34,9 @@ NEW_PATTERN = """\
         changed_files = run(
             f'git --no-pager diff --name-status {ref}', repo_dir
         ).splitlines()
-    except RuntimeError:
+    except RuntimeError as e:
+        import logging
+        logging.warning(f'Git diff failed in get_changes_in_repo(): {e}')
         return []"""
 
 if OLD_PATTERN in content:
