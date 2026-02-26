@@ -8,6 +8,7 @@
 import { Logger } from '@aws-lambda-powertools/logger';
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { ECSClient, StopTaskCommand } from '@aws-sdk/client-ecs';
+import { EFSClient, DeleteAccessPointCommand } from '@aws-sdk/client-efs';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 
 const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME || 'openhands-sandbox-registry';
@@ -22,6 +23,7 @@ const logger = new Logger({ serviceName: 'sandbox-idle-monitor' });
 const dynamodb = new DynamoDBClient({ region: REGION });
 const ecs = new ECSClient({ region: REGION });
 const cloudwatch = new CloudWatchClient({ region: REGION });
+const efsClient = new EFSClient({ region: REGION });
 
 interface SandboxRecord {
   conversation_id: string;
@@ -29,6 +31,7 @@ interface SandboxRecord {
   task_arn: string;
   status: string;
   last_activity_at: number;
+  access_point_id?: string;
 }
 
 async function queryIdleSandboxes(cutoffTimestamp: number): Promise<SandboxRecord[]> {
@@ -51,6 +54,7 @@ async function queryIdleSandboxes(cutoffTimestamp: number): Promise<SandboxRecor
     task_arn: item.task_arn?.S || '',
     status: item.status?.S || '',
     last_activity_at: parseInt(item.last_activity_at?.N || '0', 10),
+    access_point_id: item.access_point_id?.S || undefined,
   }));
 }
 
@@ -131,6 +135,17 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
     try {
       if (sandbox.task_arn) {
         await stopTask(sandbox.task_arn, `Idle timeout (${idleMinutes} minutes)`);
+      }
+      // Clean up per-conversation EFS access point
+      if (sandbox.access_point_id) {
+        try {
+          await efsClient.send(new DeleteAccessPointCommand({ AccessPointId: sandbox.access_point_id }));
+          logger.info('Deleted access point', { accessPointId: sandbox.access_point_id });
+        } catch (apErr: any) {
+          if (apErr.name !== 'AccessPointNotFound') {
+            logger.warn('Failed to delete access point', { accessPointId: sandbox.access_point_id, error: String(apErr) });
+          }
+        }
       }
       await updateStatus(sandbox.conversation_id, 'PAUSED');
       stoppedCount++;

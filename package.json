@@ -19,6 +19,7 @@
     "@aws-sdk/client-cloudwatch": "^3.991.0",
     "@aws-sdk/client-dynamodb": "^3.991.0",
     "@aws-sdk/client-ecs": "^3.991.0",
+    "@aws-sdk/client-efs": "^3.991.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.19.3",
     "@types/pg": "^8.15.5",

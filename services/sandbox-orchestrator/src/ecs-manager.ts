@@ -5,6 +5,9 @@ import {
   RunTaskCommand,
   StopTaskCommand,
   DescribeTasksCommand,
+  DescribeTaskDefinitionCommand,
+  RegisterTaskDefinitionCommand,
+  DeregisterTaskDefinitionCommand,
   ListTasksCommand,
 } from '@aws-sdk/client-ecs';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
@@ -46,6 +49,7 @@ export class EcsManager {
     image: string;
     environment: Record<string, string>;
     sessionApiKey: string;
+    taskDefinitionOverride?: string;
   }): Promise<RunTaskResult> {
     const envOverrides = Object.entries(opts.environment).map(([name, value]) => ({
       name,
@@ -60,7 +64,7 @@ export class EcsManager {
     const response = await this.ecs.send(
       new RunTaskCommand({
         cluster: this.clusterArn,
-        taskDefinition: this.taskDefinitionArn,
+        taskDefinition: opts.taskDefinitionOverride || this.taskDefinitionArn,
         launchType: 'FARGATE',
         count: 1,
         networkConfiguration: {
@@ -190,6 +194,87 @@ export class EcsManager {
       results.push(...((response.tasks ?? []) as EcsTaskDescription[]));
     }
     return results;
+  }
+
+  /**
+   * Register a new task definition revision with a per-conversation EFS access point.
+   * Copies all properties from the base task definition, replacing only the access point ID
+   * in the EFS volume configuration.
+   */
+  async registerTaskDefinitionWithAccessPoint(
+    accessPointId: string,
+    fileSystemId: string,
+  ): Promise<string> {
+    // Describe the latest revision of the base task definition
+    const describeResponse = await this.ecs.send(
+      new DescribeTaskDefinitionCommand({
+        taskDefinition: this.taskDefinitionArn,
+      }),
+    );
+    const baseDef = describeResponse.taskDefinition;
+    if (!baseDef) {
+      throw new Error(`Task definition not found: ${this.taskDefinitionArn}`);
+    }
+
+    // Deep-copy volumes and replace the access point for the workspace volume
+    const volumes = (baseDef.volumes ?? []).map((vol) => {
+      if (vol.name === 'workspace' && vol.efsVolumeConfiguration) {
+        return {
+          ...vol,
+          efsVolumeConfiguration: {
+            ...vol.efsVolumeConfiguration,
+            fileSystemId,
+            authorizationConfig: {
+              ...vol.efsVolumeConfiguration.authorizationConfig,
+              accessPointId,
+            },
+          },
+        };
+      }
+      return vol;
+    });
+
+    const registerResponse = await this.ecs.send(
+      new RegisterTaskDefinitionCommand({
+        family: baseDef.family,
+        taskRoleArn: baseDef.taskRoleArn,
+        executionRoleArn: baseDef.executionRoleArn,
+        networkMode: baseDef.networkMode,
+        containerDefinitions: baseDef.containerDefinitions,
+        volumes,
+        cpu: baseDef.cpu,
+        memory: baseDef.memory,
+        requiresCompatibilities: baseDef.requiresCompatibilities as any,
+        runtimePlatform: baseDef.runtimePlatform,
+        tags: [
+          { key: 'access_point_id', value: accessPointId },
+          { key: 'ManagedBy', value: 'sandbox-orchestrator' },
+        ],
+      }),
+    );
+
+    const arn = registerResponse.taskDefinition?.taskDefinitionArn;
+    if (!arn) {
+      throw new Error('RegisterTaskDefinition returned no ARN');
+    }
+    return arn;
+  }
+
+  /** Mark a task definition revision as INACTIVE. Handles NotFound gracefully. */
+  async deregisterTaskDefinition(taskDefinitionArn: string): Promise<void> {
+    try {
+      await this.ecs.send(
+        new DeregisterTaskDefinitionCommand({
+          taskDefinition: taskDefinitionArn,
+        }),
+      );
+    } catch (err: any) {
+      // Ignore if already inactive or not found
+      if (err.name === 'InvalidParameterException' || err.name === 'ClientException') {
+        return;
+      }
+      throw err;
+    }
   }
 
   /** Extract private IP from task's ENI attachment. */

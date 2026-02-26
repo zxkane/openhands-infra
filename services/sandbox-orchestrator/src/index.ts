@@ -1,7 +1,7 @@
 /** Sandbox Orchestrator - Fastify service implementing the remote runtime HTTP API.
  *
- * Translates OpenHands RemoteSandboxService HTTP calls to ECS Fargate operations.
- * Uses ECS Service for warm pool - auto-replenishment is handled by ECS, not custom code.
+ * Translates OpenHands RemoteSandboxService HTTP calls to ECS Fargate operations
+ * with per-conversation EFS workspace isolation.
  * API format matches upstream expectations in remote_sandbox_service.py.
  */
 
@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { DynamoDBStore } from './dynamodb-store.js';
 import { EcsManager } from './ecs-manager.js';
-// warm-pool-sync removed — all sandboxes use RunTask for per-conversation EFS workspace isolation
+import { EfsManager } from './efs-manager.js';
 import type {
   SandboxRecord,
   SandboxStatus,
@@ -23,6 +23,9 @@ import type {
 const app = Fastify({ logger: true });
 
 const store = new DynamoDBStore(config.registryTableName, config.region);
+const efsManager = config.efsFileSystemId
+  ? new EfsManager({ fileSystemId: config.efsFileSystemId, region: config.region })
+  : null;
 const ecs = new EcsManager({
   clusterArn: config.ecsClusterArn,
   taskDefinitionArn: config.taskDefinitionFamily,
@@ -109,6 +112,50 @@ async function verifyRunningRecords(records: SandboxRecord[]): Promise<SandboxRe
   return result;
 }
 
+/** Clean up EFS access point and task definition. Silently ignores failures. */
+async function cleanupEfsResources(accessPointId?: string, taskDefinitionArn?: string): Promise<void> {
+  if (accessPointId && efsManager) {
+    await efsManager.deleteAccessPoint(accessPointId).catch((err) => {
+      app.log.warn(`Failed to delete access point ${accessPointId}: ${err}`);
+    });
+  }
+  if (taskDefinitionArn) {
+    await ecs.deregisterTaskDefinition(taskDefinitionArn).catch((err) => {
+      app.log.warn(`Failed to deregister task def ${taskDefinitionArn}: ${err}`);
+    });
+  }
+}
+
+/**
+ * Create a per-conversation EFS access point and register a task definition
+ * that binds to it. Returns the IDs on success, or cleans up partial resources
+ * and returns null on failure.
+ */
+async function setupEfsIsolation(
+  conversationId: string,
+  logger: { info: (msg: string) => void; error: (msg: string) => void },
+): Promise<{ accessPointId: string; taskDefinitionArn: string } | null> {
+  if (!efsManager || !config.efsFileSystemId) return null;
+
+  let accessPointId: string | undefined;
+  let taskDefinitionArn: string | undefined;
+
+  try {
+    accessPointId = await efsManager.createAccessPoint(conversationId);
+    await efsManager.waitForAvailable(accessPointId);
+    taskDefinitionArn = await ecs.registerTaskDefinitionWithAccessPoint(
+      accessPointId,
+      config.efsFileSystemId,
+    );
+    logger.info(`Created access point ${accessPointId} and task def ${taskDefinitionArn}`);
+    return { accessPointId, taskDefinitionArn };
+  } catch (err) {
+    logger.error(`Failed to set up per-conversation EFS: ${err}`);
+    await cleanupEfsResources(accessPointId, taskDefinitionArn);
+    return null;
+  }
+}
+
 function recordToRuntime(record: SandboxRecord): RuntimeInfo {
   const url = record.task_ip && record.status === 'RUNNING'
     ? buildSandboxUrl(record.task_ip, record.agent_server_port)
@@ -156,9 +203,14 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     return recordToRuntime(existing);
   }
 
-  // Launch a new Fargate task with correct CONVERSATION_ID for per-conversation EFS workspace
+  // Per-conversation EFS isolation: create access point + register task definition
   request.log.info(`Launching sandbox task for session=${session_id}`);
   const sessionApiKey = randomUUID();
+
+  const efsSetup = await setupEfsIsolation(session_id, request.log);
+  if (efsManager && config.efsFileSystemId && !efsSetup) {
+    return reply.code(503).send({ detail: 'Failed to start sandbox' });
+  }
 
   let result;
   try {
@@ -168,9 +220,11 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
       image: sandboxImage,
       environment: env,
       sessionApiKey,
+      taskDefinitionOverride: efsSetup?.taskDefinitionArn,
     });
   } catch (err) {
     request.log.error(`Failed to start sandbox: ${err}`);
+    await cleanupEfsResources(efsSetup?.accessPointId, efsSetup?.taskDefinitionArn);
     return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
 
@@ -191,6 +245,8 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     sandbox_spec_id: sandboxImage,
     last_activity_at: 0,
     created_at: 0,
+    access_point_id: efsSetup?.accessPointId,
+    task_definition_arn: efsSetup?.taskDefinitionArn,
   };
   await store.putSandbox(record);
 
@@ -208,6 +264,7 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
         } catch {
           // ignore
         }
+        await cleanupEfsResources(efsSetup?.accessPointId, efsSetup?.taskDefinitionArn);
         await store.updateStatus(session_id, 'ERROR');
       }
     })().catch((err) => app.log.error(`Background sandbox setup failed: ${err}`));
@@ -235,6 +292,7 @@ app.post<{ Body: RuntimeIdRequest }>('/stop', async (request, reply) => {
       request.log.error(`Failed to stop: ${err}`);
     }
   }
+  await cleanupEfsResources(record.access_point_id, record.task_definition_arn);
   await store.updateStatus(record.conversation_id, 'STOPPED');
   return { status: 'stopped', session_id: record.conversation_id };
 });
@@ -255,6 +313,7 @@ app.post<{ Body: RuntimeIdRequest }>('/pause', async (request, reply) => {
       request.log.error(`Failed to pause: ${err}`);
     }
   }
+  await cleanupEfsResources(record.access_point_id, record.task_definition_arn);
   await store.updateStatus(record.conversation_id, 'PAUSED');
   return { status: 'paused', session_id: record.conversation_id };
 });
@@ -278,6 +337,13 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
   const sandboxImage = record.sandbox_spec_id || config.sandboxImage;
   const sessionApiKey = record.session_api_key || randomUUID();
 
+  // Per-conversation EFS isolation: create new access point for resumed session
+  const efsSetup = await setupEfsIsolation(record.conversation_id, request.log);
+  if (efsManager && config.efsFileSystemId && !efsSetup) {
+    await store.updateStatus(record.conversation_id, 'PAUSED').catch(() => {});
+    return reply.code(503).send({ detail: 'Failed to start sandbox' });
+  }
+
   let result;
   try {
     result = await ecs.runTask({
@@ -286,9 +352,10 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
       image: sandboxImage,
       environment: {},
       sessionApiKey,
+      taskDefinitionOverride: efsSetup?.taskDefinitionArn,
     });
   } catch (err) {
-    // Revert status so subsequent resume attempts aren't blocked
+    await cleanupEfsResources(efsSetup?.accessPointId, efsSetup?.taskDefinitionArn);
     await store.updateStatus(record.conversation_id, 'PAUSED').catch(() => {});
     return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
@@ -301,10 +368,15 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
     } catch {
       // ignore
     }
+    await cleanupEfsResources(efsSetup?.accessPointId, efsSetup?.taskDefinitionArn);
+    await store.updateStatus(record.conversation_id, 'PAUSED').catch(() => {});
     return reply.code(503).send({ detail: 'Sandbox task failed to resume' });
   }
 
-  await store.updateStatus(record.conversation_id, 'RUNNING', taskIp, taskArn);
+  await store.updateStatus(
+    record.conversation_id, 'RUNNING', taskIp, taskArn,
+    efsSetup?.accessPointId, efsSetup?.taskDefinitionArn,
+  );
   const updated = await store.getSandbox(record.conversation_id);
   return updated ? recordToRuntime(updated) : { status: 'error' };
 });
@@ -392,4 +464,4 @@ main().catch((err) => {
   process.exit(1);
 });
 
-export { app, store, ecs };
+export { app, store, ecs, efsManager };

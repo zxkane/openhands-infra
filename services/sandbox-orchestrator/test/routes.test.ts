@@ -26,7 +26,19 @@ jest.unstable_mockModule('@aws-sdk/client-ecs', () => ({
   RunTaskCommand: jest.fn().mockImplementation((input: any) => ({ input })),
   StopTaskCommand: jest.fn().mockImplementation((input: any) => ({ input })),
   DescribeTasksCommand: jest.fn().mockImplementation((input: any) => ({ input })),
+  DescribeTaskDefinitionCommand: jest.fn().mockImplementation((input: any) => ({ input })),
+  RegisterTaskDefinitionCommand: jest.fn().mockImplementation((input: any) => ({ input })),
+  DeregisterTaskDefinitionCommand: jest.fn().mockImplementation((input: any) => ({ input })),
   ListTasksCommand: jest.fn().mockImplementation((input: any) => ({ input })),
+}));
+
+const mockEfsSend = jest.fn<any>();
+
+jest.unstable_mockModule('@aws-sdk/client-efs', () => ({
+  EFSClient: jest.fn().mockImplementation(() => ({ send: mockEfsSend })),
+  CreateAccessPointCommand: jest.fn().mockImplementation((input: any) => ({ input })),
+  DeleteAccessPointCommand: jest.fn().mockImplementation((input: any) => ({ input })),
+  DescribeAccessPointsCommand: jest.fn().mockImplementation((input: any) => ({ input })),
 }));
 
 jest.unstable_mockModule('@smithy/node-http-handler', () => ({
@@ -129,6 +141,11 @@ describe('API Routes', () => {
       },
     });
 
+    // verifyRunningRecords calls describeTasks for RUNNING records
+    mockEcsSend.mockResolvedValueOnce({
+      tasks: [{ taskArn: 'arn:task', lastStatus: 'RUNNING' }],
+    });
+
     const response = await app.inject({
       method: 'GET',
       url: '/sessions/conv-1',
@@ -161,6 +178,11 @@ describe('API Routes', () => {
         ],
       },
       UnprocessedKeys: {},
+    });
+
+    // verifyRunningRecords calls describeTasks for RUNNING records
+    mockEcsSend.mockResolvedValueOnce({
+      tasks: [{ taskArn: 'arn:task', lastStatus: 'RUNNING' }],
     });
 
     const response = await app.inject({

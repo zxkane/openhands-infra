@@ -170,4 +170,6 @@ export interface SandboxStackOutput {
   sandboxExecutionRoleArn: string;
   /** Sandbox task role ARN (for iam:PassRole) */
   sandboxTaskRoleArn: string;
+  /** EFS file system ID for workspace persistence (used by orchestrator for per-conversation access points) */
+  efsFileSystemId: string;
 }

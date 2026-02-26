@@ -287,26 +287,22 @@ export class SandboxStack extends cdk.Stack {
       essential: true,
       // Override entrypoint: skip /sbin/docker-init (not available in Fargate)
       // Fargate uses initProcessEnabled instead for PID 1 signal handling
-      // Per-conversation workspace isolation:
-      //   1. CONVERSATION_ID is injected by orchestrator via container override
-      //   2. Create /mnt/efs/<CONVERSATION_ID>/ on EFS (persists across task restarts)
-      //   3. Symlink /workspace → /mnt/efs/<CONVERSATION_ID>/ for agent-server
-      //   4. If CONVERSATION_ID not set (warm pool), use a temp workspace
+      // Per-conversation EFS isolation via dynamic access points:
+      //   1. Orchestrator creates EFS access point at /sandbox-workspace/<CID>
+      //   2. Task definition uses per-conversation access point (container sees /mnt/efs as CID root)
+      //   3. Symlink /workspace/project → /mnt/efs/project for agent code persistence
+      //   4. If EFS not mounted (warm pool fallback), use local workspace
       entryPoint: ['/bin/sh', '-c'],
       command: [
-        // Sanitize CONVERSATION_ID to alphanumeric/hyphen only (defense-in-depth against injection)
-        // Per-conversation workspace isolation:
-        // - /workspace is owned by openhands user (can't be removed from root /)
-        // - Redirect /workspace/project → /mnt/efs/<CID>/project (agent code persists on EFS)
-        // - /workspace itself stays as regular dir (git metadata is ephemeral, OK)
-        'CID=$(echo "$CONVERSATION_ID" | tr -cd "a-zA-Z0-9-");' +
-        'if [ -n "$CID" ] && mountpoint -q /mnt/efs 2>/dev/null; then ' +
-          'mkdir -p /mnt/efs/$CID/project;' +
+        // Per-conversation EFS isolation via dynamic access points:
+        // - Each sandbox mounts an EFS access point rooted at /sandbox-workspace/<CID>
+        // - /mnt/efs IS the conversation directory — no traversal to other conversations
+        // - Create /mnt/efs/project for agent code persistence on EFS
+        // - OH_CONVERSATIONS_PATH=/mnt/efs persists conversation state across restarts
+        'if mountpoint -q /mnt/efs 2>/dev/null; then ' +
+          'mkdir -p /mnt/efs/project;' +
           'rm -rf /workspace/project;' +
-          'ln -s /mnt/efs/$CID/project /workspace/project;' +
-          // Persist agent-server conversation state (base_state.json, events/) on EFS
-          // so LLM retains conversation history across sandbox task restarts.
-          // SDK stores at: <OH_CONVERSATIONS_PATH>/<conversation_id_hex>/
+          'ln -s /mnt/efs/project /workspace/project;' +
           'export OH_CONVERSATIONS_PATH=/mnt/efs;' +
         'else ' +
           'mkdir -p /workspace/project;' +
@@ -342,7 +338,7 @@ export class SandboxStack extends cdk.Stack {
       },
     });
 
-    // Mount EFS at /mnt/efs — entrypoint creates /mnt/efs/<CONVERSATION_ID>/ → /workspace
+    // Mount EFS at /mnt/efs — per-conversation access point roots to /sandbox-workspace/<CID>
     agentServerContainer.addMountPoints({
       sourceVolume: 'workspace',
       containerPath: '/mnt/efs',
@@ -404,13 +400,41 @@ export class SandboxStack extends cdk.Stack {
       },
     });
 
-    // Orchestrator task role needs ECS + DynamoDB permissions
-    // RunTask scoped to specific task definition; Stop/Describe scoped to cluster tasks
+    // Orchestrator task role needs ECS + DynamoDB + EFS permissions
+    // RunTask scoped to sandbox task definition family (wildcard for dynamic revisions)
     orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       sid: 'EcsRunSandboxTask',
       effect: iam.Effect.ALLOW,
       actions: ['ecs:RunTask'],
-      resources: [sandboxTaskDefinition.taskDefinitionArn],
+      resources: [
+        `arn:aws:ecs:${this.region}:${this.account}:task-definition/openhands-sandbox:*`,
+      ],
+    }));
+
+    // EFS access point management for per-conversation isolation
+    orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'EfsAccessPointManagement',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'elasticfilesystem:CreateAccessPoint',
+        'elasticfilesystem:DeleteAccessPoint',
+        'elasticfilesystem:DescribeAccessPoints',
+      ],
+      resources: [workspaceFileSystem.fileSystemArn],
+    }));
+
+    // ECS task definition management for per-conversation access point binding
+    // resources: ['*'] is required — these ECS actions do not support resource-level permissions
+    // (AWS limitation). Blast radius is limited by iam:PassRole scoped to sandbox roles only.
+    orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'EcsTaskDefinitionManagement',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ecs:RegisterTaskDefinition',
+        'ecs:DescribeTaskDefinition',
+        'ecs:DeregisterTaskDefinition',
+      ],
+      resources: ['*'],
     }));
 
     orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
@@ -475,6 +499,7 @@ export class SandboxStack extends cdk.Stack {
         AWS_DEFAULT_REGION: config.region,
         SANDBOX_IMAGE: '', // Set by ComputeStack via CDK output
         WARM_POOL_SERVICE_NAME: warmPoolService.serviceName,
+        EFS_FILE_SYSTEM_ID: workspaceFileSystem.fileSystemId,
       },
     });
 
@@ -539,6 +564,17 @@ export class SandboxStack extends cdk.Stack {
       },
     }));
 
+    // EFS access point cleanup for per-conversation isolation
+    idleMonitorLambda.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'EfsAccessPointCleanup',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'elasticfilesystem:DeleteAccessPoint',
+        'elasticfilesystem:DescribeAccessPoints',
+      ],
+      resources: [workspaceFileSystem.fileSystemArn],
+    }));
+
     // CloudWatch metrics permission for publishing idle stats
     idleMonitorLambda.addToRolePolicy(new iam.PolicyStatement({
       sid: 'CloudWatchMetrics',
@@ -583,6 +619,14 @@ export class SandboxStack extends cdk.Stack {
     });
 
     registryTable.grantReadWriteData(taskStateHandler);
+
+    // EFS access point cleanup for per-conversation isolation
+    taskStateHandler.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'EfsAccessPointCleanup',
+      effect: iam.Effect.ALLOW,
+      actions: ['elasticfilesystem:DeleteAccessPoint'],
+      resources: [workspaceFileSystem.fileSystemArn],
+    }));
 
     // EventBridge rule: ECS task stopped in sandbox cluster
     new events.Rule(this, 'TaskStateChangeRule', {
@@ -637,6 +681,7 @@ export class SandboxStack extends cdk.Stack {
       orchestratorImageUri: orchestratorImage.imageUri,
       sandboxExecutionRoleArn: sandboxExecutionRole.roleArn,
       sandboxTaskRoleArn: sandboxTaskRole.roleArn,
+      efsFileSystemId: workspaceFileSystem.fileSystemId,
     };
 
     new cdk.CfnOutput(this, 'ClusterArn', {
