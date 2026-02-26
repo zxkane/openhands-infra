@@ -124,12 +124,10 @@ export class SandboxStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    // Allow inbound from sandbox tasks to other sandbox tasks (inter-sandbox)
-    sandboxTaskSg.addIngressRule(
-      sandboxTaskSg,
-      ec2.Port.tcpRange(1, 65535),
-      'Allow inter-sandbox communication'
-    );
+    // NOTE: No self-referencing ingress rule — sandbox tasks are intentionally
+    // isolated from each other. Only the app service (via appServiceSg, added in
+    // ComputeStack) can reach sandbox tasks. This prevents cross-sandbox attacks
+    // (reading other users' code, accessing other agent-servers, etc.).
 
     // NOTE: App service ↔ sandbox SG rules (ingress + egress) are added in ComputeStack
     // to avoid cyclic cross-stack dependency between SecurityStack and SandboxStack

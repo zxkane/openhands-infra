@@ -1478,6 +1478,7 @@ Use this checklist to track test execution:
 | TC-020 | Settings Pages User Isolation | [x] | User-scoped S3 storage enabled via S3SettingsStore |
 | TC-022 | Conversation List User Isolation | [ ] | Multi-tenant DB isolation (Patch 27) |
 | TC-021 | Secrets Re-injection After ECS Task Recycling | [ ] | Patch 22/23/28/29: secrets re-injected into resumed sandbox |
+| TC-025 | Cross-Sandbox Network Isolation | [ ] | Sandbox tasks cannot reach each other (SG hardening) |
 
 ---
 
@@ -3013,3 +3014,115 @@ Verify that sandbox Fargate tasks are automatically stopped after the configured
 | Staging (`test.*`) | 10 minutes | `--context idleTimeoutMinutes=<N>` |
 | Production | 30 minutes | `--context idleTimeoutMinutes=<N>` |
 
+---
+
+## TC-025: Verify Cross-Sandbox Network Isolation
+
+### Description
+Verify that sandbox Fargate tasks are network-isolated from each other. Sandbox A must not be able to reach Sandbox B on any port (agent-server 8000, user apps 5000, etc.). Only the app service (via `appServiceSg`) should be able to reach sandbox tasks.
+
+This validates the security hardening that removed the self-referencing `sandboxTaskSg` ingress rule, preventing cross-sandbox attacks such as reading other users' code or conversations.
+
+### Prerequisites
+- Infrastructure deployed with sandbox orchestrator
+- Two Cognito user accounts (or one account creating two conversations)
+- `jq` installed for JSON parsing
+
+### Steps
+
+1. Start Conversation A and record its sandbox task IP
+   ```javascript
+   // Create new conversation via UI (TC-005 flow)
+   // Wait for "Waiting for task" status
+   ```
+
+   ```bash
+   # Get Conversation A's task IP from DynamoDB
+   CONV_A="<conversation-id-A>"
+   TASK_A_ARN=$(aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_A\"}}" \
+     --region $DEPLOY_REGION \
+     --query 'Item.task_arn.S' --output text)
+
+   TASK_A_IP=$(aws ecs describe-tasks \
+     --cluster <cluster> \
+     --tasks "$TASK_A_ARN" \
+     --region $DEPLOY_REGION \
+     --query 'tasks[0].attachments[0].details[?name==`privateIPv4Address`].value' --output text)
+   echo "Sandbox A IP: $TASK_A_IP"
+   ```
+
+2. Start Conversation B and record its sandbox task IP
+   ```javascript
+   // Create another new conversation via UI
+   // Wait for "Waiting for task" status
+   ```
+
+   ```bash
+   # Get Conversation B's task IP from DynamoDB
+   CONV_B="<conversation-id-B>"
+   TASK_B_ARN=$(aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_B\"}}" \
+     --region $DEPLOY_REGION \
+     --query 'Item.task_arn.S' --output text)
+
+   TASK_B_IP=$(aws ecs describe-tasks \
+     --cluster <cluster> \
+     --tasks "$TASK_B_ARN" \
+     --region $DEPLOY_REGION \
+     --query 'tasks[0].attachments[0].details[?name==`privateIPv4Address`].value' --output text)
+   echo "Sandbox B IP: $TASK_B_IP"
+   ```
+
+3. From Conversation A, attempt to reach Sandbox B's agent-server (port 8000)
+   ```javascript
+   // In Conversation A's chat, ask the agent:
+   // "Run this command: curl -s --connect-timeout 5 http://<Sandbox-B-IP>:8000/alive"
+   // Expected: connection timeout or refused (NOT a successful response)
+   ```
+
+4. From Conversation A, attempt to reach Sandbox B on other ports
+   ```javascript
+   // "Run: curl -s --connect-timeout 5 http://<Sandbox-B-IP>:5000/"
+   // Expected: connection timeout or refused
+
+   // "Run: curl -s --connect-timeout 5 http://<Sandbox-B-IP>:3000/"
+   // Expected: connection timeout or refused
+   ```
+
+5. Verify both sandboxes still work normally via app service
+   ```javascript
+   // In Conversation A, send a normal task: "echo hello"
+   // Expected: agent responds successfully
+
+   // In Conversation B, send a normal task: "echo world"
+   // Expected: agent responds successfully
+   ```
+
+6. Verify security group rules (infrastructure validation)
+   ```bash
+   SG_ID=$(aws cloudformation describe-stacks \
+     --stack-name OpenHands-Sandbox \
+     --region $DEPLOY_REGION \
+     --query 'Stacks[0].Outputs[?OutputKey==`SandboxTaskSecurityGroupId`].OutputValue' --output text)
+
+   # Verify NO self-referencing rule exists
+   aws ec2 describe-security-groups \
+     --group-ids "$SG_ID" \
+     --region $DEPLOY_REGION \
+     --query 'SecurityGroups[0].IpPermissions[?UserIdGroupPairs[?GroupId==`'"$SG_ID"'`]]'
+   # Expected: empty array [] — no self-referencing inbound rule
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Sandbox A cannot reach Sandbox B:8000 | `curl` times out or connection refused |
+| 2 | Sandbox A cannot reach Sandbox B:5000 | `curl` times out or connection refused |
+| 3 | Sandbox A cannot reach Sandbox B:3000 | `curl` times out or connection refused |
+| 4 | Both sandboxes work via app service | Normal agent tasks succeed |
+| 5 | No self-referencing SG rule | `describe-security-groups` returns empty for self-ref |
+| 6 | Internet access still works | Sandbox can `curl https://httpbin.org/ip` |
