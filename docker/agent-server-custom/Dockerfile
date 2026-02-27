@@ -146,7 +146,8 @@ FROM nikolaik/python-nodejs:python3.12-nodejs22
 
 # Install runtime dependencies including Chromium for browser tool preloading
 # Note: OpenHands preload service requires Chromium even if enable_browsing=false (bug in OpenHands)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Also upgrade all packages to fix CVEs (openssl, libpng, imagemagick, chromium, postgresql, etc.)
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     tmux \
     git \
     curl \

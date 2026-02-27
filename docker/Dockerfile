@@ -18,6 +18,9 @@
 ARG OPENHANDS_VERSION=1.4.0
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
 
+# Upgrade system packages to fix CVEs (openssl, gnutls28, etc.)
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
 # Install boto3 for AWS Bedrock support (required by litellm for AWS authentication)
 RUN pip install --no-cache-dir boto3
 
