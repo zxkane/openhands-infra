@@ -10,10 +10,10 @@
     "test": "node --experimental-vm-modules node_modules/.bin/jest --passWithNoTests"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.700.0",
-    "@aws-sdk/client-ecs": "^3.700.0",
-    "@aws-sdk/client-efs": "^3.700.0",
-    "@aws-sdk/lib-dynamodb": "^3.700.0",
+    "@aws-sdk/client-dynamodb": "^3.999.0",
+    "@aws-sdk/client-ecs": "^3.999.0",
+    "@aws-sdk/client-efs": "^3.999.0",
+    "@aws-sdk/lib-dynamodb": "^3.999.0",
     "@smithy/node-http-handler": "^3.3.3",
     "fastify": "^5.3.3"
   },
@@ -25,7 +25,7 @@
     "typescript": "~5.9.3"
   },
   "overrides": {
-    "fast-xml-parser": "5.3.6"
+    "fast-xml-parser": "5.4.1"
   },
   "jest": {
     "extensionsToTreatAsEsm": [".ts"],
