@@ -1745,7 +1745,9 @@ security_analyzer = "llm"",
             "LogConfiguration": {
               "LogDriver": "awslogs",
               "Options": {
-                "awslogs-group": "/openhands/openresty",
+                "awslogs-group": {
+                  "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefOpenRestyLogGroup0144DA0C2E0DB863",
+                },
                 "awslogs-region": "us-west-2",
                 "awslogs-stream-prefix": "openresty",
               },
