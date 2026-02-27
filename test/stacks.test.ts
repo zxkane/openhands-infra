@@ -93,6 +93,36 @@ describe('OpenHands Infrastructure Stacks', () => {
       });
     });
 
+    test('skips DynamoDB endpoint when skipDynamoDbEndpoint is true', () => {
+      const stack = new NetworkStack(app, 'TestNetworkSkipDynamo', {
+        env: testEnv,
+        config: testConfig,
+        skipDynamoDbEndpoint: true,
+      });
+
+      const template = Template.fromStack(stack);
+      const gateways = template.findResources('AWS::EC2::VPCEndpoint', {
+        Properties: { VpcEndpointType: 'Gateway' },
+      });
+      // Only S3 gateway should remain (DynamoDB skipped)
+      expect(Object.keys(gateways)).toHaveLength(1);
+    });
+
+    test('skips specified interface endpoints', () => {
+      const stack = new NetworkStack(app, 'TestNetworkSkipInterface', {
+        env: testEnv,
+        config: testConfig,
+        skipInterfaceEndpoints: ['Ecs', 'EcsTelemetry'],
+      });
+
+      const template = Template.fromStack(stack);
+      const interfaces = template.findResources('AWS::EC2::VPCEndpoint', {
+        Properties: { VpcEndpointType: 'Interface' },
+      });
+      // 10 total interface endpoints minus 2 skipped = 8
+      expect(Object.keys(interfaces)).toHaveLength(8);
+    });
+
     test('matches snapshot', () => {
       const stack = new NetworkStack(app, 'TestNetworkStack', {
         env: testEnv,

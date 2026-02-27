@@ -10,6 +10,16 @@ export interface NetworkStackProps extends cdk.StackProps {
    * Set to true when deploying to a VPC that already has an S3 endpoint.
    */
   skipS3Endpoint?: boolean;
+  /**
+   * Skip creating DynamoDB VPC Gateway Endpoint if one already exists in the VPC.
+   * Set to true when deploying to a VPC that already has a DynamoDB endpoint.
+   */
+  skipDynamoDbEndpoint?: boolean;
+  /**
+   * Interface endpoint IDs to skip (e.g., ['Ecs', 'EcsTelemetry']).
+   * Use when the VPC has conflicting DNS entries from existing endpoints.
+   */
+  skipInterfaceEndpoints?: string[];
 }
 
 /**
@@ -59,7 +69,9 @@ export class NetworkStack extends cdk.Stack {
       { id: 'EcsTelemetry', service: ec2.InterfaceVpcEndpointAwsService.ECS_TELEMETRY },
     ];
 
+    const skipSet = new Set(props.skipInterfaceEndpoints ?? []);
     for (const endpoint of interfaceEndpoints) {
+      if (skipSet.has(endpoint.id)) continue;
       new ec2.InterfaceVpcEndpoint(this, `${endpoint.id}Endpoint`, {
         vpc,
         service: endpoint.service,
@@ -77,10 +89,12 @@ export class NetworkStack extends cdk.Stack {
     }
 
     // DynamoDB Gateway Endpoint (free, used by sandbox registry)
-    new ec2.GatewayVpcEndpoint(this, 'DynamoDbEndpoint', {
-      vpc,
-      service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
-    });
+    if (!props.skipDynamoDbEndpoint) {
+      new ec2.GatewayVpcEndpoint(this, 'DynamoDbEndpoint', {
+        vpc,
+        service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
+      });
+    }
 
     // Store outputs
     this.output = {

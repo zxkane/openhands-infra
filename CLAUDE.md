@@ -81,6 +81,8 @@ npx cdk diff --all --context ...
 ### Optional Context Parameters
 
 - `skipS3Endpoint` - Skip S3 Gateway endpoint if VPC already has one
+- `skipDynamoDbEndpoint` - Skip DynamoDB Gateway endpoint if VPC already has one
+- `skipInterfaceEndpoints` - Interface endpoint IDs to skip (JSON array, e.g., `'["Ecs","EcsTelemetry"]'`)
 - `sandboxAwsAccess` - Enable sandbox AWS access (default: false)
 - `sandboxAwsPolicyFile` - Path to custom IAM policy for sandbox
 - `warmPoolSize` - Pre-warmed sandbox Fargate tasks (default: 2)
