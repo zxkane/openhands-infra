@@ -138,7 +138,7 @@ export class ComputeStack extends cdk.Stack {
     const { config, networkOutput, securityOutput, monitoringOutput, databaseOutput, sandboxOutput, clusterOutput } = props;
     const { vpc } = networkOutput;
     const { albSecurityGroup, appServiceSecurityGroup, efsSecurityGroup, appTaskRole, appExecutionRole, sandboxSecretKeyName, sandboxRoleArn } = securityOutput;
-    const { alertTopic, dataBucket } = monitoringOutput;
+    const { alertTopic, dataBucket, openrestyLogGroup } = monitoringOutput;
     const { cluster, namespace } = clusterOutput;
 
     // Full domain for runtime URL pattern
@@ -303,15 +303,12 @@ export class ComputeStack extends cdk.Stack {
     }));
 
     // ========================================
-    // Log Groups (referenced by name to avoid cross-stack cycles)
+    // Log Groups
     // ========================================
-    // The /openhands/application log group is created by MonitoringStack.
-    // The /openhands/openresty log group is auto-created by ECS at runtime
-    // (appTaskRole has logs:CreateLogGroup on /openhands/*).
-    // Using fromLogGroupName avoids cyclic dependencies between SecurityStack
-    // (which owns the roles) and ComputeStack (which creates the services).
+    // The app log group is created by MonitoringStack but referenced by name here
+    // to avoid cyclic dependencies with SecurityStack (which owns the roles).
+    // The openresty log group is passed via monitoringOutput (no cycle risk).
     const appLogGroup = logs.LogGroup.fromLogGroupName(this, 'AppLogGroupRef', '/openhands/application');
-    const openrestyLogGroup = logs.LogGroup.fromLogGroupName(this, 'OpenRestyLogGroupRef', '/openhands/openresty');
 
     // ========================================
     // Docker Image Builds

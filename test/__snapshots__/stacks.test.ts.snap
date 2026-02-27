@@ -1745,7 +1745,9 @@ security_analyzer = "llm"",
             "LogConfiguration": {
               "LogDriver": "awslogs",
               "Options": {
-                "awslogs-group": "/openhands/openresty",
+                "awslogs-group": {
+                  "Fn::ImportValue": "TestMonitoringStack:ExportsOutputRefOpenRestyLogGroup0144DA0C2E0DB863",
+                },
                 "awslogs-region": "us-west-2",
                 "awslogs-stream-prefix": "openresty",
               },
@@ -3833,6 +3835,15 @@ exports[`OpenHands Infrastructure Stacks MonitoringStack matches snapshot 1`] = 
         "DashboardName": "OpenHands-Monitoring",
       },
       "Type": "AWS::CloudWatch::Dashboard",
+    },
+    "OpenRestyLogGroup0144DA0C": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/openhands/openresty",
+        "RetentionInDays": 30,
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
     },
   },
   "Rules": {
