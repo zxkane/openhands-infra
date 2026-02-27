@@ -4567,10 +4567,9 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
               ],
               "Effect": "Allow",
               "Resource": [
-                "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
-                "arn:aws:bedrock:*::foundation-model/us.anthropic.claude-*",
-                "arn:aws:bedrock:us-west-2:123456789012:inference-profile/*anthropic.claude*",
-                "arn:aws:bedrock:*:123456789012:inference-profile/global.anthropic.claude*",
+                "arn:aws:bedrock:*::foundation-model/*",
+                "arn:aws:bedrock:*:123456789012:inference-profile/*",
+                "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/*",
               ],
               "Sid": "BedrockAccess",
             },

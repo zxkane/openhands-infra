@@ -151,8 +151,9 @@ export class SecurityStack extends cdk.Stack {
       description: 'IAM task role for OpenHands Fargate app service',
     });
 
-    // Custom policy for Bedrock access
-    // Supports both foundation models (Claude 3.x) and inference profiles (Claude 4.x)
+    // Bedrock access for LLM inference
+    // Covers 1P (Amazon), Anthropic Claude, and 2P/3P models available on Bedrock.
+    // Users can select models via settings; this policy permits all Bedrock models.
     appTaskRole.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockAccess',
       effect: iam.Effect.ALLOW,
@@ -161,13 +162,12 @@ export class SecurityStack extends cdk.Stack {
         'bedrock:InvokeModelWithResponseStream',
       ],
       resources: [
-        // Foundation models (Claude 3.x and earlier)
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
-        'arn:aws:bedrock:*::foundation-model/us.anthropic.claude-*',
-        // Inference profiles (Claude 4.x - Opus 4.5, Sonnet 4, etc.)
-        `arn:aws:bedrock:${config.region}:${this.account}:inference-profile/*anthropic.claude*`,
-        // Cross-region inference profiles (global prefix)
-        `arn:aws:bedrock:*:${this.account}:inference-profile/global.anthropic.claude*`,
+        // Foundation models — all providers (1P Amazon, Anthropic, Meta, Mistral, Cohere, AI21, etc.)
+        'arn:aws:bedrock:*::foundation-model/*',
+        // Cross-region inference profiles (global, us, eu, apac prefixes)
+        `arn:aws:bedrock:*:${this.account}:inference-profile/*`,
+        // Application inference profiles (for cost tracking per user/team)
+        `arn:aws:bedrock:${config.region}:${this.account}:application-inference-profile/*`,
       ],
     }));
 
