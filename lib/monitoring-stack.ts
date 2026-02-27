@@ -28,17 +28,11 @@ export class MonitoringStack extends cdk.Stack {
 
     const { config } = props;
 
-    // CloudWatch Log Groups for OpenHands services
+    // CloudWatch Log Group for OpenHands application
     const appLogGroup = new logs.LogGroup(this, 'AppLogGroup', {
       logGroupName: '/openhands/application',
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    const openrestyLogGroup = new logs.LogGroup(this, 'OpenRestyLogGroup', {
-      logGroupName: '/openhands/openresty',
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
     // SNS Topic for alerts
@@ -104,7 +98,6 @@ export class MonitoringStack extends cdk.Stack {
     // Store outputs
     this.output = {
       appLogGroup,
-      openrestyLogGroup,
       alertTopic,
       dataBucket,
     };

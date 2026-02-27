@@ -93,7 +93,6 @@ export interface SecurityStackOutput {
  */
 export interface MonitoringStackOutput {
   appLogGroup: logs.ILogGroup;
-  openrestyLogGroup: logs.ILogGroup;
   alertTopic: sns.ITopic;
   dataBucket: s3.IBucket;
 }
