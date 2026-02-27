@@ -686,9 +686,6 @@
       return;
     }
 
-    // Don't retry if we've already attempted for this conversation
-    if (resumeAttempted[convId]) return;
-
     // Check timeout
     if (checkStartTime && (Date.now() - checkStartTime > maxCheckTime)) {
       console.log('Auto-resume: timeout reached, stopping checks');
@@ -712,9 +709,11 @@
           // Sandbox is active, stop checking
           console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
           stopChecking();
-        } else {
+        } else if (!resumeAttempted[convId]) {
           // Sandbox is not running (MISSING, STOPPED, PAUSED, ERROR, null, etc.)
-          // Trigger sandbox start via the resume endpoint
+          // Trigger sandbox start via the resume endpoint — only once per conversation.
+          // After calling /resume, we keep polling status to confirm RUNNING, but
+          // do NOT call /resume again to avoid duplicate requests while Fargate provisions.
           console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', triggering resume...');
           resumeAttempted[convId] = true;
 
@@ -725,11 +724,11 @@
             body: JSON.stringify({})
           }).then(function(resp) {
             if (resp.ok) {
-              console.log('Auto-resume: sandbox resume triggered successfully');
-              // Continue polling to confirm sandbox reaches RUNNING state.
-              // No page reload needed — the OpenHands frontend WebSocket will
-              // reconnect automatically once the sandbox is available.
-              resumeAttempted[convId] = false;
+              console.log('Auto-resume: sandbox resume triggered, waiting for RUNNING status...');
+              // Keep resumeAttempted[convId] = true so we don't call /resume again.
+              // The polling interval continues checking status and stops when
+              // sandbox reaches RUNNING/STARTING. No page reload needed — the
+              // OpenHands frontend WebSocket reconnects automatically.
             } else {
               resp.text().then(function(text) {
                 console.warn('Auto-resume: failed to trigger sandbox resume:', resp.status, text);
@@ -739,6 +738,7 @@
             console.warn('Auto-resume: error triggering sandbox resume:', err);
           });
         }
+        // else: resumeAttempted is true — already called /resume, just polling status
       })
       .catch(function(err) {
         // Ignore errors - might be authentication redirect
