@@ -3834,6 +3834,15 @@ exports[`OpenHands Infrastructure Stacks MonitoringStack matches snapshot 1`] = 
       },
       "Type": "AWS::CloudWatch::Dashboard",
     },
+    "OpenRestyLogGroup0144DA0C": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/openhands/openresty",
+        "RetentionInDays": 30,
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete",
+    },
   },
   "Rules": {
     "CheckBootstrapVersion": {
