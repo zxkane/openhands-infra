@@ -124,6 +124,11 @@ const edgeStackId = edgeStackSuffix
 
 const skipS3Endpoint = app.node.tryGetContext('skipS3Endpoint') === 'true' ||
   app.node.tryGetContext('skipS3Endpoint') === true;
+const skipDynamoDbEndpoint = app.node.tryGetContext('skipDynamoDbEndpoint') === 'true' ||
+  app.node.tryGetContext('skipDynamoDbEndpoint') === true;
+const skipInterfaceEndpoints = parseDomainList(
+  app.node.tryGetContext('skipInterfaceEndpoints'), []
+);
 
 // Sandbox AWS access configuration
 const sandboxAwsAccess = app.node.tryGetContext('sandboxAwsAccess') === 'true' ||
@@ -159,6 +164,8 @@ const networkStack = new NetworkStack(app, `${prefix}-Network`, {
   env: mainEnv,
   config,
   skipS3Endpoint,
+  skipDynamoDbEndpoint,
+  skipInterfaceEndpoints,
   description: 'OpenHands Network Infrastructure - VPC Endpoints',
   crossRegionReferences: true,
 });
