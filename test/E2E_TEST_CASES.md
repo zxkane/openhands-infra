@@ -3192,3 +3192,107 @@ Verify that per-conversation EFS access points prevent sandboxes from accessing 
 | 3 | Both sandboxes work independently | Each can create and read their own files |
 | 4 | Access point cleaned up on stop | `describe-access-points` no longer shows stopped conversation's AP |
 | 5 | Resume preserves workspace data | Previously created files are accessible after resume |
+
+---
+
+## TC-027: Verify SPA Navigation Starts Sandbox (Regression)
+
+### Description
+Verify that navigating to an existing conversation via client-side SPA routing (clicking in home page or left nav bar) properly starts the sandbox in the backend. This is a regression test for the bug where only a hard page refresh would trigger sandbox start — client-side navigation left the sandbox stopped.
+
+### Prerequisites
+- TC-003 completed (logged in)
+- TC-005 completed (at least one conversation with messages exists)
+
+### Steps
+
+1. Navigate to a conversation via full page load first, to ensure it has a running sandbox
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/conversations/<conversation-uuid>",
+     type: "url"
+   })
+   mcp__chrome-devtools__wait_for({
+     text: "<expected-message-text>",
+     timeout: 30000
+   })
+   ```
+
+2. Navigate to the home page via full page load
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   mcp__chrome-devtools__wait_for({ text: "Recent Conversations", timeout: 10000 })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+3. Click on the existing conversation (SPA navigation — no full page reload)
+   ```javascript
+   mcp__chrome-devtools__click({ uid: "<conversation-link-uid>" })
+   ```
+
+4. Wait for conversation page to load history
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: "<expected-message-text>",
+     timeout: 30000
+   })
+   ```
+
+5. Verify the auto-resume patch triggers sandbox start (check console logs)
+   ```javascript
+   mcp__chrome-devtools__list_console_messages({ types: ["log"] })
+   // Look for: "Auto-resume: SPA navigation detected" or "Auto-resume: initialized"
+   // And: "Auto-resume: sandbox resume triggered successfully" or "sandbox is RUNNING"
+   ```
+
+6. Verify sandbox reaches RUNNING status via API
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const convId = window.location.pathname.match(/conversations\\/([a-f0-9-]+)/)?.[1]?.replace(/-/g, '');
+       if (!convId) return { error: 'no conversation id' };
+       // Poll up to 60 seconds for sandbox to reach RUNNING
+       for (let i = 0; i < 12; i++) {
+         const res = await fetch('/api/v1/app-conversations?ids=' + convId);
+         const data = await res.json();
+         const status = data?.[0]?.sandbox_status;
+         if (status === 'RUNNING') return { status, attempts: i + 1 };
+         await new Promise(r => setTimeout(r, 5000));
+       }
+       const finalRes = await fetch('/api/v1/app-conversations?ids=' + convId);
+       const finalData = await finalRes.json();
+       return { status: finalData?.[0]?.sandbox_status, timedOut: true };
+     }`
+   })
+   // Expected: status === 'RUNNING'
+   ```
+
+7. Verify agent can respond (sandbox is functional)
+   ```javascript
+   mcp__chrome-devtools__take_snapshot({})
+   // Find chat input and send a message
+   mcp__chrome-devtools__fill({ uid: "<chat-input-uid>", value: "What is 1+1?" })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   mcp__chrome-devtools__wait_for({ text: "2", timeout: 60000 })
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | SPA navigation loads conversation page | URL contains `/conversations/<uuid>` after click |
+| 2 | Chat history visible | Previous messages displayed without hard refresh |
+| 3 | Sandbox starts automatically | `sandbox_status` reaches `RUNNING` within 60s |
+| 4 | Agent is functional | Agent responds to a simple prompt |
+| 5 | No page reload needed | `performance.navigation.type` is 0 (navigate), not 1 (reload) |
+
+### Timeout Configuration
+
+| Stage | Maximum Wait Time |
+|-------|-------------------|
+| Conversation page load | 30 seconds |
+| Sandbox start after SPA navigation | 60 seconds |
+| Agent response | 60 seconds |

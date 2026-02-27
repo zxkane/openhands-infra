@@ -49,6 +49,7 @@ RUNTIME_TESTS=(
     "TC-008:Verify In-App Routing"
     "TC-009:Verify Web App Subdomain"
     "TC-010:Verify VS Code URL Rewriting"
+    "TC-027:SPA Navigation Starts Sandbox"
 )
 
 ECS_PERSISTENCE_TESTS=(

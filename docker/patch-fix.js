@@ -637,14 +637,21 @@
   console.log("OpenHands auto-close settings modal patch loaded");
 })();
 
-// Auto-resume MISSING sandbox conversations by triggering sandbox recreation
-// When a sandbox is missing (due to EC2 replacement), the frontend shows "Connecting..."
-// indefinitely. This patch detects sandbox_status=MISSING and triggers recreation.
+// Auto-resume sandbox conversations by triggering sandbox start/recreation.
+// Handles two scenarios:
+// 1. Sandbox is MISSING (e.g., EC2 replacement) — triggers recreation
+// 2. SPA navigation to a conversation — sandbox not started because client-side
+//    routing (React Router pushState) doesn't trigger a full page load, so the
+//    backend never receives the initialization request that starts the sandbox.
+//    A hard refresh works because it triggers full page load + app initialization.
+// This patch detects non-running sandbox states and calls the /resume endpoint.
+// It hooks into pushState/replaceState/popstate to re-trigger on SPA navigation.
 (function() {
   var resumeAttempted = {};  // Track which conversations we've tried to resume
   var checkInterval = null;
   var maxCheckTime = 120000;  // 2 minutes max check time
   var checkStartTime = null;
+  var currentConvId = null;   // Track current conversation to detect navigation
 
   function getConversationId() {
     var match = window.location.pathname.match(/\/conversations\/([a-f0-9-]+)/i);
@@ -658,17 +665,31 @@
     return convId.slice(0, 8) + '-' + convId.slice(8, 12) + '-' + convId.slice(12, 16) + '-' + convId.slice(16, 20) + '-' + convId.slice(20);
   }
 
+  function stopChecking() {
+    if (checkInterval) {
+      clearInterval(checkInterval);
+      checkInterval = null;
+    }
+  }
+
   function checkAndResume() {
     var convId = getConversationId();
-    if (!convId) return;
+    if (!convId) {
+      stopChecking();
+      return;
+    }
 
-    // Don't retry if we've already attempted for this conversation
-    if (resumeAttempted[convId]) return;
+    // If navigated to a different conversation, reset and re-init
+    if (currentConvId && convId !== currentConvId) {
+      stopChecking();
+      init();
+      return;
+    }
 
     // Check timeout
     if (checkStartTime && (Date.now() - checkStartTime > maxCheckTime)) {
       console.log('Auto-resume: timeout reached, stopping checks');
-      clearInterval(checkInterval);
+      stopChecking();
       return;
     }
 
@@ -684,11 +705,18 @@
 
         console.log('Auto-resume: checking conversation, sandbox_status=' + conv.sandbox_status);
 
-        if (conv.sandbox_status === 'MISSING') {
-          console.log('Auto-resume: sandbox is MISSING, triggering recreation...');
+        if (conv.sandbox_status === 'RUNNING' || conv.sandbox_status === 'STARTING') {
+          // Sandbox is active, stop checking
+          console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
+          stopChecking();
+        } else if (!resumeAttempted[convId]) {
+          // Sandbox is not running (MISSING, STOPPED, PAUSED, ERROR, null, etc.)
+          // Trigger sandbox start via the resume endpoint — only once per conversation.
+          // After calling /resume, we keep polling status to confirm RUNNING, but
+          // do NOT call /resume again to avoid duplicate requests while Fargate provisions.
+          console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', triggering resume...');
           resumeAttempted[convId] = true;
 
-          // Trigger sandbox recreation by calling the resume endpoint (Patch 3c)
           var formattedId = formatConversationId(convId);
           fetch('/api/v1/app-conversations/' + formattedId + '/resume', {
             method: 'POST',
@@ -696,24 +724,21 @@
             body: JSON.stringify({})
           }).then(function(resp) {
             if (resp.ok) {
-              console.log('Auto-resume: sandbox recreation triggered successfully, reloading...');
-              // Reload the page to reconnect
-              setTimeout(function() {
-                window.location.reload();
-              }, 3000);
+              console.log('Auto-resume: sandbox resume triggered, waiting for RUNNING status...');
+              // Keep resumeAttempted[convId] = true so we don't call /resume again.
+              // The polling interval continues checking status and stops when
+              // sandbox reaches RUNNING/STARTING. No page reload needed — the
+              // OpenHands frontend WebSocket reconnects automatically.
             } else {
               resp.text().then(function(text) {
-                console.warn('Auto-resume: failed to trigger sandbox recreation:', resp.status, text);
+                console.warn('Auto-resume: failed to trigger sandbox resume:', resp.status, text);
               });
             }
           }).catch(function(err) {
-            console.warn('Auto-resume: error triggering sandbox recreation:', err);
+            console.warn('Auto-resume: error triggering sandbox resume:', err);
           });
-        } else if (conv.sandbox_status === 'RUNNING' || conv.sandbox_status === 'STARTING') {
-          // Sandbox is active, stop checking
-          console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
-          clearInterval(checkInterval);
         }
+        // else: resumeAttempted is true — already called /resume, just polling status
       })
       .catch(function(err) {
         // Ignore errors - might be authentication redirect
@@ -725,13 +750,47 @@
     var convId = getConversationId();
     if (!convId) return;
 
-    console.log('Auto-resume: initialized for conversation ' + convId);
+    // Reset state for new conversation
+    currentConvId = convId;
+    stopChecking();
     checkStartTime = Date.now();
+
+    console.log('Auto-resume: initialized for conversation ' + convId);
     // Check every 5 seconds
     checkInterval = setInterval(checkAndResume, 5000);
     // Also check immediately after a delay (let page load first)
     setTimeout(checkAndResume, 2000);
   }
+
+  // Re-initialize on SPA navigation (React Router uses pushState/replaceState).
+  // This is the key fix: without this, navigating to a conversation via the
+  // home page or left nav bar never triggers sandbox start because the page
+  // doesn't fully reload — only the React component tree updates.
+  function onNavigation() {
+    var newConvId = getConversationId();
+    if (newConvId && newConvId !== currentConvId) {
+      console.log('Auto-resume: SPA navigation detected, re-initializing for ' + newConvId);
+      init();
+    } else if (!newConvId) {
+      // Navigated away from a conversation page
+      stopChecking();
+      currentConvId = null;
+    }
+  }
+
+  window.addEventListener('popstate', onNavigation);
+  var origPushState = history.pushState;
+  var origReplaceState = history.replaceState;
+  history.pushState = function() {
+    var result = origPushState.apply(this, arguments);
+    onNavigation();
+    return result;
+  };
+  history.replaceState = function() {
+    var result = origReplaceState.apply(this, arguments);
+    onNavigation();
+    return result;
+  };
 
   // Start when DOM is ready
   if (document.readyState === 'loading') {
@@ -740,7 +799,7 @@
     init();
   }
 
-  console.log('OpenHands auto-resume MISSING sandbox patch loaded');
+  console.log('OpenHands auto-resume sandbox patch loaded');
 })();
 
 // Rewrite localhost URLs in displayed text (chat messages, etc.)
