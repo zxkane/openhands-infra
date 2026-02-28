@@ -1271,7 +1271,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "HIDE_LLM_SETTINGS",
-                "Value": "true",
+                "Value": "false",
               },
               {
                 "Name": "USER_AUTH_CLASS",
@@ -1279,7 +1279,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "LLM_MODEL",
-                "Value": "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+                "Value": "bedrock/global.anthropic.claude-sonnet-4-6",
               },
               {
                 "Name": "LLM_AWS_REGION_NAME",
@@ -1399,7 +1399,7 @@ send_telemetry = false
 conversation_max_age_seconds = 15552000
 default_agent = "CodeActAgent"
 [llm]
-model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+model = "bedrock/global.anthropic.claude-sonnet-4-6"
 api_key = "placeholder-not-used-for-bedrock-iam-auth"
 aws_region_name = "us-west-2"
 [sandbox]
@@ -1432,7 +1432,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:d784fd70d17cf52cd55bc61f9e0e78f7c5b359eb48f5a6335da146a7f852cb37",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f99c64f4be6bc6c90931d090b9bf6fcbbaae19977f85f6b4646c8eb9a50b8e57",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
@@ -4572,6 +4572,16 @@ exports[`OpenHands Infrastructure Stacks SecurityStack matches snapshot 1`] = `
                 "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/*",
               ],
               "Sid": "BedrockAccess",
+            },
+            {
+              "Action": [
+                "bedrock:ListFoundationModels",
+                "bedrock:ListInferenceProfiles",
+                "bedrock:GetInferenceProfile",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "BedrockModelDiscovery",
             },
             {
               "Action": [

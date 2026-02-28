@@ -313,7 +313,11 @@
     /^cohere\./i,
     /^meta\./i,
     /^mistral\./i,
-    /^stability\./i
+    /^stability\./i,
+    /^us\./i,              // US cross-region prefix
+    /^eu\./i,              // EU cross-region prefix
+    /^apac\./i,            // APAC cross-region prefix
+    /^arn:aws:bedrock:/i   // Application inference profile ARN
   ];
 
   function needsBedrockPrefix(model) {
@@ -468,24 +472,62 @@
   console.log("OpenHands settings patch loaded (XHR intercept for Bedrock prefix + MCP deduplication)");
 })();
 
-// Auto-create default settings when LLM is already configured via config.toml.
-// NOTE: Some deployments hide the settings UI (HIDE_LLM_SETTINGS=true), which prevents
-// the settings modal from opening and can break conversation creation with:
-//   400 {"msg_id":"CONFIGURATION$SETTINGS_NOT_FOUND", ...}
-// This patch proactively creates default settings and closes the modal (if present).
+// Bedrock model list fallback: if /api/options/models returns an empty list,
+// inject a curated set of popular Bedrock model IDs. This ensures the settings UI
+// always shows models even if LiteLLM doesn't enumerate Bedrock models automatically.
+// If the endpoint returns a non-empty list, it passes through unmodified.
 (function() {
-  var checkInterval = null;
-  var checkCount = 0;
-  var maxChecks = 50; // Check for 5 seconds max (50 * 100ms)
-  var ensurePromise = null;
+  var fallbackModels = [
+    "global.anthropic.claude-sonnet-4-6",
+    "global.anthropic.claude-opus-4-6",
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    "us.amazon.nova-premier-v1:0",
+    "us.amazon.nova-pro-v1:0",
+    "us.amazon.nova-lite-v1:0",
+    "us.amazon.nova-micro-v1:0",
+    "us.meta.llama4-maverick-17b-instruct-v1:0",
+    "us.meta.llama4-scout-17b-instruct-v1:0",
+    "us.deepseek.r1-v1:0",
+    "mistral.mistral-large-2407-v1:0"
+  ];
 
-  function removeModal() {
-    var overlay = document.querySelector('.fixed.inset-0.flex.items-center.justify-center.z-60');
-    if (overlay) {
-      overlay.remove();
-      console.log("Settings modal removed from DOM");
+  var originalFetch = window.fetch;
+  window.fetch = function() {
+    var url = arguments[0];
+    var urlStr = (typeof url === 'string') ? url : (url && url.url ? url.url : '');
+    if (urlStr.indexOf('/api/options/models') === -1) {
+      return originalFetch.apply(this, arguments);
     }
-  }
+
+    return originalFetch.apply(this, arguments).then(function(response) {
+      var cloned = response.clone();
+      return cloned.json().then(function(data) {
+        if (Array.isArray(data) && data.length > 0) {
+          return response; // Non-empty list — pass through
+        }
+        console.log("Model list empty, injecting Bedrock fallback models");
+        return new Response(JSON.stringify(fallbackModels), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }).catch(function() {
+        return response; // Parse error — pass through
+      });
+    });
+  };
+
+  console.log("OpenHands Bedrock model list fallback loaded");
+})();
+
+// Auto-create default settings when LLM is already configured via config.toml.
+// For first-time users who have no saved settings, this prevents:
+//   400 {"msg_id":"CONFIGURATION$SETTINGS_NOT_FOUND", ...}
+// The settings UI is now visible (HIDE_LLM_SETTINGS=false) so users can change models.
+// This patch only auto-creates defaults — it does NOT close the settings modal.
+(function() {
+  var ensurePromise = null;
 
   function parseJsonSafe(resp) {
     try {
@@ -507,6 +549,8 @@
   function pickDefaultModel(models) {
     var defaultModel = null;
     var modelPatterns = [
+      /^global\.anthropic\.claude-sonnet-4-6/i,   // Sonnet 4.6 (preferred default)
+      /^anthropic\.claude-sonnet-4-6/i,            // Sonnet 4.6 without prefix
       /^global\.anthropic\.claude-opus/i,
       /^global\.anthropic\.claude-sonnet/i,
       /^anthropic\.claude-opus/i,
@@ -528,17 +572,9 @@
         }
       }
 
-      if (!defaultModel) {
-        for (var j = 0; j < models.length; j++) {
-          if (typeof models[j] === 'string' && /^anthropic\.claude.*v\d+:\d+$/.test(models[j])) {
-            defaultModel = models[j];
-            break;
-          }
-        }
-      }
     }
 
-    return defaultModel || "global.anthropic.claude-opus-4-5-20251101-v1:0";
+    return defaultModel || "global.anthropic.claude-sonnet-4-6";
   }
 
   function ensureDefaultSettings() {
@@ -598,31 +634,13 @@
   // Expose for other patches (e.g., fetch retry on /api/conversations).
   try { window.__ohEnsureDefaultSettings = ensureDefaultSettings; } catch (e) {}
 
-  function closeSettingsModal() {
-    // Find the modal by test ID
-    var modal = document.querySelector('[data-testid="ai-config-modal"]');
-    if (modal) {
-      ensureDefaultSettings().then(function(ok) {
-        if (ok) removeModal();
-      });
-      clearInterval(checkInterval);
-      return;
-    }
-
-    checkCount++;
-    if (checkCount >= maxChecks) {
-      clearInterval(checkInterval);
-    }
-  }
-
-  // Start checking after page load
+  // On page load, ensure default settings exist for first-time users
   if (document.readyState === 'complete') {
     try {
       if (!(window.location.pathname || '').startsWith('/_')) {
         ensureDefaultSettings().then(function() { /* no-op */ });
       }
     } catch (e) {}
-    checkInterval = setInterval(closeSettingsModal, 100);
   } else {
     window.addEventListener('load', function() {
       try {
@@ -630,11 +648,10 @@
           ensureDefaultSettings().then(function() { /* no-op */ });
         }
       } catch (e) {}
-      checkInterval = setInterval(closeSettingsModal, 100);
     });
   }
 
-  console.log("OpenHands auto-close settings modal patch loaded");
+  console.log("OpenHands auto-create default settings patch loaded");
 })();
 
 // Auto-resume sandbox conversations by triggering sandbox start/recreation.

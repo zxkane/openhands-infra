@@ -3296,3 +3296,88 @@ Verify that navigating to an existing conversation via client-side SPA routing (
 | Conversation page load | 30 seconds |
 | Sandbox start after SPA navigation | 60 seconds |
 | Agent response | 60 seconds |
+
+---
+
+## TC-023: LLM Model Selection
+
+### Description
+Verify that users can see and select from available Bedrock models in the settings UI.
+
+### Prerequisites
+- TC-003 passed (user is logged in)
+- Deployment includes `HIDE_LLM_SETTINGS=false` and `BedrockModelDiscovery` IAM permissions
+
+### Category
+Compute/Docker changes (triggered by `compute-stack.ts`, `security-stack.ts`, `docker/patch-fix.js` changes)
+
+### Steps
+
+1. Navigate to settings
+   ```javascript
+   mcp__chrome-devtools__take_snapshot({})
+   // Find and click the settings/gear icon
+   mcp__chrome-devtools__click({ uid: "<settings-button-uid>" })
+   mcp__chrome-devtools__wait_for({ text: "Model", timeout: 10000 })
+   mcp__chrome-devtools__take_snapshot({})
+   ```
+
+2. Verify model dropdown shows Bedrock models
+   ```javascript
+   // The AI Configuration modal should be visible with a model selector
+   // Look for model names like "claude-sonnet", "claude-opus", "nova", etc.
+   mcp__chrome-devtools__take_screenshot({})
+   ```
+
+3. Verify the default model is Claude Sonnet 4.6
+   ```javascript
+   // Check the currently selected model contains "sonnet-4-6"
+   mcp__chrome-devtools__evaluate_script({
+     function: `() => {
+       const modelInput = document.querySelector('[data-testid="ai-config-modal"] input[type="text"]');
+       return modelInput ? modelInput.value : 'not found';
+     }`
+   })
+   // Expected: contains "claude-sonnet-4-6"
+   ```
+
+4. Select a different model (e.g., Claude Haiku)
+   ```javascript
+   // Find the model input/dropdown and change to Haiku
+   mcp__chrome-devtools__take_snapshot({})
+   // Clear existing value and type new model
+   mcp__chrome-devtools__fill({ uid: "<model-input-uid>", value: "global.anthropic.claude-haiku-4-5-20251001-v1:0" })
+   // Save settings
+   mcp__chrome-devtools__click({ uid: "<save-button-uid>" })
+   mcp__chrome-devtools__wait_for({ text: "saved", timeout: 5000 })
+   ```
+
+5. Start a new conversation and verify agent responds
+   ```javascript
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}", type: "url" })
+   mcp__chrome-devtools__wait_for({ text: "Start new", timeout: 10000 })
+   mcp__chrome-devtools__click({ uid: "<new-conversation-button>" })
+   mcp__chrome-devtools__wait_for({ text: "What do you want", timeout: 30000 })
+   mcp__chrome-devtools__fill({ uid: "<chat-input>", value: "What is 2+2? Reply with just the number." })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   mcp__chrome-devtools__wait_for({ text: "4", timeout: 60000 })
+   ```
+
+6. Verify first-time user gets auto-created default settings
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `() => fetch('/api/settings').then(r => r.json()).then(s => s.llm_model || 'no model')`
+   })
+   // Expected: contains "bedrock/" prefix and "sonnet-4-6"
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Settings UI visible | Settings modal opens with model selector |
+| 2 | Model list populated | Dropdown shows Bedrock models (not empty) |
+| 3 | Default model correct | Default is `bedrock/global.anthropic.claude-sonnet-4-6` |
+| 4 | Model change persists | Selected model saved and used for new conversations |
+| 5 | Agent responds with changed model | New conversation works with non-default model |
+| 6 | First-time auto-settings | `/api/settings` returns 200 with Bedrock model for new users |

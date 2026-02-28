@@ -229,6 +229,18 @@ export class SandboxStack extends cdk.Stack {
       ],
     }));
 
+    // Bedrock model discovery for agent-server LLM calls
+    sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockModelDiscovery',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:ListFoundationModels',
+        'bedrock:ListInferenceProfiles',
+        'bedrock:GetInferenceProfile',
+      ],
+      resources: ['*'], // List/Get operations don't support resource-level restrictions
+    }));
+
     // AWS permissions for sandbox containers (gated by sandboxAwsAccess context flag)
     // Loads custom IAM policy from sandbox-aws-policy.json (same policy used by SecurityStack
     // for the STS-assumed sandbox role in Docker-on-EC2 mode)
