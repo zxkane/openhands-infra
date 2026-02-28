@@ -3,17 +3,22 @@
  *
  * Runs on an EventBridge schedule (every 5 minutes) to detect and stop idle sandbox tasks.
  * Idle sandboxes are those with status=RUNNING and last_activity_at older than IDLE_TIMEOUT_MINUTES.
+ *
+ * Also detects and stops orphan ECS tasks — sandbox tasks that are running but have no
+ * corresponding RUNNING/STARTING record in DynamoDB. These orphans can be caused by race
+ * conditions during concurrent resume operations on the same conversation.
  */
 
 import { Logger } from '@aws-lambda-powertools/logger';
 import { DynamoDBClient, QueryCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
-import { ECSClient, StopTaskCommand } from '@aws-sdk/client-ecs';
+import { ECSClient, StopTaskCommand, ListTasksCommand, DescribeTasksCommand } from '@aws-sdk/client-ecs';
 import { EFSClient, DeleteAccessPointCommand } from '@aws-sdk/client-efs';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 
 const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME || 'openhands-sandbox-registry';
 const ECS_CLUSTER_ARN = process.env.ECS_CLUSTER_ARN || '';
 const IDLE_TIMEOUT_MINUTES = parseInt(process.env.IDLE_TIMEOUT_MINUTES || '30', 10);
+const SANDBOX_TASK_FAMILY = process.env.SANDBOX_TASK_FAMILY || 'openhands-sandbox';
 const REGION = process.env.AWS_REGION_NAME || process.env.AWS_REGION || 'us-east-1';
 
 /** Time-to-live: 7 days from last activity (matches dynamodb_store.py TTL_SECONDS) */
@@ -91,7 +96,119 @@ async function updateStatus(conversationId: string, status: string): Promise<voi
   }));
 }
 
-async function publishMetrics(stoppedCount: number, runningCount: number): Promise<void> {
+/**
+ * Detect and stop orphan ECS sandbox tasks.
+ *
+ * An orphan task is one that is RUNNING in ECS but has no corresponding
+ * RUNNING or STARTING record in DynamoDB. This happens when race conditions
+ * during concurrent resume operations cause multiple tasks to start for the
+ * same conversation — only one gets tracked in DynamoDB, the rest become orphans.
+ *
+ * Returns the number of orphan tasks stopped.
+ */
+async function cleanupOrphanTasks(): Promise<number> {
+  // 1. List all running sandbox tasks from ECS
+  const runningTaskArns: string[] = [];
+  let nextToken: string | undefined;
+  do {
+    const listResponse = await ecs.send(new ListTasksCommand({
+      cluster: ECS_CLUSTER_ARN,
+      family: SANDBOX_TASK_FAMILY,
+      desiredStatus: 'RUNNING',
+      nextToken,
+    }));
+    if (listResponse.taskArns?.length) {
+      runningTaskArns.push(...listResponse.taskArns);
+    }
+    nextToken = listResponse.nextToken;
+  } while (nextToken);
+
+  if (runningTaskArns.length === 0) {
+    return 0;
+  }
+
+  // 2. Collect all task ARNs tracked in DynamoDB with RUNNING or STARTING status
+  const trackedTaskArns = new Set<string>();
+  for (const status of ['RUNNING', 'STARTING']) {
+    let lastEvaluatedKey: Record<string, any> | undefined;
+    do {
+      const queryResponse = await dynamodb.send(new QueryCommand({
+        TableName: REGISTRY_TABLE_NAME,
+        IndexName: 'status-index',
+        KeyConditionExpression: '#status = :status',
+        ExpressionAttributeValues: { ':status': { S: status } },
+        ExpressionAttributeNames: { '#status': 'status' },
+        ProjectionExpression: 'task_arn',
+        ExclusiveStartKey: lastEvaluatedKey,
+      }));
+      for (const item of queryResponse.Items || []) {
+        if (item.task_arn?.S) {
+          trackedTaskArns.add(item.task_arn.S);
+        }
+      }
+      lastEvaluatedKey = queryResponse.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
+  }
+
+  // 3. Find candidate orphans: running in ECS but not tracked in DynamoDB
+  const candidateOrphanArns = runningTaskArns.filter(arn => !trackedTaskArns.has(arn));
+
+  if (candidateOrphanArns.length === 0) {
+    return 0;
+  }
+
+  // 4. Apply grace period: skip tasks started less than 5 minutes ago.
+  //    There is a brief window between ECS RunTask and the orchestrator writing the
+  //    DynamoDB record. Newly-launched tasks could falsely appear as orphans.
+  const GRACE_PERIOD_MS = 5 * 60 * 1000;
+  const graceCutoff = Date.now() - GRACE_PERIOD_MS;
+
+  // Describe candidate tasks to get their start time
+  const describeResponse = await ecs.send(new DescribeTasksCommand({
+    cluster: ECS_CLUSTER_ARN,
+    tasks: candidateOrphanArns,
+  }));
+
+  const orphanTasks = (describeResponse.tasks || []).filter(task => {
+    const startedAt = task.startedAt ?? task.createdAt;
+    if (!startedAt) return true; // If no timestamp, treat as orphan
+    return startedAt.getTime() < graceCutoff;
+  });
+
+  if (orphanTasks.length === 0) {
+    logger.debug('All candidate orphans are within grace period', {
+      candidates: candidateOrphanArns.length,
+    });
+    return 0;
+  }
+
+  logger.warn('Orphan sandbox tasks detected', {
+    orphanCount: orphanTasks.length,
+    trackedCount: trackedTaskArns.size,
+    totalRunning: runningTaskArns.length,
+  });
+
+  // 5. Stop each orphan task
+  let stoppedCount = 0;
+  for (const task of orphanTasks) {
+    const taskArn = task.taskArn!;
+    try {
+      logger.info('Stopping orphan sandbox task', { taskArn });
+      await ecs.send(new StopTaskCommand({
+        cluster: ECS_CLUSTER_ARN,
+        task: taskArn,
+        reason: 'Orphan task: no DynamoDB record tracking this task',
+      }));
+      stoppedCount++;
+    } catch (error) {
+      logger.error('Failed to stop orphan task', { taskArn, error: String(error) });
+    }
+  }
+
+  return stoppedCount;
+}
+
+async function publishMetrics(stoppedCount: number, runningCount: number, orphansStopped: number): Promise<void> {
   await cloudwatch.send(new PutMetricDataCommand({
     Namespace: 'OpenHands/Sandbox',
     MetricData: [
@@ -104,6 +221,12 @@ async function publishMetrics(stoppedCount: number, runningCount: number): Promi
       {
         MetricName: 'RunningSandboxes',
         Value: runningCount,
+        Unit: 'Count',
+        Timestamp: new Date(),
+      },
+      {
+        MetricName: 'OrphanSandboxesStopped',
+        Value: orphansStopped,
         Unit: 'Count',
         Timestamp: new Date(),
       },
@@ -175,11 +298,23 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
     logger.error('Failed to count running sandboxes', { error: String(error) });
   }
 
-  await publishMetrics(stoppedCount, runningCount);
+  // Orphan task cleanup: stop ECS tasks not tracked in DynamoDB
+  let orphansStopped = 0;
+  try {
+    orphansStopped = await cleanupOrphanTasks();
+    if (orphansStopped > 0) {
+      logger.warn('Orphan tasks cleaned up', { orphansStopped });
+    }
+  } catch (error) {
+    logger.error('Orphan cleanup failed', { error: String(error) });
+  }
+
+  await publishMetrics(stoppedCount, runningCount, orphansStopped);
 
   const summary = {
     idle_found: idleSandboxes.length,
     stopped: stoppedCount,
+    orphans_stopped: orphansStopped,
     running_total: runningCount,
     errors: errors.length,
   };
