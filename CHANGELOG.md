@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-02-28
+
+### Added
+
+#### Infrastructure
+- **Per-conversation EFS access points for sandbox isolation** (#36)
+  - Dynamically created EFS access points for each conversation to restrict filesystem visibility to individual workspaces.
+  - Process Flow:
+    - Creates access point at `/sandbox-workspace/<conversation_id>` with appropriate permissions on sandbox `/start` or `/resume`.
+    - Ensures isolation between tenant data during multi-conversation workflows.
+  
+#### Features
+- **Upgraded OpenHands to v1.4.0** (#30)
+  - Integrated upstream OpenHands release v1.4.0 (63 commits).
+  - Upgraded Agent Server SDK from v1.8.1 to v1.11.4.
+  - Cleanly applied 13 custom patches to create fork branch `custom/v1.4.0-fargate`.
+  - Enhanced support for ECS Fargate task workflows, including updates to naming compatibility in SDK patch 26.
+  - E2E test cases updated to reflect terminologies and behavior changes post EC2 migration.
+
+- **ECS Fargate sandbox orchestrator with Cloud Map service discovery** (#28)
+  - Deployed standalone Node.js/TypeScript/Fastify-based sandbox orchestrator service on ECS Fargate.
+  - Orchestration capabilities for Fargate tasks integrated with Cloud Map private DNS at `orchestrator.openhands.local:8081`.
+  - Implemented workspace isolation via per-conversation CONVERSATION_ID-based EFS subdirectories and stale record cleanup via EventBridge Task State Change events.
+
+### Changed
+
+#### Compute Architecture
+- **Migrated all services from EC2 to ECS Fargate** (#29)
+  - Fully eliminated EC2 infrastructure for compute services.
+  - Introduced `ClusterStack` for ECS services shared configuration, and expanded overall architecture to 10 stacks.
+  - Redesigned service deployment:
+    - OpenHands app runs with 4 vCPU/8 GB memory.
+    - OpenResty proxy uses 0.25 vCPU/512 MB resources.
+  - Simplified secrets management with ECS-native secrets integration.
+
+### Fixed
+
+#### Sandbox
+- **Grant Bedrock model access for sandbox task role** (#44)
+  - Resolved missing `bedrock:InvokeModel` permission for sandbox Fargate tasks in production when `sandboxAwsAccess` flag was disabled, ensuring agent-server access to LLM calls.
+
+- **Self-referencing security group rule removal** (#34)
+  - Removed ingress rule on `sandboxTaskSg` allowing inter-sandbox communication across all TCP ports, reinforcing isolation security.
+  - Mitigated risks of unauthorized inter-sandbox and orchestrator access.
+
+#### Docker & Dependencies
+- **Upgraded system packages in Docker images to address CVEs** (#38)
+  - Executed OS-level upgrades in OpenResty (1.25.3.1 → 1.27.1.2), OpenHands app (Debian-based), and sandbox agent-server images to address multiple vulnerabilities flagged in security scans.
+
+- **Base image upgrade for OpenResty** (#35)
+  - Upgraded OpenResty base image to `1.27.1.2-alpine-fat` to address critical CVEs, replacing `1.25.3.1-alpine-fat`.
+
+- **Fixed initialization of sandbox on SPA navigation** (#39)
+  - Bug causing sandbox initialization to fail when navigating to a conversation via client-side routing fixed by adding hooks for `pushState`/`replaceState` events.
+
+#### Deployment Issues
+- **Resolved log creation issue on ECS Fargate deployments** (#43)
+  - Added `/openhands/openresty` CloudWatch log group creation logic in MonitoringStack to fix Fargate container startup failures due to pre-deployment dependency on pre-created log groups.
+
+- **Updated VPC endpoint creation logic** (#42)
+  - Added parameters to skip creation of DynamoDB and specific interface endpoints, solving conflicts with pre-existing VPC endpoint configurations in production deployments.
+
+### Documentation
+
+#### Deployment and Architecture
+- **ECS Fargate architecture documentation overhaul** (#37)
+  - Updated README.md, ARCHITECTURE.md, and other guides to reflect migration from EC2 to Fargate.
+  - Included revised architecture diagrams, stack organization, and Fargate service lifecycle details.
+
+- **Emphasized git worktree usage in workflows** (#33, #41)
+  - Detailed best practices and step-by-step guidance for using git worktrees within `github-workflow` processes to improve repository management consistency.
+
+#### Best Practices
+- **Consistent workflow adherence for Claude Code changes** (#41)
+  - Strengthened development workflow documentation in `CLAUDE.md`, explicitly calling out common violations and mandating the use of git worktrees and GitHub action invocations before making changes.
+
+- **Updated deployment prerequisites** (#21)
+  - Clarified setup instructions for creating sandbox secret keys prior to initial deployment in `CLAUDE.md`.
+
+[1.0.0]: https://github.com/zxkane/openhands-infra/compare/v0.3.0...v1.0.0
+
 ## [0.3.0] - 2026-02-14
 
 ### Added
