@@ -209,6 +209,26 @@ export class SandboxStack extends cdk.Stack {
       },
     }));
 
+    // Bedrock access for LLM inference (ALWAYS granted — required for agent-server LLM calls)
+    // Covers 1P (Amazon), Anthropic Claude, and 2P/3P models available on Bedrock.
+    // Users can select models via settings; this policy permits all Bedrock models.
+    sandboxTaskRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockModelAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+      ],
+      resources: [
+        // Foundation models — all providers (1P Amazon, Anthropic, Meta, Mistral, Cohere, AI21, etc.)
+        'arn:aws:bedrock:*::foundation-model/*',
+        // Cross-region inference profiles (global, us, eu, apac prefixes)
+        `arn:aws:bedrock:*:${this.account}:inference-profile/*`,
+        // Application inference profiles (for cost tracking per user/team)
+        `arn:aws:bedrock:${config.region}:${this.account}:application-inference-profile/*`,
+      ],
+    }));
+
     // AWS permissions for sandbox containers (gated by sandboxAwsAccess context flag)
     // Loads custom IAM policy from sandbox-aws-policy.json (same policy used by SecurityStack
     // for the STS-assumed sandbox role in Docker-on-EC2 mode)
