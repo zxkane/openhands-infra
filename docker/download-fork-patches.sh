@@ -6,17 +6,18 @@
 #
 # Environment variables:
 #   FORK_REPO  - GitHub org/repo (default: zxkane/openhands)
-#   FORK_REF   - Branch or tag   (default: custom-v1.4.0-fargate-r2)
+#   FORK_REF   - Branch or tag   (default: custom-v1.4.0-fargate-r3)
 set -e
 
 FORK_REPO="${FORK_REPO:-zxkane/openhands}"
-# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r2)
+# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r3)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
 # r2: Added resume_conversation() for agent-server registration on conversation resume
-FORK_REF="${FORK_REF:-03f3ff7c817a521b651695be095d4c74c47f0e4c}"
+# r3: Bedrock default credential chain, inference profiles, max_output_tokens fix
+FORK_REF="${FORK_REF:-270abfa167248e8802b4f05e7731fd17629b3726}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
-# 10 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
+# 14 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
 FILES="
 openhands/app_server/sandbox/remote_sandbox_service.py
 openhands/app_server/app_conversation/app_conversation_service.py
@@ -28,6 +29,10 @@ openhands/server/config/server_config.py
 openhands/storage/data_models/secrets.py
 openhands/app_server/config.py
 openhands/app_server/event_callback/sql_event_callback_service.py
+openhands/llm/bedrock.py
+openhands/llm/llm.py
+openhands/utils/llm.py
+openhands/core/config/llm_config.py
 "
 
 FAILED=""

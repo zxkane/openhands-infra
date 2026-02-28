@@ -28,10 +28,11 @@ RUN pip install --no-cache-dir boto3
 # Replaces the old apply-patch.sh (2000+ line regex patching at startup).
 # The fork (zxkane/openhands) has clean per-feature commits against the release tag.
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
-# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r2)
+# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r3)
 # Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
 # r2: Added resume_conversation() for agent-server registration on conversation resume
-ARG FORK_REF=03f3ff7c817a521b651695be095d4c74c47f0e4c
+# r3: Bedrock default credential chain, inference profiles, max_output_tokens fix
+ARG FORK_REF=270abfa167248e8802b4f05e7731fd17629b3726
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
