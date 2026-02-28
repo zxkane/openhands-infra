@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-02-28
+
+### Added
+
+#### Infrastructure
+- **Per-conversation EFS access points for multi-tenant isolation** (#36)
+  - Dynamically create EFS access points per conversation to enforce isolated filesystem access for sandbox containers.
+  - On sandbox `/start` or `/resume`, EFS access points are created at `/sandbox-workspace/<conversation_id>` with uid/gid 1000.
+
+#### Compute
+- **Migration from EC2 to ECS Fargate for all services** (#29)
+  - Eliminated dependency on EC2 instances, Launch Templates, and Auto Scaling Groups.
+  - Expanded architecture to 10 stacks, introducing a shared ECS cluster (ClusterStack).
+  - Migrated OpenHands app service to ECS Fargate task setup: 4 vCPU, 8 GB RAM.
+  - Migrated OpenResty proxy service: 0.25 vCPU, 512 MB RAM.
+  - ECS native secrets integration for `OH_SECRET_KEY` and `DB_PASS`.
+  
+- **ECS Fargate sandbox orchestrator with Cloud Map service discovery** (#28)
+  - Implemented a TypeScript-based Fastify orchestrator service for sandbox operations (RunTask, StopTask, DescribeTasks, cleanup stale records).
+  - Integrated private DNS resolution using Cloud Map (`orchestrator.openhands.local:8081`).
+  - Added EventBridge + Lambda-driven cleanup of stale ECS Tasks.
+
+#### Enhancements
+- **Upgrade OpenHands to v1.4.0** (#30)
+  - Updated OpenHands runtime from 1.3.0 to 1.4.0 (63+ upstream commits merged).
+  - Upgraded Agent Server SDK from v1.8.1 to v1.11.4, including 13 custom patches.
+  - Improved E2E testing coverage with updated test cases reflecting ECS Fargate migration.
+
+### Changed
+
+#### Deployment Workflow
+- **GitHub Actions release process improvement** (#46)
+  - Switched from default `GITHUB_TOKEN` to GitHub App token for triggering dependent workflows.
+  - Ensures the `build-and-test` CI workflow triggers correctly on release PRs.
+
+### Fixed
+
+#### Infrastructure
+- **Bedrock model access for sandbox task role** (#44)
+  - Added `bedrock:InvokeModel` permission to the `sandboxTaskRole` to resolve access errors in production deployments.
+
+- **Explicit creation of CloudWatch log groups in MonitoringStack** (#43)
+  - Fixed OpenResty container startup failure due to missing CloudWatch log groups.
+  - Addressed incorrect assumption that ECS Fargate auto-creates log groups with the `awslogs` driver.
+
+- **Skip parameters for conflicting VPC endpoints** (#42)
+  - Added `skipDynamoDbEndpoint` and `skipInterfaceEndpoints` parameters to prevent conflicts during production deployments caused by pre-existing VPC endpoints.
+
+#### Security
+- **Remove self-referencing Sandbox Security Group rule** (#34)
+  - Removed ingress rules allowing inter-sandbox communications on all TCP ports to enhance network isolation and security.
+
+#### Docker Images
+- **Resolved CVEs in system packages for all Docker images** (#38)
+  - Upgraded system packages in OpenResty, App (OpenHands), and Sandbox images using `apt-get` and `apk` commands.
+  - Addressed critical OS-level vulnerabilities flagged during reliability scans.
+
+- **Updated OpenResty base image for CVE remediation** (#35)
+  - Migrated to `openresty/openresty:1.27.1.2-alpine-fat` from `1.25.3.1-alpine-fat`.
+
+#### Sandboxes
+- **Fix sandbox status initialization on SPA navigation** (#39)
+  - Patched sandbox auto-initialization for client-side navigation (`pushState`/`popstate`) on the OpenHands dashboard.
+  
+- **Register conversation with agent-server during resume** (#31)
+  - Ensured conversations are registered with the agent-server API (`POST /api/conversations`) after resuming sandboxes.
+
+- **Handle `.git` ownership issues on sandbox stop/resume** (#32)
+  - Addressed HTTP 500 errors caused by mismatched permissions in the `.git` workspace folder during sandbox resume.
+
+### Documentation
+
+#### Deployment Guide
+- **ECS Fargate architecture update** (#37)
+  - Comprehensive restructuring of architecture documentation to match recent migration updates.
+  - Updated deployment prerequisites, stack details, and diagrams.
+
+#### Development Workflow
+- **Git worktree guidance added** (#33)
+  - Enhanced `github-workflow` skill with clear instructions and common error avoidance tips for using git worktrees efficiently.
+
+[1.0.0]: https://github.com/zxkane/openhands-infra/compare/v0.3.0...v1.0.0
+
 ## [0.3.0] - 2026-02-14
 
 ### Added
