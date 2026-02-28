@@ -199,7 +199,8 @@ async function cleanupOrphanTasks(): Promise<number> {
   // 5. Stop each orphan task
   let stoppedCount = 0;
   for (const task of orphanTasks) {
-    const taskArn = task.taskArn!;
+    if (!task.taskArn) continue;
+    const taskArn = task.taskArn;
     try {
       logger.info('Stopping orphan sandbox task', { taskArn });
       await ecs.send(new StopTaskCommand({
