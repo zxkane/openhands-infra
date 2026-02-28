@@ -163,13 +163,21 @@ async function cleanupOrphanTasks(): Promise<number> {
   const GRACE_PERIOD_MS = 5 * 60 * 1000;
   const graceCutoff = Date.now() - GRACE_PERIOD_MS;
 
-  // Describe candidate tasks to get their start time
-  const describeResponse = await ecs.send(new DescribeTasksCommand({
-    cluster: ECS_CLUSTER_ARN,
-    tasks: candidateOrphanArns,
-  }));
+  // Describe candidate tasks to get their start time (batch in groups of 100 — API limit)
+  const DESCRIBE_BATCH_SIZE = 100;
+  const allDescribedTasks: Array<{ taskArn?: string; startedAt?: Date; createdAt?: Date }> = [];
+  for (let i = 0; i < candidateOrphanArns.length; i += DESCRIBE_BATCH_SIZE) {
+    const batch = candidateOrphanArns.slice(i, i + DESCRIBE_BATCH_SIZE);
+    const describeResponse = await ecs.send(new DescribeTasksCommand({
+      cluster: ECS_CLUSTER_ARN,
+      tasks: batch,
+    }));
+    if (describeResponse.tasks) {
+      allDescribedTasks.push(...describeResponse.tasks);
+    }
+  }
 
-  const orphanTasks = (describeResponse.tasks || []).filter(task => {
+  const orphanTasks = allDescribedTasks.filter(task => {
     const startedAt = task.startedAt ?? task.createdAt;
     if (!startedAt) return true; // If no timestamp, treat as orphan
     return startedAt.getTime() < graceCutoff;
