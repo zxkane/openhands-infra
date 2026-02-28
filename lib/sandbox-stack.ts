@@ -583,6 +583,7 @@ export class SandboxStack extends cdk.Stack {
         REGISTRY_TABLE_NAME: registryTable.tableName,
         ECS_CLUSTER_ARN: cluster.clusterArn,
         IDLE_TIMEOUT_MINUTES: String(props.idleTimeoutMinutes ?? 30),
+        SANDBOX_TASK_FAMILY: 'openhands-sandbox',
         AWS_REGION_NAME: config.region,
         LOG_LEVEL: 'INFO',
         POWERTOOLS_SERVICE_NAME: 'sandbox-idle-monitor',
