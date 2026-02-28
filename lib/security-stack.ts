@@ -171,6 +171,19 @@ export class SecurityStack extends cdk.Stack {
       ],
     }));
 
+    // Bedrock model discovery for /api/options/models endpoint
+    // Allows the app to enumerate available models so users can select from the settings UI
+    appTaskRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockModelDiscovery',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:ListFoundationModels',
+        'bedrock:ListInferenceProfiles',
+        'bedrock:GetInferenceProfile',
+      ],
+      resources: ['*'], // List/Get operations don't support resource-level restrictions
+    }));
+
     // ECS Execute Command requires SSM Messages permissions on the task role
     appTaskRole.addToPolicy(new iam.PolicyStatement({
       sid: 'EcsExecAccess',

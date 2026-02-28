@@ -23,23 +23,24 @@ default_agent = "CodeActAgent"
 # config.toml, and we need to inject the actual bucket name dynamically from CDK.
 
 [llm]
-# AWS Bedrock Claude 4.5 models with Global inference profile
-# Global endpoint routes requests to any commercial AWS Region for optimal performance
+# AWS Bedrock with Global inference profile (routes requests to any commercial AWS Region)
+# Default: Claude Sonnet 4.6 — balanced performance and cost for coding tasks
+# Users can change the model via the settings UI (HIDE_LLM_SETTINGS=false)
 #
-# Available Claude 4.5 models (choose one):
-# - Claude Opus 4.5:  $5/1M input, $25/1M output  - Most powerful, best for complex tasks
-# - Claude Sonnet 4.5: $3/1M input, $15/1M output - Balanced performance and cost
-# - Claude Haiku 4.5:  $1/1M input, $5/1M output  - Fastest, most cost-effective
+# Popular models (users can select via settings):
+# - Claude Sonnet 4.6: global.anthropic.claude-sonnet-4-6 (default)
+# - Claude Opus 4.6:   global.anthropic.claude-opus-4-6
+# - Claude Haiku 4.5:  global.anthropic.claude-haiku-4-5-20251001-v1:0
+# - Users can also specify us./eu./apac. prefixes for regional routing
+# - Custom ARNs for application inference profiles are supported
 #
-model = "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0"
+model = "bedrock/global.anthropic.claude-sonnet-4-6"
 
 # Dummy API key required by OpenHands config loading logic
 # Bedrock uses IAM roles for authentication, but Settings.from_config() returns None
 # if api_key is not set, which prevents MCP config from being merged into user settings.
 # This placeholder ensures config.toml settings (including MCP servers) are loaded.
 api_key = "placeholder-not-used-for-bedrock-iam-auth"
-# model = "bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-# model = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # AWS region for Bedrock API calls
 # This will be automatically set by the EC2 user data script
