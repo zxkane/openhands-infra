@@ -516,7 +516,7 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       // Verify Lambda@Edge function is created
       template.hasResourceProperties('AWS::Lambda::Function', {
-        Runtime: 'nodejs22.x',
+        Runtime: 'nodejs24.x',
         Handler: 'index.handler',
       });
 
@@ -907,7 +907,7 @@ describe('OpenHands Infrastructure Stacks', () => {
       // Verify Idle Monitor Lambda
       template.hasResourceProperties('AWS::Lambda::Function', {
         FunctionName: 'openhands-sandbox-idle-monitor',
-        Runtime: 'nodejs22.x',
+        Runtime: 'nodejs24.x',
       });
 
       // Verify EventBridge rule for idle monitor
@@ -1167,6 +1167,112 @@ describe('OpenHands Infrastructure Stacks', () => {
       });
 
       expect(stack.output.efsFileSystemId).toBeDefined();
+    });
+  });
+
+  describe('Lambda Node.js Runtime Enforcement', () => {
+    const REQUIRED_NODEJS_RUNTIME = 'nodejs24.x';
+
+    /**
+     * Scans a CloudFormation template for ALL AWS::Lambda::Function resources using
+     * a Node.js runtime and verifies they use the required version.
+     *
+     * CDK-internal Lambdas (custom resource providers, cross-region export readers)
+     * are excluded by matching known CDK handler prefixes that don't correspond to
+     * user-defined functions.
+     */
+    function assertAllNodejsLambdasUseRuntime(
+      template: Template,
+      expectedRuntime: string,
+      expectedMinCount: number,
+    ): void {
+      const templateJson = template.toJSON() as Record<string, unknown>;
+      const resources = templateJson.Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
+
+      // CDK-internal Lambda handlers that we do NOT control
+      const CDK_INTERNAL_HANDLERS = ['__entrypoint__.handler', 'framework.onEvent', 'framework.isComplete', 'framework.onTimeout'];
+
+      const nodejsLambdas = Object.entries(resources)
+        .filter(([, r]) => {
+          if (r.Type !== 'AWS::Lambda::Function') return false;
+          const runtime = r.Properties.Runtime as string | undefined;
+          if (!runtime?.startsWith('nodejs')) return false;
+          const handler = r.Properties.Handler as string | undefined;
+          return !CDK_INTERNAL_HANDLERS.includes(handler ?? '');
+        })
+        .map(([logicalId, r]) => ({
+          logicalId,
+          runtime: r.Properties.Runtime as string,
+          functionName: r.Properties.FunctionName as string | undefined,
+        }));
+
+      // Ensure we found the expected number of user-defined Lambdas
+      expect(nodejsLambdas.length).toBeGreaterThanOrEqual(expectedMinCount);
+
+      // Assert each one uses the required runtime
+      for (const fn of nodejsLambdas) {
+        expect({ name: fn.functionName ?? fn.logicalId, runtime: fn.runtime }).toEqual(
+          expect.objectContaining({ runtime: expectedRuntime }),
+        );
+      }
+    }
+
+    test('all Edge stack Lambda@Edge functions use nodejs24.x', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkRt', { env: testEnv, config: testConfig });
+      const monitoringStack = new MonitoringStack(app, 'TestMonitoringRt', { env: testEnv, config: testConfig });
+      const securityStack = new SecurityStack(app, 'TestSecurityRt', {
+        env: testEnv, config: testConfig,
+        networkOutput: networkStack.output, dataBucket: monitoringStack.output.dataBucket,
+      });
+      const clusterStack = new ClusterStack(app, 'TestClusterRt', { env: testEnv, config: testConfig, networkOutput: networkStack.output });
+      const computeStack = new ComputeStack(app, 'TestComputeRt', {
+        env: testEnv, config: testConfig,
+        networkOutput: networkStack.output, securityOutput: securityStack.output,
+        monitoringOutput: monitoringStack.output, clusterOutput: clusterStack.output,
+        databaseOutput: mockDatabaseOutput, sandboxOutput: mockSandboxOutput,
+      });
+      const edgeStack = new EdgeStack(app, 'TestEdgeRt', {
+        env: { account: testEnv.account, region: 'us-east-1' },
+        config: testConfig, computeOutput: computeStack.output,
+        alb: computeStack.alb, authOutput: mockAuthOutput,
+        crossRegionReferences: true,
+      });
+
+      const template = Template.fromStack(edgeStack);
+      // AuthFunction + SecurityHeadersFunction = 2 user-defined Lambdas
+      assertAllNodejsLambdasUseRuntime(template, REQUIRED_NODEJS_RUNTIME, 2);
+    });
+
+    test('all Database stack Lambda functions use nodejs24.x', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkDb', { env: testEnv, config: testConfig });
+      const monitoringStack = new MonitoringStack(app, 'TestMonitoringDb', { env: testEnv, config: testConfig });
+      const securityStack = new SecurityStack(app, 'TestSecurityDb', {
+        env: testEnv, config: testConfig,
+        networkOutput: networkStack.output, dataBucket: monitoringStack.output.dataBucket,
+      });
+      const databaseStack = new DatabaseStack(app, 'TestDatabaseDb', {
+        env: testEnv,
+        networkOutput: networkStack.output, securityOutput: securityStack.output,
+        appTaskRoleArn: 'arn:aws:iam::123456789012:role/mock-app-task-role',
+      });
+
+      const template = Template.fromStack(databaseStack);
+      // DbBootstrapHandler = 1 user-defined Lambda
+      assertAllNodejsLambdasUseRuntime(template, REQUIRED_NODEJS_RUNTIME, 1);
+    });
+
+    test('all Sandbox stack Lambda functions use nodejs24.x', () => {
+      const networkStack = new NetworkStack(app, 'TestNetworkSb', { env: testEnv, config: testConfig });
+      const monitoringStack = new MonitoringStack(app, 'TestMonitoringSb', { env: testEnv, config: testConfig });
+      const clusterStack = new ClusterStack(app, 'TestClusterSb', { env: testEnv, config: testConfig, networkOutput: networkStack.output });
+      const sandboxStack = new SandboxStack(app, 'TestSandboxSb', {
+        env: testEnv, config: testConfig,
+        networkOutput: networkStack.output, monitoringOutput: monitoringStack.output, clusterOutput: clusterStack.output,
+      });
+
+      const template = Template.fromStack(sandboxStack);
+      // IdleMonitorLambda + TaskStateHandler = 2 user-defined Lambdas
+      assertAllNodejsLambdasUseRuntime(template, REQUIRED_NODEJS_RUNTIME, 2);
     });
   });
 
