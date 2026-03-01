@@ -572,7 +572,7 @@ export class SandboxStack extends cdk.Stack {
     // ========================================
     const idleMonitorLambda = new lambdaNode.NodejsFunction(this, 'IdleMonitorLambda', {
       functionName: 'openhands-sandbox-idle-monitor',
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: path.join(__dirname, '..', 'lambda', 'sandbox-monitor', 'index.ts'),
       handler: 'handler',
       timeout: cdk.Duration.minutes(2),
@@ -647,7 +647,7 @@ export class SandboxStack extends cdk.Stack {
     // status — preventing the upstream OpenHands app from connecting to dead task IPs.
     const taskStateHandler = new lambdaNode.NodejsFunction(this, 'TaskStateHandler', {
       functionName: 'openhands-sandbox-task-state',
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: path.join(__dirname, '..', 'lambda', 'sandbox-task-state', 'index.ts'),
       handler: 'handler',
       timeout: cdk.Duration.seconds(30),

@@ -180,7 +180,7 @@ export class DatabaseStack extends cdk.Stack {
     );
 
     const dbBootstrapHandler = new lambdaNodejs.NodejsFunction(this, 'DbBootstrapHandler', {
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: path.join(__dirname, '..', 'lambda', 'db-bootstrap', 'index.ts'),
       handler: 'handler',
       vpc,
@@ -193,7 +193,7 @@ export class DatabaseStack extends cdk.Stack {
         nodeModules: ['pg'],
       },
       environment: {
-        // Node.js 20+ requires explicit CA certificate path for RDS SSL connections
+        // Node.js requires explicit CA certificate path for RDS SSL connections
         // Lambda includes RDS CA certificates at this path
         NODE_EXTRA_CA_CERTS: '/var/runtime/ca-cert.pem',
       },

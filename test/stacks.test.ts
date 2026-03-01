@@ -516,7 +516,7 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       // Verify Lambda@Edge function is created
       template.hasResourceProperties('AWS::Lambda::Function', {
-        Runtime: 'nodejs22.x',
+        Runtime: 'nodejs24.x',
         Handler: 'index.handler',
       });
 
@@ -907,7 +907,7 @@ describe('OpenHands Infrastructure Stacks', () => {
       // Verify Idle Monitor Lambda
       template.hasResourceProperties('AWS::Lambda::Function', {
         FunctionName: 'openhands-sandbox-idle-monitor',
-        Runtime: 'nodejs22.x',
+        Runtime: 'nodejs24.x',
       });
 
       // Verify EventBridge rule for idle monitor

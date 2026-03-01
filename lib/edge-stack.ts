@@ -108,7 +108,7 @@ export class EdgeStack extends cdk.Stack {
       .replace(/'\{\{COOKIE_DOMAIN\}\}'/g, `'.${config.domainName}'`);
 
     const authFunction = new lambda.Function(this, 'AuthFunction', {
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(authHandlerCode),
       role: authFunctionRole,
@@ -136,7 +136,7 @@ export class EdgeStack extends cdk.Stack {
 
     // Lambda@Edge function for origin-response - adds security headers for runtime requests
     const securityHeadersFunction = new lambda.Function(this, 'SecurityHeadersFunction', {
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(`
 // Origin Response Handler - adds security headers for runtime requests
