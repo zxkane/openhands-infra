@@ -1326,7 +1326,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "AGENT_SERVER_IMAGE_TAG",
-                "Value": "ec8e21943a5606510ae0bf1c5999cd6d4c62237c0d7ade5d8da4ef9ff42f757c",
+                "Value": "b909bf647b340b1f9a3227de0f347c3cf51d7a5ccbf840bee718ef9b7579ad5e",
               },
               {
                 "Name": "AGENT_ENABLE_BROWSING",
@@ -1432,7 +1432,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f99c64f4be6bc6c90931d090b9bf6fcbbaae19977f85f6b4646c8eb9a50b8e57",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:d3a74e47f939d14d4f96e925fe597c54074afd6eefcf61882d5ac87eca096013",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",

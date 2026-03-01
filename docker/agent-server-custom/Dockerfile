@@ -20,7 +20,7 @@ RUN pip install uv
 
 # Clone the OpenHands SDK repository
 WORKDIR /build
-RUN git clone --depth 1 --branch v1.11.4 https://github.com/OpenHands/software-agent-sdk.git .
+RUN git clone --depth 1 --branch v1.11.5 https://github.com/OpenHands/software-agent-sdk.git .
 
 # Copy and run SDK patches
 # Patches 23-26: Handle invalid/masked secrets during conversation resume
