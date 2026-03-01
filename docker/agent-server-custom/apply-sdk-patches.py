@@ -11,6 +11,7 @@ Patches:
   - Patch 24: Use exclude_none=True in model_dump() (conversation_service)
   - Patch 25: Filter invalid secrets from JSON before model_validate_json
   - Patch 26: Filter invalid secret_sources from ConversationState
+  - Patch 27: Fix Bedrock max_output_tokens when litellm reports context window as output limit
 
 Usage:
   python3 apply-sdk-patches.py /path/to/build/directory
@@ -353,6 +354,107 @@ def patch_26_conversation_state(build_dir: Path) -> bool:
     return True
 
 
+def patch_27_bedrock_max_output_tokens(build_dir: Path) -> bool:
+    """
+    Patch 27: Fix Bedrock models where litellm reports max_output_tokens equal
+    to context window size (e.g. Kimi K2.5: max_output_tokens=262144).
+
+    When max_output_tokens == max_input_tokens, litellm is reporting the context
+    window size, not the actual output limit. Sending this as max_tokens causes
+    Bedrock to reject when input_tokens + max_tokens > context_window.
+
+    This patch:
+    a) Adds detection in llm.py to reset max_output_tokens to None
+    b) Adds a pop in chat_options.py to omit max_completion_tokens=None for Bedrock
+    """
+    # Part A: Patch llm.py — detect context-window-as-output-limit
+    llm_file = build_dir / "openhands-sdk/openhands/sdk/llm/llm.py"
+
+    if not llm_file.exists():
+        print(f"ERROR: Patch 27a - File not found: {llm_file}")
+        return False
+
+    content = llm_file.read_text()
+
+    # Insert after the max_output_tokens assignment block (after the o3 clamping)
+    # Target: after the "if 'o3' in self.model:" block, before _validate_context_window_size
+    # or the next method definition
+    anchor = '                    "Clamping max_output_tokens to %s for %s",'
+    if anchor not in content:
+        print("ERROR: Patch 27a - Could not find o3 clamping anchor in llm.py")
+        return False
+
+    # Find the end of the o3 block (the closing of the if block)
+    anchor_pos = content.index(anchor)
+    # Find the next blank line after the o3 block
+    search_from = content.index('\n\n', anchor_pos)
+
+    patch_27a = '''
+
+        # Patch 27 (openhands-infra): Bedrock models where litellm reports
+        # max_output_tokens == max_input_tokens are using the context window size,
+        # not the actual output limit. Reset to None so the Bedrock API uses
+        # the model's own default (per AWS docs, omitting maxTokens defaults to
+        # the model's maximum).
+        if self.model.startswith("bedrock/"):
+            _bad_output_limit = (
+                self.max_output_tokens is not None
+                and self.max_input_tokens is not None
+                and self.max_output_tokens == self.max_input_tokens
+            )
+            if self.max_output_tokens is None or _bad_output_limit:
+                if _bad_output_limit:
+                    logger.debug(
+                        "Patch 27: Bedrock model %s has max_output_tokens (%d) "
+                        "equal to max_input_tokens — likely context window. "
+                        "Resetting to None.",
+                        self.model,
+                        self.max_output_tokens,
+                    )
+                self.max_output_tokens = None
+'''
+
+    content = content[:search_from] + patch_27a + content[search_from:]
+    llm_file.write_text(content)
+    print("Patch 27a: Added Bedrock max_output_tokens context-window detection to llm.py")
+
+    # Part B: Patch chat_options.py — omit max_completion_tokens=None for Bedrock
+    chat_options_file = build_dir / "openhands-sdk/openhands/sdk/llm/options/chat_options.py"
+
+    if not chat_options_file.exists():
+        print(f"ERROR: Patch 27b - File not found: {chat_options_file}")
+        return False
+
+    opts_content = chat_options_file.read_text()
+
+    # Insert after the Azure max_tokens handling block
+    azure_anchor = '            out["max_tokens"] = out.pop("max_completion_tokens")'
+    if azure_anchor not in opts_content:
+        print("ERROR: Patch 27b - Could not find Azure max_tokens anchor in chat_options.py")
+        return False
+
+    patch_27b = '''
+
+    # Patch 27 (openhands-infra): For Bedrock models with unknown max_output_tokens,
+    # remove max_completion_tokens entirely so the Bedrock API uses the model's own
+    # maximum (safest default for coding agents).
+    if llm.model.startswith("bedrock/") and out.get("max_completion_tokens") is None:
+        out.pop("max_completion_tokens", None)
+'''
+
+    # Find the line after the Azure block
+    azure_end = opts_content.index(azure_anchor) + len(azure_anchor)
+    # Find the next newline
+    next_newline = opts_content.index('\n', azure_end)
+    opts_content = opts_content[:next_newline + 1] + patch_27b + opts_content[next_newline + 1:]
+
+    chat_options_file.write_text(opts_content)
+    print("Patch 27b: Added Bedrock max_completion_tokens=None removal to chat_options.py")
+
+    print("Patch 27: Successfully patched both llm.py and chat_options.py")
+    return True
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} /path/to/build/directory")
@@ -377,6 +479,7 @@ def main():
     results.append(("Patch 24", patch_24_conversation_service_model_dump(build_dir)))
     results.append(("Patch 25", patch_25_json_preprocessing(build_dir)))
     results.append(("Patch 26", patch_26_conversation_state(build_dir)))
+    results.append(("Patch 27", patch_27_bedrock_max_output_tokens(build_dir)))
 
     print()
     print("=" * 60)
