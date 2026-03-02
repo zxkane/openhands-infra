@@ -349,11 +349,11 @@ describe('OpenHands Infrastructure Stacks', () => {
       template.resourceCountIs('AWS::EC2::LaunchTemplate', 0);
       template.resourceCountIs('AWS::AutoScaling::AutoScalingGroup', 0);
 
-      // Verify Fargate task definitions are created
+      // Verify Fargate task definitions are created (rightsized for control plane)
       template.hasResourceProperties('AWS::ECS::TaskDefinition', {
         Family: 'openhands-app',
-        Cpu: '4096',
-        Memory: '8192',
+        Cpu: '1024',
+        Memory: '2048',
         RequiresCompatibilities: ['FARGATE'],
         NetworkMode: 'awsvpc',
       });
@@ -395,6 +395,35 @@ describe('OpenHands Infrastructure Stacks', () => {
 
       // Verify CloudWatch Alarms are created (CPU + Memory for ECS)
       template.resourceCountIs('AWS::CloudWatch::Alarm', 2);
+
+      // Verify App Service Auto Scaling is configured
+      template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+        MinCapacity: 1,
+        MaxCapacity: 3,
+        ScalableDimension: 'ecs:service:DesiredCount',
+      });
+
+      // Verify CPU-based scaling policy
+      template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalingPolicy', {
+        PolicyType: 'TargetTrackingScaling',
+        TargetTrackingScalingPolicyConfiguration: {
+          PredefinedMetricSpecification: {
+            PredefinedMetricType: 'ECSServiceAverageCPUUtilization',
+          },
+          TargetValue: 60,
+        },
+      });
+
+      // Verify Memory-based scaling policy
+      template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalingPolicy', {
+        PolicyType: 'TargetTrackingScaling',
+        TargetTrackingScalingPolicyConfiguration: {
+          PredefinedMetricSpecification: {
+            PredefinedMetricType: 'ECSServiceAverageMemoryUtilization',
+          },
+          TargetValue: 70,
+        },
+      });
     });
 
     test('creates ECS service alarms', () => {
