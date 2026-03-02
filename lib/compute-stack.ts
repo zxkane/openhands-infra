@@ -121,8 +121,8 @@ export interface ComputeStackProps extends cdk.StackProps {
  * ComputeStack - Creates Fargate services, ALB, and EFS configuration
  *
  * This stack deploys:
- * - OpenHands App Fargate Service (4 vCPU, 8 GB) with Cloud Map DNS
- * - OpenResty Proxy Fargate Service (0.25 vCPU, 512 MB)
+ * - OpenHands App Fargate Service (1 vCPU, 2 GB, auto-scales 1-3) with Cloud Map DNS
+ * - OpenResty Proxy Fargate Service (0.25 vCPU, 512 MB, auto-scales 1-3)
  * - Internet-facing Application Load Balancer
  * - IP-type Target Groups with health checks
  * - EFS for persistent workspace storage
@@ -389,12 +389,14 @@ export class ComputeStack extends cdk.Stack {
     );
 
     // ========================================
-    // App Fargate Task Definition (4 vCPU / 8 GB)
+    // App Fargate Task Definition (1 vCPU / 2 GB)
+    // Control plane only — actual compute runs in sandbox containers.
+    // Rightsized based on CloudWatch metrics: avg CPU <1%, avg memory ~580 MB.
     // ========================================
     const appTaskDefinition = new ecs.FargateTaskDefinition(this, 'AppTaskDef', {
       family: 'openhands-app',
-      cpu: 4096,      // 4 vCPU
-      memoryLimitMiB: 8192,  // 8 GB
+      cpu: 1024,      // 1 vCPU
+      memoryLimitMiB: 2048,  // 2 GB
       runtimePlatform: {
         cpuArchitecture: ecs.CpuArchitecture.ARM64,
         operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
@@ -547,6 +549,26 @@ export class ComputeStack extends cdk.Stack {
     cdk.Tags.of(appService).add('Component', 'openhands-app');
 
     // ========================================
+    // App Service Auto Scaling
+    // ========================================
+    const appScaling = appService.autoScaleTaskCount({
+      minCapacity: 1,
+      maxCapacity: 3,
+    });
+
+    appScaling.scaleOnCpuUtilization('AppCpuScaling', {
+      targetUtilizationPercent: 60,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    appScaling.scaleOnMemoryUtilization('AppMemoryScaling', {
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    // ========================================
     // OpenResty Fargate Task Definition (0.25 vCPU / 512 MB)
     // ========================================
     const openrestyTaskDefinition = new ecs.FargateTaskDefinition(this, 'OpenRestyTaskDef', {
@@ -603,6 +625,20 @@ export class ComputeStack extends cdk.Stack {
       propagateTags: ecs.PropagatedTagSource.TASK_DEFINITION,
     });
     cdk.Tags.of(openrestyService).add('Component', 'openresty-proxy');
+
+    // ========================================
+    // OpenResty Service Auto Scaling
+    // ========================================
+    const openrestyScaling = openrestyService.autoScaleTaskCount({
+      minCapacity: 1,
+      maxCapacity: 3,
+    });
+
+    openrestyScaling.scaleOnCpuUtilization('OpenRestyCpuScaling', {
+      targetUtilizationPercent: 60,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
 
     // ========================================
     // Internet-facing ALB

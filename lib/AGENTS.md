@@ -228,12 +228,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO openhands_ia
 
 Two separate ECS Fargate services run the application:
 
-1. **App Service** (`openhands-app`): 4 vCPU / 8 GB ARM64
+1. **App Service** (`openhands-app`): 1 vCPU / 2 GB ARM64 (auto-scales 1-3 tasks)
    - Cloud Map DNS: `app.openhands.local:3000`
    - EFS mount at `/data/openhands` for workspace persistence
    - Secrets: `OH_SECRET_KEY`, `DB_PASS` via ECS native injection
+   - Auto Scaling: CPU >60% scale out, Memory >70% scale out
 
-2. **OpenResty Service** (`openhands-openresty`): 0.25 vCPU / 512 MB ARM64
+2. **OpenResty Service** (`openhands-openresty`): 0.25 vCPU / 512 MB ARM64 (auto-scales 1-3 tasks)
    - Runtime proxy on port 8080
    - Routes `/runtime/{convId}/{port}/...` to sandbox Fargate tasks
 

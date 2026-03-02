@@ -1211,6 +1211,81 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
       },
       "Type": "AWS::ServiceDiscovery::Service",
     },
+    "AppServiceTaskCountTarget8D11C093": {
+      "Properties": {
+        "MaxCapacity": 3,
+        "MinCapacity": 1,
+        "ResourceId": {
+          "Fn::Join": [
+            "",
+            [
+              "service/",
+              {
+                "Fn::ImportValue": "TestClusterStack:ExportsOutputRefClusterEB0386A796A0E3FE",
+              },
+              "/",
+              {
+                "Fn::GetAtt": [
+                  "AppServiceA2F9036C",
+                  "Name",
+                ],
+              },
+            ],
+          ],
+        },
+        "RoleARN": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService",
+            ],
+          ],
+        },
+        "ScalableDimension": "ecs:service:DesiredCount",
+        "ServiceNamespace": "ecs",
+      },
+      "Type": "AWS::ApplicationAutoScaling::ScalableTarget",
+    },
+    "AppServiceTaskCountTargetAppCpuScalingD51FC7EC": {
+      "Properties": {
+        "PolicyName": "TestComputeStackAppServiceTaskCountTargetAppCpuScaling2B84F501",
+        "PolicyType": "TargetTrackingScaling",
+        "ScalingTargetId": {
+          "Ref": "AppServiceTaskCountTarget8D11C093",
+        },
+        "TargetTrackingScalingPolicyConfiguration": {
+          "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ECSServiceAverageCPUUtilization",
+          },
+          "ScaleInCooldown": 300,
+          "ScaleOutCooldown": 60,
+          "TargetValue": 60,
+        },
+      },
+      "Type": "AWS::ApplicationAutoScaling::ScalingPolicy",
+    },
+    "AppServiceTaskCountTargetAppMemoryScaling1F7A42A5": {
+      "Properties": {
+        "PolicyName": "TestComputeStackAppServiceTaskCountTargetAppMemoryScaling1A343A10",
+        "PolicyType": "TargetTrackingScaling",
+        "ScalingTargetId": {
+          "Ref": "AppServiceTaskCountTarget8D11C093",
+        },
+        "TargetTrackingScalingPolicyConfiguration": {
+          "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ECSServiceAverageMemoryUtilization",
+          },
+          "ScaleInCooldown": 300,
+          "ScaleOutCooldown": 60,
+          "TargetValue": 70,
+        },
+      },
+      "Type": "AWS::ApplicationAutoScaling::ScalingPolicy",
+    },
     "AppTargetGroup3D716DB6": {
       "Properties": {
         "HealthCheckIntervalSeconds": 30,
@@ -1490,12 +1565,12 @@ security_analyzer = "llm"",
             ],
           },
         ],
-        "Cpu": "4096",
+        "Cpu": "1024",
         "ExecutionRoleArn": {
           "Fn::ImportValue": "TestSecurityStack:ExportsOutputFnGetAttAppExecutionRoleBDDAF861Arn9CA1CF07",
         },
         "Family": "openhands-app",
-        "Memory": "8192",
+        "Memory": "2048",
         "NetworkMode": "awsvpc",
         "RequiresCompatibilities": [
           "FARGATE",
@@ -1713,6 +1788,63 @@ security_analyzer = "llm"",
         },
       },
       "Type": "AWS::ECS::Service",
+    },
+    "OpenRestyServiceTaskCountTargetB0623215": {
+      "Properties": {
+        "MaxCapacity": 3,
+        "MinCapacity": 1,
+        "ResourceId": {
+          "Fn::Join": [
+            "",
+            [
+              "service/",
+              {
+                "Fn::ImportValue": "TestClusterStack:ExportsOutputRefClusterEB0386A796A0E3FE",
+              },
+              "/",
+              {
+                "Fn::GetAtt": [
+                  "OpenRestyService0A1011FD",
+                  "Name",
+                ],
+              },
+            ],
+          ],
+        },
+        "RoleARN": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService",
+            ],
+          ],
+        },
+        "ScalableDimension": "ecs:service:DesiredCount",
+        "ServiceNamespace": "ecs",
+      },
+      "Type": "AWS::ApplicationAutoScaling::ScalableTarget",
+    },
+    "OpenRestyServiceTaskCountTargetOpenRestyCpuScalingD94C5709": {
+      "Properties": {
+        "PolicyName": "TestComputeStackOpenRestyServiceTaskCountTargetOpenRestyCpuScalingFC5822BF",
+        "PolicyType": "TargetTrackingScaling",
+        "ScalingTargetId": {
+          "Ref": "OpenRestyServiceTaskCountTargetB0623215",
+        },
+        "TargetTrackingScalingPolicyConfiguration": {
+          "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ECSServiceAverageCPUUtilization",
+          },
+          "ScaleInCooldown": 300,
+          "ScaleOutCooldown": 60,
+          "TargetValue": 60,
+        },
+      },
+      "Type": "AWS::ApplicationAutoScaling::ScalingPolicy",
     },
     "OpenRestyTaskDef8DEC8161": {
       "Properties": {
