@@ -396,14 +396,10 @@ describe('OpenHands Infrastructure Stacks', () => {
       // Verify CloudWatch Alarms are created (CPU + Memory for ECS)
       template.resourceCountIs('AWS::CloudWatch::Alarm', 2);
 
-      // Verify App Service Auto Scaling is configured
-      template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
-        MinCapacity: 1,
-        MaxCapacity: 3,
-        ScalableDimension: 'ecs:service:DesiredCount',
-      });
+      // Verify Auto Scaling is configured for both services (2 ScalableTargets)
+      template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 2);
 
-      // Verify CPU-based scaling policy
+      // Verify CPU-based scaling policy (both App and OpenResty)
       template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalingPolicy', {
         PolicyType: 'TargetTrackingScaling',
         TargetTrackingScalingPolicyConfiguration: {
@@ -414,7 +410,7 @@ describe('OpenHands Infrastructure Stacks', () => {
         },
       });
 
-      // Verify Memory-based scaling policy
+      // Verify Memory-based scaling policy (App only)
       template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalingPolicy', {
         PolicyType: 'TargetTrackingScaling',
         TargetTrackingScalingPolicyConfiguration: {

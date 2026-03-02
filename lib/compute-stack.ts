@@ -122,7 +122,7 @@ export interface ComputeStackProps extends cdk.StackProps {
  *
  * This stack deploys:
  * - OpenHands App Fargate Service (1 vCPU, 2 GB, auto-scales 1-3) with Cloud Map DNS
- * - OpenResty Proxy Fargate Service (0.25 vCPU, 512 MB)
+ * - OpenResty Proxy Fargate Service (0.25 vCPU, 512 MB, auto-scales 1-3)
  * - Internet-facing Application Load Balancer
  * - IP-type Target Groups with health checks
  * - EFS for persistent workspace storage
@@ -625,6 +625,20 @@ export class ComputeStack extends cdk.Stack {
       propagateTags: ecs.PropagatedTagSource.TASK_DEFINITION,
     });
     cdk.Tags.of(openrestyService).add('Component', 'openresty-proxy');
+
+    // ========================================
+    // OpenResty Service Auto Scaling
+    // ========================================
+    const openrestyScaling = openrestyService.autoScaleTaskCount({
+      minCapacity: 1,
+      maxCapacity: 3,
+    });
+
+    openrestyScaling.scaleOnCpuUtilization('OpenRestyCpuScaling', {
+      targetUtilizationPercent: 60,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
 
     // ========================================
     // Internet-facing ALB

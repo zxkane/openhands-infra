@@ -234,7 +234,7 @@ Two separate ECS Fargate services run the application:
    - Secrets: `OH_SECRET_KEY`, `DB_PASS` via ECS native injection
    - Auto Scaling: CPU >60% scale out, Memory >70% scale out
 
-2. **OpenResty Service** (`openhands-openresty`): 0.25 vCPU / 512 MB ARM64
+2. **OpenResty Service** (`openhands-openresty`): 0.25 vCPU / 512 MB ARM64 (auto-scales 1-3 tasks)
    - Runtime proxy on port 8080
    - Routes `/runtime/{convId}/{port}/...` to sandbox Fargate tasks
 

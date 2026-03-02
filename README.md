@@ -304,12 +304,12 @@ To remove a domain:
 
 ## Cost Estimate
 
-### Base Infrastructure (~$350-450/month)
+### Base Infrastructure (~$250-350/month)
 
 | Component | Monthly Cost (USD) | Usage Assumption |
 |-----------|--------------------|------------------|
-| Fargate App Service (4 vCPU / 8 GB ARM64) | ~$120 | 730 hours (24/7) |
-| Fargate OpenResty Service (0.25 vCPU / 512 MB) | ~$8 | 730 hours (24/7) |
+| Fargate App Service (1 vCPU / 2 GB ARM64, auto-scales 1-3) | ~$30 | 730 hours baseline, scales on demand |
+| Fargate OpenResty Service (0.25 vCPU / 512 MB, auto-scales 1-3) | ~$8 | 730 hours baseline, scales on demand |
 | Fargate Sandbox Tasks | ~$0-50 | On-demand, per-conversation |
 | Aurora Serverless v2 | ~$43-80 | 0.5-4 ACU (scales with usage) |
 | RDS Proxy | ~$18 | 730 hours |

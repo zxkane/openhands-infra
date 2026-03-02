@@ -1789,6 +1789,63 @@ security_analyzer = "llm"",
       },
       "Type": "AWS::ECS::Service",
     },
+    "OpenRestyServiceTaskCountTargetB0623215": {
+      "Properties": {
+        "MaxCapacity": 3,
+        "MinCapacity": 1,
+        "ResourceId": {
+          "Fn::Join": [
+            "",
+            [
+              "service/",
+              {
+                "Fn::ImportValue": "TestClusterStack:ExportsOutputRefClusterEB0386A796A0E3FE",
+              },
+              "/",
+              {
+                "Fn::GetAtt": [
+                  "OpenRestyService0A1011FD",
+                  "Name",
+                ],
+              },
+            ],
+          ],
+        },
+        "RoleARN": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService",
+            ],
+          ],
+        },
+        "ScalableDimension": "ecs:service:DesiredCount",
+        "ServiceNamespace": "ecs",
+      },
+      "Type": "AWS::ApplicationAutoScaling::ScalableTarget",
+    },
+    "OpenRestyServiceTaskCountTargetOpenRestyCpuScalingD94C5709": {
+      "Properties": {
+        "PolicyName": "TestComputeStackOpenRestyServiceTaskCountTargetOpenRestyCpuScalingFC5822BF",
+        "PolicyType": "TargetTrackingScaling",
+        "ScalingTargetId": {
+          "Ref": "OpenRestyServiceTaskCountTargetB0623215",
+        },
+        "TargetTrackingScalingPolicyConfiguration": {
+          "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ECSServiceAverageCPUUtilization",
+          },
+          "ScaleInCooldown": 300,
+          "ScaleOutCooldown": 60,
+          "TargetValue": 60,
+        },
+      },
+      "Type": "AWS::ApplicationAutoScaling::ScalingPolicy",
+    },
     "OpenRestyTaskDef8DEC8161": {
       "Properties": {
         "ContainerDefinitions": [
