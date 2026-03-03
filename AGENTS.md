@@ -34,6 +34,7 @@ npx cdk diff --all --context ...
 - `sandboxAwsPolicyFile` - Path to custom IAM policy for sandbox
 - `warmPoolSize` - Pre-warmed sandbox Fargate tasks (default: 2)
 - `idleTimeoutMinutes` - Sandbox idle timeout (default: 30, staging: 10)
+- `conversationRetentionDays` - Days before inactive conversations are archived (default: 180)
 - `edgeStackSuffix` - Suffix for Edge stack name (multi-environment)
 - `authCallbackDomains` - OAuth callback domains (JSON array or comma-separated)
 - `authDomainPrefixSuffix` - Cognito domain prefix suffix (default: "shared")
@@ -106,7 +107,7 @@ UserConfigStack <- depends on Security (KMS) + Monitoring (S3), creates Lambda
     |
 ClusterStack <- depends on Network, shared ECS cluster + Cloud Map namespace
     |
-SandboxStack <- depends on Network + Monitoring + Cluster
+SandboxStack <- depends on Network + Monitoring + Cluster + Database
     |
 ComputeStack <- depends on Network + Security + Monitoring + Database + UserConfig + Cluster + Sandbox
     |           (Fargate services for app + OpenResty, ALB, routes /api/v1/user-config/* to Lambda)
@@ -153,6 +154,31 @@ Each sandbox mounts an EFS access point rooted at `/sandbox-workspace/<conversat
 
 Must include **both** file-system and access-point ARNs in IAM policies.
 
+## Conversation Lifecycle
+
+Conversations progress through these states:
+
+```
+STARTING → RUNNING → (idle timeout)    → PAUSED  → (retention days) → ARCHIVED
+                   → (user /stop)       → STOPPED → (retention days) → ARCHIVED
+                   → (user /pause)      → PAUSED
+                   → (task crash)       → STOPPED
+                   → (user /delete)     → [ALL DATA WIPED]
+
+   PAUSED → (user /resume) → STARTING → RUNNING
+  STOPPED → (user /resume) → STARTING → RUNNING
+ ARCHIVED → (view S3 history ✓) | (resume ✗ — 409 Conflict) | (user /delete → WIPED)
+```
+
+| Timeout | Purpose | Staging | Production | Context Parameter |
+|---------|---------|---------|------------|-------------------|
+| Idle timeout | Stop running sandbox after inactivity | 10 min | 30 min | `idleTimeoutMinutes` |
+| Retention timeout | Archive STOPPED/PAUSED conversations | 180 days | 180 days | `conversationRetentionDays` |
+
+**Archival** (daily Lambda): Cleans up EFS workspace, preserves S3 history, removes DynamoDB TTL. ARCHIVED conversations are viewable but not resumable.
+
+**Deletion** (on-demand via orchestrator `/delete`): Full data wipe across S3, EFS, Aurora, and DynamoDB.
+
 ## Key Files
 
 | File | Purpose |
@@ -169,6 +195,8 @@ Must include **both** file-system and access-point ARNs in IAM policies.
 | `lambda/user-config/` | User config API Lambda |
 | `lambda/sandbox-monitor/` | Sandbox idle monitor Lambda |
 | `lambda/sandbox-task-state/` | ECS task state change handler Lambda |
+| `lambda/conversation-archival/` | Daily conversation archival Lambda (STOPPED/PAUSED → ARCHIVED) |
+| `lambda/conversation-delete/` | On-demand conversation deletion Lambda (full data wipe) |
 | `lambda/db-bootstrap/` | Database bootstrap custom resource Lambda |
 | `lib/lambda-edge/` | Lambda@Edge handlers |
 | `test/E2E_TEST_CASES.md` | E2E test cases |

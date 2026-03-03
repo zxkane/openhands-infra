@@ -3381,3 +3381,155 @@ Compute/Docker changes (triggered by `compute-stack.ts`, `security-stack.ts`, `d
 | 4 | Model change persists | Selected model saved and used for new conversations |
 | 5 | Agent responds with changed model | New conversation works with non-default model |
 | 6 | First-time auto-settings | `/api/settings` returns 200 with Bedrock model for new users |
+
+---
+
+## TC-028: Verify Conversation Archival
+
+### Description
+Verify that the archival Lambda transitions inactive PAUSED/STOPPED conversations to ARCHIVED after the configured retention period. ARCHIVED conversations should have their EFS workspace deleted but S3 history preserved.
+
+### Prerequisites
+- Infrastructure deployed with `conversationRetentionDays=1` (short retention for testing)
+- At least one conversation in PAUSED or STOPPED state for longer than 1 day
+- Archival Lambda deployed (`openhands-conversation-archival`)
+
+### Steps
+
+1. Verify a conversation is in PAUSED or STOPPED state with old `last_activity_at`
+   ```bash
+   aws dynamodb query \
+     --table-name <registry-table> \
+     --index-name status-index \
+     --key-condition-expression "#status = :status" \
+     --expression-attribute-names '{"#status":"status"}' \
+     --expression-attribute-values '{":status":{"S":"PAUSED"}}' \
+     --region $DEPLOY_REGION \
+     --query 'Items[0].{conversation_id:conversation_id.S,status:status.S,last_activity_at:last_activity_at.N}'
+   ```
+
+2. Manually invoke the archival Lambda (or wait for daily schedule)
+   ```bash
+   aws lambda invoke \
+     --function-name openhands-conversation-archival \
+     --region $DEPLOY_REGION \
+     /tmp/archival-output.json
+   cat /tmp/archival-output.json
+   # Expected: {"statusCode":200,"body":"{\"candidates\":N,\"archived\":N,\"errors\":0}"}
+   ```
+
+3. Verify conversation is now ARCHIVED
+   ```bash
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key '{"conversation_id":{"S":"<conv-id>"}}' \
+     --region $DEPLOY_REGION \
+     --query 'Item.{status:status.S,ttl:ttl.N}'
+   # Expected: status=ARCHIVED, ttl should be absent (removed)
+   ```
+
+4. Verify EFS workspace directory is deleted
+   ```bash
+   # Via ECS exec into an app container or SSM session
+   ls /mnt/efs/<conversation-id>/ 2>&1
+   # Expected: No such file or directory
+   ```
+
+5. Verify S3 conversation history is preserved
+   ```bash
+   aws s3 ls s3://<data-bucket>/conversations/<conv-id>/ --region $DEPLOY_REGION
+   # Expected: Objects still present (events, metadata)
+   ```
+
+6. Attempt to resume ARCHIVED conversation via UI
+   - Navigate to the conversation URL
+   - Expected: Should NOT start a sandbox (orchestrator returns 409)
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Archival Lambda runs successfully | Lambda returns statusCode 200 |
+| 2 | DynamoDB status transitions to ARCHIVED | `status=ARCHIVED` in DynamoDB |
+| 3 | DynamoDB TTL removed | `ttl` attribute absent on ARCHIVED records |
+| 4 | EFS workspace deleted | Directory no longer exists |
+| 5 | S3 history preserved | Objects still exist under conversation prefix |
+| 6 | Resume blocked for ARCHIVED | Orchestrator returns 409 Conflict |
+| 7 | CloudWatch metric published | `ConversationsArchived` metric in `OpenHands/Sandbox` namespace |
+
+---
+
+## TC-029: Verify Conversation Deletion
+
+### Description
+Verify that the orchestrator `/delete` endpoint fully deletes conversation data across all storage layers (DynamoDB, S3, EFS, Aurora).
+
+### Prerequisites
+- Infrastructure deployed with sandbox orchestrator
+- At least one conversation with data in S3 and DynamoDB
+
+### Steps
+
+1. Create a conversation and interact with it (TC-005)
+   - Record the conversation ID from the URL
+
+2. Stop the sandbox (navigate away or wait for idle timeout)
+
+3. Verify data exists before deletion
+   ```bash
+   CONV_ID="<conversation-id>"
+
+   # DynamoDB record exists
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --region $DEPLOY_REGION \
+     --query 'Item.status.S'
+   # Expected: PAUSED or STOPPED
+
+   # S3 objects exist
+   aws s3 ls s3://<data-bucket>/conversations/$CONV_ID/ --region $DEPLOY_REGION
+   # Expected: Objects present
+   ```
+
+4. Call the orchestrator `/delete` endpoint
+   ```bash
+   # Via the internal orchestrator URL (requires access from within VPC)
+   curl -X POST http://orchestrator.openhands.local:8081/delete \
+     -H 'Content-Type: application/json' \
+     -d "{\"runtime_id\":\"$CONV_ID\"}"
+   # Expected: {"status":"deleted","session_id":"<conv-id>"}
+   ```
+
+5. Verify data is deleted
+   ```bash
+   # DynamoDB record gone
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --region $DEPLOY_REGION
+   # Expected: empty (no Item)
+
+   # S3 objects gone (after deletion Lambda completes)
+   sleep 30  # Allow async Lambda to finish
+   aws s3 ls s3://<data-bucket>/conversations/$CONV_ID/ --region $DEPLOY_REGION
+   # Expected: empty or no output
+
+   # Aurora record gone
+   # (verify via app API - conversation should not appear in list)
+   ```
+
+6. Verify conversation no longer appears in UI
+   - Refresh the home page
+   - Conversation should not be in "Recent Conversations" list
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | `/delete` returns success | `{"status":"deleted"}` response |
+| 2 | DynamoDB record removed | `get-item` returns empty |
+| 3 | S3 objects removed | No objects under conversation prefix |
+| 4 | EFS workspace removed | Directory no longer exists |
+| 5 | Conversation gone from UI | Not in conversation list |
+| 6 | Deletion Lambda logged | Check CloudWatch logs for `openhands-conversation-delete` |
