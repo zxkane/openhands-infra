@@ -16,7 +16,10 @@ import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwat
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME || '';
+const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME;
+if (!REGISTRY_TABLE_NAME) {
+  throw new Error('REGISTRY_TABLE_NAME environment variable is required');
+}
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS || '180', 10);
 const EFS_MOUNT_PATH = process.env.EFS_MOUNT_PATH || '/mnt/efs';
 const REGION = process.env.AWS_REGION_NAME || process.env.AWS_REGION || 'us-east-1';
@@ -87,6 +90,12 @@ async function archiveRecord(conversationId: string): Promise<void> {
 
 function deleteEfsWorkspace(conversationId: string): void {
   const workspacePath = path.join(EFS_MOUNT_PATH, conversationId);
+  // Verify resolved path stays within EFS mount to block path traversal
+  const normalized = path.resolve(workspacePath);
+  if (!normalized.startsWith(path.resolve(EFS_MOUNT_PATH) + path.sep)) {
+    logger.error('Path traversal blocked', { conversationId, workspacePath });
+    return;
+  }
   try {
     fs.rmSync(workspacePath, { recursive: true, force: true });
     logger.info('Deleted EFS workspace', { conversationId, path: workspacePath });

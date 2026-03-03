@@ -21,7 +21,10 @@ import { RDSDataClient, ExecuteStatementCommand } from '@aws-sdk/client-rds-data
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME || '';
+const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME;
+if (!REGISTRY_TABLE_NAME) {
+  throw new Error('REGISTRY_TABLE_NAME environment variable is required');
+}
 const DATA_BUCKET = process.env.DATA_BUCKET || '';
 const EFS_MOUNT_PATH = process.env.EFS_MOUNT_PATH || '/mnt/efs';
 const DB_CLUSTER_ARN = process.env.DB_CLUSTER_ARN || '';
@@ -86,6 +89,12 @@ async function deleteS3Objects(conversationId: string): Promise<number> {
  */
 function deleteEfsWorkspace(conversationId: string): void {
   const workspacePath = path.join(EFS_MOUNT_PATH, conversationId);
+  // Verify resolved path stays within EFS mount to block path traversal
+  const normalized = path.resolve(workspacePath);
+  if (!normalized.startsWith(path.resolve(EFS_MOUNT_PATH) + path.sep)) {
+    logger.error('Path traversal blocked', { conversationId, workspacePath });
+    return;
+  }
   try {
     fs.rmSync(workspacePath, { recursive: true, force: true });
     logger.info('Deleted EFS workspace', { conversationId, path: workspacePath });
