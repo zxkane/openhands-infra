@@ -48,8 +48,8 @@ const STATUS_MAP: Record<SandboxStatus, string> = {
   STARTING: 'pending',
   WARM: 'pending',
   CLAIMED: 'pending',
-  PAUSED: 'stopped',
-  STOPPED: 'stopped',
+  PAUSED: 'paused',    // App maps 'paused' → SandboxStatus.PAUSED → ConversationStatus.STOPPED (resumable)
+  STOPPED: 'stopped',  // App maps 'stopped' → SandboxStatus.MISSING → ConversationStatus.ARCHIVED (not resumable)
   ARCHIVED: 'stopped',
   ERROR: 'failed',
 };
@@ -60,8 +60,8 @@ const POD_STATUS_MAP: Record<SandboxStatus, string> = {
   STARTING: 'pending',
   WARM: 'pending',
   CLAIMED: 'pending',
-  PAUSED: 'stopped',
-  STOPPED: 'stopped',
+  PAUSED: 'paused',    // Resumable — sandbox was idle-stopped but can restart
+  STOPPED: 'stopped',  // Not resumable — sandbox explicitly stopped or crashed
   ARCHIVED: 'stopped',
   ERROR: 'failed',
 };
