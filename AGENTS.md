@@ -175,7 +175,7 @@ STARTING → RUNNING → (idle timeout)    → PAUSED  → (retention days) → 
 | Idle timeout | Stop running sandbox after inactivity | 10 min | 30 min | `idleTimeoutMinutes` |
 | Retention timeout | Archive STOPPED/PAUSED conversations | 180 days | 180 days | `conversationRetentionDays` |
 
-**Archival** (daily Lambda): Cleans up EFS workspace, preserves S3 history, removes DynamoDB TTL. ARCHIVED conversations are viewable but not resumable.
+**Archival** (daily Lambda): Cleans up EFS workspace, preserves S3 history, removes DynamoDB TTL. ARCHIVED conversations are view-only — both `/start` and `/resume` return 409 Conflict.
 
 **Deletion** (on-demand via orchestrator `/delete`): Full data wipe across S3, EFS, Aurora, and DynamoDB.
 

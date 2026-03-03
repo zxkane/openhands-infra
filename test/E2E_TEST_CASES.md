@@ -3441,9 +3441,26 @@ Verify that the archival Lambda transitions inactive PAUSED/STOPPED conversation
    # Expected: Objects still present (events, metadata)
    ```
 
-6. Attempt to resume ARCHIVED conversation via UI
-   - Navigate to the conversation URL
-   - Expected: Should NOT start a sandbox (orchestrator returns 409)
+6. Attempt to resume/start ARCHIVED conversation via UI
+   - Navigate to the conversation URL in browser
+   - The app will load conversation history from S3 (should display past messages)
+   - The app will attempt to start a sandbox via orchestrator `/start`
+   - Expected: Orchestrator returns 409 Conflict, sandbox does NOT start
+   - UI should show an error or "failed to start" state (no active sandbox)
+
+7. Verify both `/start` and `/resume` are blocked
+   ```bash
+   # Both endpoints should reject ARCHIVED conversations with 409
+   curl -X POST http://orchestrator.openhands.local:8081/start \
+     -H 'Content-Type: application/json' \
+     -d '{"session_id":"<conv-id>"}'
+   # Expected: 409 {"detail":"Conversation is archived and cannot be resumed"}
+
+   curl -X POST http://orchestrator.openhands.local:8081/resume \
+     -H 'Content-Type: application/json' \
+     -d '{"runtime_id":"<conv-id>"}'
+   # Expected: 409 {"detail":"Conversation is archived and cannot be resumed"}
+   ```
 
 ### Acceptance Criteria
 
@@ -3454,8 +3471,10 @@ Verify that the archival Lambda transitions inactive PAUSED/STOPPED conversation
 | 3 | DynamoDB TTL removed | `ttl` attribute absent on ARCHIVED records |
 | 4 | EFS workspace deleted | Directory no longer exists |
 | 5 | S3 history preserved | Objects still exist under conversation prefix |
-| 6 | Resume blocked for ARCHIVED | Orchestrator returns 409 Conflict |
-| 7 | CloudWatch metric published | `ConversationsArchived` metric in `OpenHands/Sandbox` namespace |
+| 6 | `/start` blocked for ARCHIVED | Orchestrator returns 409 Conflict |
+| 7 | `/resume` blocked for ARCHIVED | Orchestrator returns 409 Conflict |
+| 8 | Conversation history viewable | S3 events still load in UI (read-only) |
+| 9 | CloudWatch metric published | `ConversationsArchived` metric in `OpenHands/Sandbox` namespace |
 
 ---
 
