@@ -49,8 +49,8 @@ const STATUS_MAP: Record<SandboxStatus, string> = {
   WARM: 'pending',
   CLAIMED: 'pending',
   PAUSED: 'paused',    // App maps 'paused' → SandboxStatus.PAUSED → ConversationStatus.STOPPED (resumable)
-  STOPPED: 'stopped',  // App maps 'stopped' → SandboxStatus.MISSING → ConversationStatus.ARCHIVED (not resumable)
-  ARCHIVED: 'stopped',
+  STOPPED: 'paused',   // Also resumable — EFS data persists, only the ECS task stopped
+  ARCHIVED: 'stopped', // App maps 'stopped' → SandboxStatus.MISSING → ConversationStatus.ARCHIVED (not resumable)
   ERROR: 'failed',
 };
 
@@ -61,8 +61,8 @@ const POD_STATUS_MAP: Record<SandboxStatus, string> = {
   WARM: 'pending',
   CLAIMED: 'pending',
   PAUSED: 'paused',    // Resumable — sandbox was idle-stopped but can restart
-  STOPPED: 'stopped',  // Not resumable — sandbox explicitly stopped or crashed
-  ARCHIVED: 'stopped',
+  STOPPED: 'paused',   // Also resumable — EFS data persists, only the ECS task stopped
+  ARCHIVED: 'stopped', // Not resumable — archived beyond retention period
   ERROR: 'failed',
 };
 
