@@ -65,10 +65,15 @@ describe('Conversation Archival Lambda', () => {
     expect(body.candidates).toBe(1);
     expect(body.archived).toBe(1);
 
-    // Verify EFS cleanup was called
+    // Verify EFS cleanup targets exact conversation dir, not mount root
+    expect(fs.rmSync).toHaveBeenCalledTimes(1);
     expect(fs.rmSync).toHaveBeenCalledWith(
-      expect.stringContaining('conv-stopped-1'),
-      expect.objectContaining({ recursive: true, force: true }),
+      '/tmp/test-efs/conv-stopped-1',
+      { recursive: true, force: true },
+    );
+    expect(fs.rmSync).not.toHaveBeenCalledWith(
+      '/tmp/test-efs',
+      expect.anything(),
     );
   });
 
