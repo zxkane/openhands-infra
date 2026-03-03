@@ -202,11 +202,14 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
 
   request.log.info(`Starting sandbox: session=${session_id}, user=${userId}`);
 
-  // Check if already running
+  // Check existing record
   const existing = await store.getSandbox(session_id);
   if (existing && existing.status === 'RUNNING') {
     request.log.info(`Sandbox already running: session=${session_id}`);
     return recordToRuntime(existing);
+  }
+  if (existing && existing.status === 'ARCHIVED') {
+    return reply.code(409).send({ detail: 'Conversation is archived and cannot be resumed' });
   }
 
   // Per-conversation EFS isolation: create access point + register task definition
