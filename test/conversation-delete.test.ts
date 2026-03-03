@@ -1,6 +1,7 @@
 import { DynamoDBClient, DeleteItemCommand } from '@aws-sdk/client-dynamodb';
 import { S3Client, ListObjectsV2Command, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { RDSDataClient, ExecuteStatementCommand } from '@aws-sdk/client-rds-data';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { mockClient } from 'aws-sdk-client-mock';
 
 // Mock node:fs before importing handler
@@ -13,24 +14,39 @@ import * as fs from 'node:fs';
 process.env.REGISTRY_TABLE_NAME = 'test-sandbox-registry';
 process.env.DATA_BUCKET = 'test-data-bucket';
 process.env.EFS_MOUNT_PATH = '/tmp/test-efs';
-process.env.DB_CLUSTER_ARN = 'arn:aws:rds:us-west-2:123456789012:cluster:test-cluster';
-process.env.DB_SECRET_ARN = 'arn:aws:secretsmanager:us-west-2:123456789012:secret:test-secret';
+process.env.DB_SECRET_NAME = 'openhands/database/admin';
 process.env.DB_NAME = 'openhands';
 process.env.AWS_REGION_NAME = 'us-west-2';
 
 const ddbMock = mockClient(DynamoDBClient);
 const s3Mock = mockClient(S3Client);
 const rdsMock = mockClient(RDSDataClient);
+const smMock = mockClient(SecretsManagerClient);
 
 // Import handler after mocks are set up
 import { handler } from '../lambda/conversation-delete/index.js';
+
+/** Default mock for Secrets Manager — returns Aurora secret with cluster identifier */
+function mockDbSecret() {
+  smMock.on(GetSecretValueCommand).resolves({
+    ARN: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:openhands/database/admin-AbCdEf',
+    SecretString: JSON.stringify({
+      dbClusterIdentifier: 'test-cluster',
+      host: 'test-cluster.cluster-abc123.us-west-2.rds.amazonaws.com',
+      username: 'postgres',
+      password: 'test-password',
+    }),
+  });
+}
 
 describe('Conversation Deletion Lambda', () => {
   beforeEach(() => {
     ddbMock.reset();
     s3Mock.reset();
     rdsMock.reset();
+    smMock.reset();
     (fs.rmSync as jest.Mock).mockReset();
+    mockDbSecret();
   });
 
   test('deletes conversation data across all storage layers', async () => {

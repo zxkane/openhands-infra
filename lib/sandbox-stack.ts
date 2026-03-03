@@ -46,10 +46,8 @@ export interface SandboxStackProps extends cdk.StackProps {
   conversationRetentionDays?: number;
   /** S3 data bucket for conversation events (deletion Lambda needs access) */
   dataBucket?: s3.IBucket;
-  /** Aurora cluster ARN for RDS Data API (deletion Lambda) */
-  databaseClusterArn?: string;
-  /** Secrets Manager ARN for Aurora admin credentials (deletion Lambda) */
-  databaseSecretArn?: string;
+  /** Secrets Manager secret name for Aurora admin credentials (deletion Lambda) */
+  databaseSecretName?: string;
   /** Database name (deletion Lambda) */
   databaseName?: string;
 }
@@ -789,11 +787,10 @@ export class SandboxStack extends cdk.Stack {
     if (props.dataBucket) {
       deletionLambdaEnv.DATA_BUCKET = props.dataBucket.bucketName;
     }
-    if (props.databaseClusterArn) {
-      deletionLambdaEnv.DB_CLUSTER_ARN = props.databaseClusterArn;
-    }
-    if (props.databaseSecretArn) {
-      deletionLambdaEnv.DB_SECRET_ARN = props.databaseSecretArn;
+    // Database secret name for RDS Data API auth — Lambda resolves ARNs at runtime
+    // to avoid cyclic CDK dependency (Sandbox → Database → Security → Sandbox)
+    if (props.databaseSecretName) {
+      deletionLambdaEnv.DB_SECRET_NAME = props.databaseSecretName;
     }
     if (props.databaseName) {
       deletionLambdaEnv.DB_NAME = props.databaseName;
@@ -823,23 +820,21 @@ export class SandboxStack extends cdk.Stack {
       props.dataBucket.grantDelete(deletionLambda, 'conversations/*');
     }
 
-    // RDS Data API for Aurora conversation cleanup
-    if (props.databaseClusterArn) {
+    // RDS Data API + Secrets Manager for Aurora conversation cleanup
+    // Uses well-known secret name to avoid cyclic CDK dependency
+    if (props.databaseSecretName) {
+      const dbSecret = secretsmanager.Secret.fromSecretNameV2(
+        this, 'DeletionLambdaDbSecret', props.databaseSecretName
+      );
+      dbSecret.grantRead(deletionLambda);
+
+      // RDS Data API — scoped to all clusters in this account/region
+      // (narrower scoping requires cluster ARN which creates cyclic dependency)
       deletionLambda.addToRolePolicy(new iam.PolicyStatement({
         sid: 'RdsDataApi',
         effect: iam.Effect.ALLOW,
         actions: ['rds-data:ExecuteStatement'],
-        resources: [props.databaseClusterArn],
-      }));
-    }
-
-    // Secrets Manager for Aurora admin credentials (RDS Data API auth)
-    if (props.databaseSecretArn) {
-      deletionLambda.addToRolePolicy(new iam.PolicyStatement({
-        sid: 'SecretsManagerDbAuth',
-        effect: iam.Effect.ALLOW,
-        actions: ['secretsmanager:GetSecretValue'],
-        resources: [props.databaseSecretArn],
+        resources: [`arn:aws:rds:${this.region}:${this.account}:cluster:*`],
       }));
     }
 

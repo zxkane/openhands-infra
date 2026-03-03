@@ -256,16 +256,17 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   idleTimeoutMinutes,
   conversationRetentionDays,
   dataBucket: monitoringStack.output.dataBucket,
-  databaseClusterArn: databaseStack.output.clusterArn,
-  databaseSecretArn: databaseStack.output.adminSecretArn,
-  databaseName: databaseStack.output.databaseName,
+  // Database info for deletion Lambda — uses well-known secret name to avoid
+  // cyclic dependency (Sandbox → Database → Security → Sandbox via SG imports).
+  // The deletion Lambda resolves the cluster ARN from the secret at runtime.
+  databaseSecretName: 'openhands/database/admin',
+  databaseName: 'openhands',
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
   crossRegionReferences: true,
 });
 sandboxStack.addDependency(networkStack);
 sandboxStack.addDependency(monitoringStack);
 sandboxStack.addDependency(clusterStack);
-sandboxStack.addDependency(databaseStack);
 
 // 5. Compute Stack - Fargate Services, ALB
 const computeStack = new ComputeStack(app, `${prefix}-Compute`, {

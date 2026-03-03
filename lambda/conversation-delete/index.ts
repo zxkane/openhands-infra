@@ -27,8 +27,7 @@ if (!REGISTRY_TABLE_NAME) {
 }
 const DATA_BUCKET = process.env.DATA_BUCKET || '';
 const EFS_MOUNT_PATH = process.env.EFS_MOUNT_PATH || '/mnt/efs';
-const DB_CLUSTER_ARN = process.env.DB_CLUSTER_ARN || '';
-const DB_SECRET_ARN = process.env.DB_SECRET_ARN || '';
+const DB_SECRET_NAME = process.env.DB_SECRET_NAME || '';
 const DB_NAME = process.env.DB_NAME || 'openhands';
 const REGION = process.env.AWS_REGION_NAME || process.env.AWS_REGION || 'us-east-1';
 
@@ -36,6 +35,34 @@ const logger = new Logger({ serviceName: 'conversation-delete' });
 const dynamodb = new DynamoDBClient({ region: REGION });
 const s3 = new S3Client({ region: REGION });
 const rdsData = new RDSDataClient({ region: REGION });
+
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+const secretsManager = new SecretsManagerClient({ region: REGION });
+
+/** Cache for resolved database connection info from Secrets Manager */
+let dbInfoCache: { clusterArn: string; secretArn: string } | null = null;
+
+async function resolveDbInfo(): Promise<{ clusterArn: string; secretArn: string } | null> {
+  if (dbInfoCache) return dbInfoCache;
+  if (!DB_SECRET_NAME) return null;
+
+  try {
+    const response = await secretsManager.send(new GetSecretValueCommand({ SecretId: DB_SECRET_NAME }));
+    const secret = JSON.parse(response.SecretString || '{}');
+    // Aurora-generated secrets include dbClusterIdentifier and the full ARN
+    const clusterIdentifier = secret.dbClusterIdentifier;
+    if (!clusterIdentifier || !response.ARN) {
+      logger.warn('Secret missing dbClusterIdentifier or ARN', { secretName: DB_SECRET_NAME });
+      return null;
+    }
+    const clusterArn = `arn:aws:rds:${REGION}:${response.ARN.split(':')[4]}:cluster:${clusterIdentifier}`;
+    dbInfoCache = { clusterArn, secretArn: response.ARN };
+    return dbInfoCache;
+  } catch (err) {
+    logger.warn('Failed to resolve database info from secret', { error: String(err) });
+    return null;
+  }
+}
 
 interface DeleteEvent {
   conversation_id: string;
@@ -116,15 +143,16 @@ function deleteEfsWorkspace(conversationId: string): void {
  * Delete the conversation row from Aurora PostgreSQL via RDS Data API.
  */
 async function deleteAuroraRecord(conversationId: string): Promise<void> {
-  if (!DB_CLUSTER_ARN || !DB_SECRET_ARN) {
-    logger.info('Database config not set, skipping Aurora cleanup');
+  const dbInfo = await resolveDbInfo();
+  if (!dbInfo) {
+    logger.info('Database config not available, skipping Aurora cleanup');
     return;
   }
 
   try {
     await rdsData.send(new ExecuteStatementCommand({
-      resourceArn: DB_CLUSTER_ARN,
-      secretArn: DB_SECRET_ARN,
+      resourceArn: dbInfo.clusterArn,
+      secretArn: dbInfo.secretArn,
       database: DB_NAME,
       sql: 'DELETE FROM conversations WHERE id = :id',
       parameters: [
