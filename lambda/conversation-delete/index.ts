@@ -122,7 +122,8 @@ function deleteEfsWorkspace(conversationId: string): void {
   const workspacePath = path.join(EFS_MOUNT_PATH, conversationId);
   // Verify resolved path stays within EFS mount to block path traversal
   const normalized = path.resolve(workspacePath);
-  if (!normalized.startsWith(path.resolve(EFS_MOUNT_PATH) + path.sep)) {
+  const mountRoot = path.resolve(EFS_MOUNT_PATH);
+  if (normalized === mountRoot || !normalized.startsWith(mountRoot + path.sep)) {
     logger.error('Path traversal blocked', { conversationId, workspacePath });
     return;
   }
