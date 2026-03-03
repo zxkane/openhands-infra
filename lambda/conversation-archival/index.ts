@@ -89,6 +89,10 @@ async function archiveRecord(conversationId: string): Promise<void> {
 }
 
 function deleteEfsWorkspace(conversationId: string): void {
+  if (!conversationId || conversationId.includes('..') || conversationId.includes('/')) {
+    logger.error('Invalid conversationId for EFS deletion', { conversationId });
+    return;
+  }
   const workspacePath = path.join(EFS_MOUNT_PATH, conversationId);
   // Verify resolved path stays within EFS mount to block path traversal
   const normalized = path.resolve(workspacePath);

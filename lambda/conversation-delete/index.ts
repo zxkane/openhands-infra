@@ -88,6 +88,10 @@ async function deleteS3Objects(conversationId: string): Promise<number> {
  * Delete the EFS workspace directory for this conversation.
  */
 function deleteEfsWorkspace(conversationId: string): void {
+  if (!conversationId || conversationId.includes('..') || conversationId.includes('/')) {
+    logger.error('Invalid conversationId for EFS deletion', { conversationId });
+    return;
+  }
   const workspacePath = path.join(EFS_MOUNT_PATH, conversationId);
   // Verify resolved path stays within EFS mount to block path traversal
   const normalized = path.resolve(workspacePath);
@@ -155,6 +159,14 @@ async function deleteDynamoRecord(conversationId: string): Promise<void> {
 }
 
 export async function handler(event: DeleteEvent): Promise<{ statusCode: number; body: string }> {
+  if (!event?.conversation_id || !event?.user_id) {
+    logger.error('Invalid event payload', { event });
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: 'Missing required fields: conversation_id, user_id' }),
+    };
+  }
+
   const { conversation_id, user_id } = event;
 
   logger.info('Starting conversation deletion', { conversation_id, user_id });
