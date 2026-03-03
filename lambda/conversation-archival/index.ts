@@ -146,11 +146,11 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
     });
 
     try {
+      // Update DynamoDB first to prevent resume attempts during EFS cleanup
+      await archiveRecord(record.conversation_id);
+
       // Delete EFS workspace (S3 history preserved intentionally)
       deleteEfsWorkspace(record.conversation_id);
-
-      // Update DynamoDB: status → ARCHIVED, remove TTL
-      await archiveRecord(record.conversation_id);
       archivedCount++;
     } catch (err) {
       const msg = `Failed to archive ${record.conversation_id}: ${err}`;
