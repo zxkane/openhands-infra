@@ -35,6 +35,8 @@ const mockDatabaseOutput: DatabaseStackOutput = {
   databaseUser: 'openhands_proxy',
   securityGroupId: 'sg-mock123',
   proxyEndpoint: 'mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com',
+  clusterArn: 'arn:aws:rds:us-west-2:123456789012:cluster:openhands-aurora',
+  adminSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:openhands/database/admin-AbCdEf',
 };
 
 // Mock sandbox output for ComputeStack tests (ECS Fargate sandbox)

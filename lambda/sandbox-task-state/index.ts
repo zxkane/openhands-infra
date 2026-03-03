@@ -18,8 +18,8 @@ import { EFSClient, DeleteAccessPointCommand } from '@aws-sdk/client-efs';
 const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME || '';
 const REGION = process.env.AWS_REGION_NAME || process.env.AWS_REGION || 'us-east-1';
 
-/** Time-to-live: 7 days from last activity */
-const TTL_SECONDS = 7 * 24 * 3600;
+/** Configurable via CONVERSATION_RETENTION_SECONDS env var (default: 183 days = 180 retention + 3 day buffer) */
+const TTL_SECONDS = parseInt(process.env.CONVERSATION_RETENTION_SECONDS || '15811200', 10);
 
 const logger = new Logger({ serviceName: 'sandbox-task-state' });
 const dynamodb = new DynamoDBClient({ region: REGION });

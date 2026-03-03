@@ -12,6 +12,7 @@ import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
@@ -41,6 +42,16 @@ export interface SandboxStackProps extends cdk.StackProps {
   warmPoolSize?: number;
   /** Idle timeout in minutes before sandbox is stopped (default: 30) */
   idleTimeoutMinutes?: number;
+  /** Retention period in days before inactive conversations are archived (default: 180) */
+  conversationRetentionDays?: number;
+  /** S3 data bucket for conversation events (deletion Lambda needs access) */
+  dataBucket?: s3.IBucket;
+  /** Aurora cluster ARN for RDS Data API (deletion Lambda) */
+  databaseClusterArn?: string;
+  /** Secrets Manager ARN for Aurora admin credentials (deletion Lambda) */
+  databaseSecretArn?: string;
+  /** Database name (deletion Lambda) */
+  databaseName?: string;
 }
 
 /**
@@ -68,6 +79,10 @@ export class SandboxStack extends cdk.Stack {
     // Name prefix derived from domain to support multi-environment deployments
     const fullDomain = `${config.subDomain}.${config.domainName}`;
     const namePrefix = fullDomain.replace(/\./g, '-');
+
+    // Conversation retention: TTL = retention days + 3 day buffer (in seconds)
+    const retentionDays = props.conversationRetentionDays ?? 180;
+    const conversationRetentionSeconds = String((retentionDays + 3) * 86400);
 
     // ========================================
     // DynamoDB Sandbox Registry
@@ -539,6 +554,8 @@ export class SandboxStack extends cdk.Stack {
         SANDBOX_IMAGE: '', // Set by ComputeStack via CDK output
         WARM_POOL_SERVICE_NAME: warmPoolService.serviceName,
         EFS_FILE_SYSTEM_ID: workspaceFileSystem.fileSystemId,
+        CONVERSATION_RETENTION_SECONDS: conversationRetentionSeconds,
+        // DELETION_LAMBDA_ARN is set below after the deletion Lambda is created
       },
     });
 
@@ -585,6 +602,7 @@ export class SandboxStack extends cdk.Stack {
         IDLE_TIMEOUT_MINUTES: String(props.idleTimeoutMinutes ?? 30),
         SANDBOX_TASK_FAMILY: 'openhands-sandbox',
         AWS_REGION_NAME: config.region,
+        CONVERSATION_RETENTION_SECONDS: conversationRetentionSeconds,
         LOG_LEVEL: 'INFO',
         POWERTOOLS_SERVICE_NAME: 'sandbox-idle-monitor',
       },
@@ -657,6 +675,7 @@ export class SandboxStack extends cdk.Stack {
       environment: {
         REGISTRY_TABLE_NAME: registryTable.tableName,
         AWS_REGION_NAME: config.region,
+        CONVERSATION_RETENTION_SECONDS: conversationRetentionSeconds,
         LOG_LEVEL: 'INFO',
         POWERTOOLS_SERVICE_NAME: 'sandbox-task-state',
       },
@@ -688,6 +707,154 @@ export class SandboxStack extends cdk.Stack {
       targets: [new eventsTargets.LambdaFunction(taskStateHandler)],
       description: 'Update DynamoDB when sandbox ECS tasks stop',
     });
+
+    // ========================================
+    // Conversation Lifecycle Lambdas (Archival + Deletion)
+    // ========================================
+
+    // Shared security group for lifecycle Lambdas that need EFS access
+    const lifecycleLambdaSg = new ec2.SecurityGroup(this, 'LifecycleLambdaSg', {
+      vpc,
+      description: 'Security group for conversation lifecycle Lambdas (archival/deletion)',
+      allowAllOutbound: true,
+    });
+    // Allow NFS from lifecycle Lambdas to EFS
+    workspaceEfsSg.addIngressRule(
+      lifecycleLambdaSg,
+      ec2.Port.tcp(2049),
+      'Allow NFS from lifecycle Lambdas'
+    );
+
+    // Lambda EFS mount via existing workspace access point
+    const lambdaEfsMount = lambda.FileSystem.fromEfsAccessPoint(
+      workspaceAccessPoint, '/mnt/efs'
+    );
+
+    // --- Conversation Archival Lambda (daily) ---
+    const archivalLambda = new lambdaNode.NodejsFunction(this, 'ArchivalLambda', {
+      functionName: 'openhands-conversation-archival',
+      runtime: lambda.Runtime.NODEJS_24_X,
+      entry: path.join(__dirname, '..', 'lambda', 'conversation-archival', 'index.ts'),
+      handler: 'handler',
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 512,
+      architecture: lambda.Architecture.ARM_64,
+      bundling: { minify: true, sourceMap: true },
+      vpc,
+      vpcSubnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }),
+      securityGroups: [lifecycleLambdaSg],
+      filesystem: lambdaEfsMount,
+      environment: {
+        REGISTRY_TABLE_NAME: registryTable.tableName,
+        RETENTION_DAYS: String(retentionDays),
+        EFS_MOUNT_PATH: '/mnt/efs',
+        AWS_REGION_NAME: config.region,
+        LOG_LEVEL: 'INFO',
+        POWERTOOLS_SERVICE_NAME: 'conversation-archival',
+      },
+    });
+
+    registryTable.grantReadWriteData(archivalLambda);
+
+    // CloudWatch metrics for archival stats
+    archivalLambda.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'CloudWatchMetrics',
+      effect: iam.Effect.ALLOW,
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+      conditions: {
+        StringEquals: {
+          'cloudwatch:namespace': 'OpenHands/Sandbox',
+        },
+      },
+    }));
+
+    // EventBridge rule: run archival daily
+    new events.Rule(this, 'ArchivalSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.days(1)),
+      targets: [new eventsTargets.LambdaFunction(archivalLambda)],
+      description: 'Archive inactive conversations (STOPPED/PAUSED beyond retention period)',
+    });
+
+    // --- Conversation Deletion Lambda (on-demand) ---
+    const deletionLambdaEnv: Record<string, string> = {
+      REGISTRY_TABLE_NAME: registryTable.tableName,
+      EFS_MOUNT_PATH: '/mnt/efs',
+      AWS_REGION_NAME: config.region,
+      LOG_LEVEL: 'INFO',
+      POWERTOOLS_SERVICE_NAME: 'conversation-delete',
+    };
+
+    // Add optional database and S3 config for full data wipe
+    if (props.dataBucket) {
+      deletionLambdaEnv.DATA_BUCKET = props.dataBucket.bucketName;
+    }
+    if (props.databaseClusterArn) {
+      deletionLambdaEnv.DB_CLUSTER_ARN = props.databaseClusterArn;
+    }
+    if (props.databaseSecretArn) {
+      deletionLambdaEnv.DB_SECRET_ARN = props.databaseSecretArn;
+    }
+    if (props.databaseName) {
+      deletionLambdaEnv.DB_NAME = props.databaseName;
+    }
+
+    const deletionLambda = new lambdaNode.NodejsFunction(this, 'DeletionLambda', {
+      functionName: 'openhands-conversation-delete',
+      runtime: lambda.Runtime.NODEJS_24_X,
+      entry: path.join(__dirname, '..', 'lambda', 'conversation-delete', 'index.ts'),
+      handler: 'handler',
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 512,
+      architecture: lambda.Architecture.ARM_64,
+      bundling: { minify: true, sourceMap: true },
+      vpc,
+      vpcSubnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }),
+      securityGroups: [lifecycleLambdaSg],
+      filesystem: lambdaEfsMount,
+      environment: deletionLambdaEnv,
+    });
+
+    registryTable.grantReadWriteData(deletionLambda);
+
+    // S3 permissions for conversation data cleanup
+    if (props.dataBucket) {
+      props.dataBucket.grantRead(deletionLambda, 'conversations/*');
+      props.dataBucket.grantDelete(deletionLambda, 'conversations/*');
+    }
+
+    // RDS Data API for Aurora conversation cleanup
+    if (props.databaseClusterArn) {
+      deletionLambda.addToRolePolicy(new iam.PolicyStatement({
+        sid: 'RdsDataApi',
+        effect: iam.Effect.ALLOW,
+        actions: ['rds-data:ExecuteStatement'],
+        resources: [props.databaseClusterArn],
+      }));
+    }
+
+    // Secrets Manager for Aurora admin credentials (RDS Data API auth)
+    if (props.databaseSecretArn) {
+      deletionLambda.addToRolePolicy(new iam.PolicyStatement({
+        sid: 'SecretsManagerDbAuth',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [props.databaseSecretArn],
+      }));
+    }
+
+    // Grant orchestrator permission to invoke deletion Lambda
+    orchestratorTaskDef.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: 'InvokeDeletionLambda',
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:InvokeFunction'],
+      resources: [deletionLambda.functionArn],
+    }));
+
+    // Add DELETION_LAMBDA_ARN to orchestrator container environment
+    // (Orchestrator container is the first container added to orchestratorTaskDef)
+    const orchestratorContainer = orchestratorTaskDef.defaultContainer!;
+    orchestratorContainer.addEnvironment('DELETION_LAMBDA_ARN', deletionLambda.functionArn);
 
     // ========================================
     // CloudWatch Alarms
@@ -729,6 +896,7 @@ export class SandboxStack extends cdk.Stack {
       sandboxExecutionRoleArn: sandboxExecutionRole.roleArn,
       sandboxTaskRoleArn: sandboxTaskRole.roleArn,
       efsFileSystemId: workspaceFileSystem.fileSystemId,
+      deletionLambdaArn: deletionLambda.functionArn,
     };
 
     new cdk.CfnOutput(this, 'ClusterArn', {

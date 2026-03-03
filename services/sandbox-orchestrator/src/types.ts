@@ -26,6 +26,7 @@ export type SandboxStatus =
   | 'CLAIMED'
   | 'PAUSED'
   | 'STOPPED'
+  | 'ARCHIVED'
   | 'ERROR';
 
 /** Runtime info returned to the OpenHands RemoteSandboxService. */

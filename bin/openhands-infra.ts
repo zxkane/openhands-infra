@@ -240,6 +240,9 @@ clusterStack.addDependency(networkStack);
 const warmPoolSize = parseInt(app.node.tryGetContext('warmPoolSize') || '2', 10);
 const idleTimeoutDefault = config.domainName.startsWith('test.') ? 10 : 30;
 const idleTimeoutMinutes = parseInt(app.node.tryGetContext('idleTimeoutMinutes') || String(idleTimeoutDefault), 10);
+const conversationRetentionDays = parseInt(
+  app.node.tryGetContext('conversationRetentionDays') || '180', 10
+);
 
 const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   env: mainEnv,
@@ -251,12 +254,18 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   sandboxAwsPolicyFile,
   warmPoolSize,
   idleTimeoutMinutes,
+  conversationRetentionDays,
+  dataBucket: monitoringStack.output.dataBucket,
+  databaseClusterArn: databaseStack.output.clusterArn,
+  databaseSecretArn: databaseStack.output.adminSecretArn,
+  databaseName: databaseStack.output.databaseName,
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
   crossRegionReferences: true,
 });
 sandboxStack.addDependency(networkStack);
 sandboxStack.addDependency(monitoringStack);
 sandboxStack.addDependency(clusterStack);
+sandboxStack.addDependency(databaseStack);
 
 // 5. Compute Stack - Fargate Services, ALB
 const computeStack = new ComputeStack(app, `${prefix}-Compute`, {

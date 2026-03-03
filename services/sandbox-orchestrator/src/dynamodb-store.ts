@@ -10,14 +10,15 @@ import {
   PutCommand,
   GetCommand,
   UpdateCommand,
+  DeleteCommand,
   QueryCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent } from 'node:http';
 import type { SandboxRecord, SandboxStatus } from './types.js';
 
-/** Time-to-live: 7 days from last activity. */
-const TTL_SECONDS = 7 * 24 * 3600;
+/** Configurable via CONVERSATION_RETENTION_SECONDS env var (default: 183 days = 180 retention + 3 day buffer) */
+const TTL_SECONDS = parseInt(process.env.CONVERSATION_RETENTION_SECONDS || '15811200', 10);
 
 export class DynamoDBStore {
   private readonly tableName: string;
@@ -193,6 +194,36 @@ export class DynamoDBStore {
 
   async listRunning(): Promise<SandboxRecord[]> {
     return this.queryByStatus('RUNNING');
+  }
+
+  /** Delete a sandbox record from DynamoDB. */
+  async deleteSandbox(conversationId: string): Promise<void> {
+    await this.docClient.send(
+      new DeleteCommand({
+        TableName: this.tableName,
+        Key: { conversation_id: conversationId },
+      }),
+    );
+  }
+
+  /** Transition a sandbox to ARCHIVED status, removing TTL so the record persists indefinitely. */
+  async updateStatusArchived(conversationId: string): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.docClient.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { conversation_id: conversationId },
+        UpdateExpression: 'SET #status = :archived, last_activity_at = :now REMOVE #ttl',
+        ExpressionAttributeValues: {
+          ':archived': 'ARCHIVED',
+          ':now': now,
+        },
+        ExpressionAttributeNames: {
+          '#status': 'status',
+          '#ttl': 'ttl',
+        },
+      }),
+    );
   }
 
   /** Unmarshall a raw DynamoDB attribute-map into a SandboxRecord. */
