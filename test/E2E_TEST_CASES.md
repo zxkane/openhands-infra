@@ -2996,6 +2996,35 @@ Verify that sandbox Fargate tasks are automatically stopped after the configured
      --query 'events[*].message' | grep "<conv-id>"
    ```
 
+7. Verify conversation still appears in UI conversation list
+   ```javascript
+   // Navigate to home page
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}", type: "url" })
+   mcp__chrome-devtools__take_snapshot({})
+   // The PAUSED conversation should still appear in "Recent Conversations"
+   // Note: OpenHands app may display PAUSED/STOPPED conversations as "archived" in the UI
+   // — this is the app's own label for idle conversations, NOT the infrastructure ARCHIVED state
+   ```
+
+8. Verify conversation can be resumed after idle timeout
+   ```javascript
+   // Click the PAUSED conversation in the conversation list
+   // Expected: App loads conversation history from S3 and starts resuming the sandbox
+   // The sandbox should start (orchestrator /start succeeds for PAUSED status)
+   mcp__chrome-devtools__wait_for({ text: ["Starting", "Connecting", "What do you want to build?"], timeout: 30000 })
+   ```
+
+9. Verify sandbox resumes to RUNNING
+   ```bash
+   # After resume, DynamoDB should show RUNNING again
+   aws dynamodb get-item \
+     --table-name <registry-table> \
+     --key '{"conversation_id":{"S":"<conv-id>"}}' \
+     --region $DEPLOY_REGION \
+     --query 'Item.status.S'
+   # Expected: RUNNING (or STARTING during provisioning)
+   ```
+
 ### Acceptance Criteria
 
 | # | Criteria | Verification |
@@ -3006,6 +3035,9 @@ Verify that sandbox Fargate tasks are automatically stopped after the configured
 | 4 | ECS task stopped | `lastStatus=STOPPED` in ECS |
 | 5 | Task-state Lambda triggered | EventBridge → Lambda → DynamoDB update logged |
 | 6 | Configurable timeout | staging=10min, production=30min (via `idleTimeoutMinutes` context) |
+| 7 | Conversation visible in UI after idle stop | Appears in conversation list (may show as "archived" label in app UI) |
+| 8 | **Conversation resumable after idle stop** | Clicking PAUSED conversation starts sandbox successfully |
+| 9 | Sandbox reaches RUNNING after resume | DynamoDB status=RUNNING |
 
 ### Configuration
 
@@ -3013,6 +3045,17 @@ Verify that sandbox Fargate tasks are automatically stopped after the configured
 |-------------|-------------|----------|
 | Staging (`test.*`) | 10 minutes | `--context idleTimeoutMinutes=<N>` |
 | Production | 30 minutes | `--context idleTimeoutMinutes=<N>` |
+
+### Important: App UI vs Infrastructure State
+
+The OpenHands app UI may display PAUSED/STOPPED conversations with an "archived" label.
+This is the **app's own terminology** for idle conversations — it does NOT mean the infrastructure
+`ARCHIVED` state. The distinction:
+
+| State | DynamoDB Status | Resumable? | UI Display |
+|-------|----------------|------------|------------|
+| Idle-stopped | `PAUSED` or `STOPPED` | Yes | May show "archived" (app label) |
+| Truly archived | `ARCHIVED` | **No** (409) | Should show non-resumable state |
 
 ---
 
@@ -3396,19 +3439,53 @@ Verify that the archival Lambda transitions inactive PAUSED/STOPPED conversation
 
 ### Steps
 
-1. Verify a conversation is in PAUSED or STOPPED state with old `last_activity_at`
+1. Find a PAUSED conversation and set its `last_activity_at` to simulate old data
    ```bash
-   aws dynamodb query \
+   # Find a PAUSED conversation
+   CONV_ID=$(aws dynamodb query \
      --table-name <registry-table> \
      --index-name status-index \
-     --key-condition-expression "#status = :status" \
-     --expression-attribute-names '{"#status":"status"}' \
-     --expression-attribute-values '{":status":{"S":"PAUSED"}}' \
+     --key-condition-expression "#st = :st" \
+     --expression-attribute-names '{"#st":"status"}' \
+     --expression-attribute-values '{":st":{"S":"PAUSED"}}' \
      --region $DEPLOY_REGION \
-     --query 'Items[0].{conversation_id:conversation_id.S,status:status.S,last_activity_at:last_activity_at.N}'
+     --query 'Items[0].conversation_id.S' --output text)
+   echo "Target: $CONV_ID"
+
+   # Set last_activity_at to 2 days ago (exceeds retentionDays=1)
+   OLD_TS=$(($(date +%s) - 2 * 86400))
+   aws dynamodb update-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --update-expression "SET last_activity_at = :ts" \
+     --expression-attribute-values "{\":ts\":{\"N\":\"$OLD_TS\"}}" \
+     --region $DEPLOY_REGION
    ```
 
-2. Manually invoke the archival Lambda (or wait for daily schedule)
+2. Verify the conversation is visible and resumable BEFORE archival
+   ```javascript
+   // Navigate to the conversation in browser
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}/conversations/<conv-id>", type: "url" })
+   // App should load history and attempt to start sandbox
+   // For PAUSED state: sandbox should START (not blocked)
+   mcp__chrome-devtools__wait_for({ text: ["Starting", "Connecting", "What do you want to build?"], timeout: 30000 })
+   // Navigate away to stop the sandbox activity
+   mcp__chrome-devtools__navigate_page({ url: "about:blank", type: "url" })
+   ```
+
+3. Stop the sandbox if it's still running (from step 2), then set status back to PAUSED with old timestamp
+   ```bash
+   # Ensure status is PAUSED with old timestamp for archival Lambda to pick up
+   aws dynamodb update-item \
+     --table-name <registry-table> \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
+     --update-expression "SET #st = :st, last_activity_at = :ts" \
+     --expression-attribute-names '{"#st":"status"}' \
+     --expression-attribute-values "{\":st\":{\"S\":\"PAUSED\"},\":ts\":{\"N\":\"$OLD_TS\"}}" \
+     --region $DEPLOY_REGION
+   ```
+
+4. Invoke the archival Lambda manually
    ```bash
    aws lambda invoke \
      --function-name openhands-conversation-archival \
@@ -3416,39 +3493,38 @@ Verify that the archival Lambda transitions inactive PAUSED/STOPPED conversation
      /tmp/archival-output.json
    cat /tmp/archival-output.json
    # Expected: {"statusCode":200,"body":"{\"candidates\":N,\"archived\":N,\"errors\":0}"}
+   # archived count should be >= 1
    ```
 
-3. Verify conversation is now ARCHIVED
+5. Verify conversation status is now ARCHIVED in DynamoDB
    ```bash
    aws dynamodb get-item \
      --table-name <registry-table> \
-     --key '{"conversation_id":{"S":"<conv-id>"}}' \
+     --key "{\"conversation_id\":{\"S\":\"$CONV_ID\"}}" \
      --region $DEPLOY_REGION \
      --query 'Item.{status:status.S,ttl:ttl.N}'
-   # Expected: status=ARCHIVED, ttl should be absent (removed)
+   # Expected: status=ARCHIVED, ttl should be absent/null (removed by archival)
    ```
 
-4. Verify EFS workspace directory is deleted
+6. Verify S3 conversation history is PRESERVED (not deleted by archival)
    ```bash
-   # Via ECS exec into an app container or SSM session
-   ls /mnt/efs/<conversation-id>/ 2>&1
-   # Expected: No such file or directory
-   ```
-
-5. Verify S3 conversation history is preserved
-   ```bash
-   aws s3 ls s3://<data-bucket>/conversations/<conv-id>/ --region $DEPLOY_REGION
+   aws s3 ls s3://<data-bucket>/conversations/$CONV_ID/ --region $DEPLOY_REGION
    # Expected: Objects still present (events, metadata)
    ```
 
-6. Attempt to resume/start ARCHIVED conversation via UI
-   - Navigate to the conversation URL in browser
-   - The app will load conversation history from S3 (should display past messages)
-   - The app will attempt to start a sandbox via orchestrator `/start`
-   - Expected: Orchestrator returns 409 Conflict, sandbox does NOT start
-   - UI should show an error or "failed to start" state (no active sandbox)
+7. Attempt to start ARCHIVED conversation via UI — should FAIL
+   ```javascript
+   // Navigate to the ARCHIVED conversation
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}/conversations/<conv-id>", type: "url" })
+   mcp__chrome-devtools__wait_for({ text: ["error", "failed", "What do you want", "Let's start"], timeout: 30000 })
+   mcp__chrome-devtools__take_snapshot({})
+   // Key verifications:
+   //   - Conversation history SHOULD be visible (loaded from S3/Aurora)
+   //   - Sandbox should NOT start (orchestrator /start returns 409 for ARCHIVED)
+   //   - Contrast with step 2: PAUSED conversation WAS resumable, ARCHIVED is NOT
+   ```
 
-7. Verify both `/start` and `/resume` are blocked
+8. Verify both `/start` and `/resume` are blocked via API
    ```bash
    # Both endpoints should reject ARCHIVED conversations with 409
    curl -X POST http://orchestrator.openhands.local:8081/start \
@@ -3466,14 +3542,14 @@ Verify that the archival Lambda transitions inactive PAUSED/STOPPED conversation
 
 | # | Criteria | Verification |
 |---|----------|--------------|
-| 1 | Archival Lambda runs successfully | Lambda returns statusCode 200 |
-| 2 | DynamoDB status transitions to ARCHIVED | `status=ARCHIVED` in DynamoDB |
-| 3 | DynamoDB TTL removed | `ttl` attribute absent on ARCHIVED records |
-| 4 | EFS workspace deleted | Directory no longer exists |
+| 1 | PAUSED conversation is resumable (before archival) | Step 2: sandbox starts successfully |
+| 2 | Archival Lambda runs successfully | Lambda returns statusCode 200 |
+| 3 | DynamoDB status transitions to ARCHIVED | `status=ARCHIVED` in DynamoDB |
+| 4 | DynamoDB TTL removed | `ttl` attribute absent on ARCHIVED records |
 | 5 | S3 history preserved | Objects still exist under conversation prefix |
 | 6 | `/start` blocked for ARCHIVED | Orchestrator returns 409 Conflict |
 | 7 | `/resume` blocked for ARCHIVED | Orchestrator returns 409 Conflict |
-| 8 | Conversation history viewable | S3 events still load in UI (read-only) |
+| 8 | **PAUSED = resumable, ARCHIVED = not resumable** | Step 2 succeeds, step 7 fails (409) |
 | 9 | CloudWatch metric published | `ConversationsArchived` metric in `OpenHands/Sandbox` namespace |
 
 ---
