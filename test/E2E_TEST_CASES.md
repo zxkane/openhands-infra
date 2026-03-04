@@ -3541,25 +3541,31 @@ End-to-end test of the conversation archival lifecycle: create a conversation, i
    // Compare with step 5: same conversation, different label after archival
    ```
 
-9. Open the ARCHIVED conversation — sandbox should NOT start
+9. Open the ARCHIVED conversation — verify banner + history + no sandbox
    ```javascript
    mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}/conversations/<CONV_ID>", type: "url" })
-   // Wait for page to load
-   mcp__chrome-devtools__wait_for({ text: ["What do you want", "Let's start", "error", "failed"], timeout: 30000 })
+   // Wait for archived detection and banner
+   // (patch-fix.js checks /api/conversations/{id} for status=ARCHIVED)
+   mcp__chrome-devtools__wait_for({ text: ["archived and is read-only"], timeout: 15000 })
    mcp__chrome-devtools__take_snapshot({})
    // Key verifications:
-   //   - Sandbox should NOT start (orchestrator /start returns 409)
-   //   - No "Starting runtime" or "Connecting" status
-   //   - Contrast with step 4: same conversation WAS resumable when PAUSED
-   //
-   // KNOWN ISSUE: The app currently does not show conversation history for
-   // ARCHIVED conversations or display a user-friendly error message.
-   // The orchestrator returns 409 correctly, but the app does not handle
-   // this error gracefully — it silently fails without loading history.
-   // This is an upstream OpenHands app issue, not an infrastructure bug.
+   //   a. Purple "archived" banner at top with close button (X)
+   //   b. Conversation history loaded from S3 (user/assistant messages visible)
+   //   c. Sandbox NOT starting — no "Connecting..." status
+   //   d. Status shows "Archived" instead of "Starting"
+   //   e. Contrast with step 4: same conversation WAS resumable when PAUSED
    ```
 
-10. Verify API-level blocking
+10. Verify archived banner has close button
+    ```javascript
+    // Click the X button on the banner
+    mcp__chrome-devtools__click({ uid: "<close-button-uid>" })
+    // Banner should disappear
+    mcp__chrome-devtools__take_snapshot({})
+    // Verify: banner element removed from DOM
+    ```
+
+11. Verify API-level blocking
     ```bash
     # Both /start and /resume should return 409
     # (requires access from within VPC or via SSM session)
@@ -3585,19 +3591,14 @@ End-to-end test of the conversation archival lifecycle: create a conversation, i
 | 3 | PAUSED conversation has NO "Archived" label | Step 5: snapshot shows no badge |
 | 4 | Archival Lambda succeeds | Step 6: archived count >= 1 |
 | 5 | DynamoDB status = ARCHIVED, TTL removed | Step 7: status=ARCHIVED, ttl=null |
-| 6 | ARCHIVED conversation shows "Archived" label | Step 8: snapshot shows badge |
-| 7 | ARCHIVED sandbox does NOT start | Step 9: no "Starting" or "Connecting" |
-| 8 | `/start` returns 409 for ARCHIVED | Step 10: HTTP 409 |
-| 9 | `/resume` returns 409 for ARCHIVED | Step 10: HTTP 409 |
-| 10 | **Same conversation: resumable when PAUSED, blocked when ARCHIVED** | Steps 4 vs 9 |
-
-### Known Issues
-
-- **No history for ARCHIVED conversations**: The OpenHands app does not load S3 conversation
-  history when the sandbox fails to start (409). Users see an empty conversation page instead
-  of read-only history. This requires an upstream app fix to handle 409 gracefully.
-- **No error message**: The app silently fails without displaying "This conversation is archived"
-  or similar user-facing message. This is an upstream UX improvement opportunity.
+| 6 | ARCHIVED conversation shows "Archived" label in sidebar | Step 8: snapshot shows badge |
+| 7 | **Archived banner displayed** | Step 9a: purple banner with "archived and is read-only" text |
+| 8 | **Conversation history loaded from S3** | Step 9b: user/assistant messages visible in chat area |
+| 9 | **Sandbox NOT starting** | Step 9c: no "Connecting..." status, shows "Archived" instead |
+| 10 | Banner close button works | Step 10: clicking X removes banner |
+| 11 | `/start` returns 409 for ARCHIVED | Step 11: HTTP 409 |
+| 12 | `/resume` returns 409 for ARCHIVED | Step 11: HTTP 409 |
+| 13 | **Same conversation: resumable when PAUSED, blocked when ARCHIVED** | Steps 4 vs 9 |
 
 ---
 
