@@ -689,6 +689,51 @@
     }
   }
 
+  function showArchivedBanner() {
+    if (document.getElementById('archived-conversation-banner')) return;
+
+    var banner = document.createElement('div');
+    banner.id = 'archived-conversation-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;' +
+      'background:#2d2d3a;color:#e0e0e0;padding:12px 20px;text-align:center;' +
+      'font-size:14px;border-bottom:2px solid #6b5ce7;display:flex;' +
+      'align-items:center;justify-content:center;gap:8px;';
+
+    var icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('width', '16');
+    icon.setAttribute('height', '16');
+    icon.setAttribute('viewBox', '0 0 16 16');
+    icon.style.flexShrink = '0';
+    var iconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    iconPath.setAttribute('d', 'M2 4h12v1H2V4zm1 2h10v7a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm3 2v4h4V8H6z');
+    iconPath.setAttribute('fill', '#6b5ce7');
+    icon.appendChild(iconPath);
+    banner.appendChild(icon);
+
+    var text = document.createElement('span');
+    text.textContent = 'This conversation has been archived and is read-only. ' +
+      'Conversation history is preserved but the sandbox cannot be restarted.';
+    banner.appendChild(text);
+
+    var main = document.querySelector('main') || document.body;
+    main.insertBefore(banner, main.firstChild);
+
+    // Replace "Starting runtime" / "Connecting" status text
+    setTimeout(function() {
+      var statusTexts = document.querySelectorAll('[class*="status"], [class*="Status"]');
+      statusTexts.forEach(function(el) {
+        if (el.textContent && (el.textContent.includes('Starting') || el.textContent.includes('Connecting'))) {
+          el.textContent = 'Archived';
+        }
+      });
+    }, 1000);
+  }
+
+  function removeArchivedBanner() {
+    var banner = document.getElementById('archived-conversation-banner');
+    if (banner) banner.remove();
+  }
+
   function checkAndResume() {
     var convId = getConversationId();
     if (!convId) {
@@ -726,6 +771,12 @@
           // Sandbox is active, stop checking
           console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
           stopChecking();
+        } else if (conv.status === 'ARCHIVED') {
+          // Conversation is archived — do NOT attempt to resume.
+          // Show a banner informing the user this conversation is read-only.
+          console.log('Auto-resume: conversation is ARCHIVED, skipping resume');
+          stopChecking();
+          showArchivedBanner();
         } else if (!resumeAttempted[convId]) {
           // Sandbox is not running (MISSING, STOPPED, PAUSED, ERROR, null, etc.)
           // Trigger sandbox start via the resume endpoint — only once per conversation.
@@ -770,6 +821,7 @@
     // Reset state for new conversation
     currentConvId = convId;
     stopChecking();
+    removeArchivedBanner();
     checkStartTime = Date.now();
 
     console.log('Auto-resume: initialized for conversation ' + convId);
@@ -791,6 +843,7 @@
     } else if (!newConvId) {
       // Navigated away from a conversation page
       stopChecking();
+      removeArchivedBanner();
       currentConvId = null;
     }
   }
