@@ -711,9 +711,17 @@
     banner.appendChild(icon);
 
     var text = document.createElement('span');
+    text.style.flex = '1';
     text.textContent = 'This conversation has been archived and is read-only. ' +
       'Conversation history is preserved but the sandbox cannot be restarted.';
     banner.appendChild(text);
+
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '\u2715';
+    closeBtn.style.cssText = 'background:none;border:none;color:#e0e0e0;font-size:18px;' +
+      'cursor:pointer;padding:0 4px;flex-shrink:0;line-height:1;';
+    closeBtn.addEventListener('click', removeArchivedBanner);
+    banner.appendChild(closeBtn);
 
     var main = document.querySelector('main') || document.body;
     main.insertBefore(banner, main.firstChild);
