@@ -3602,11 +3602,13 @@ End-to-end test of the conversation archival lifecycle: create a conversation, i
 
 ### Limitations
 
-- **V1 event storage**: The V1 app-server stores conversation events on the agent-server (sandbox),
-  not in app-accessible S3/EFS. When a conversation is archived and its EFS workspace deleted,
-  events may not be retrievable via the trajectory API. The archived banner will display but
-  conversation history will be empty for V1 conversations. This is a V1 architecture limitation
-  that requires upstream changes to persist events to S3 for offline access.
+- **V1 event persistence**: The V1 app-server uses `FilesystemEventService` which writes events
+  to `{persistence_dir}/{user_id}/v1_conversations/`. On Fargate, `persistence_dir` defaults to
+  the container's ephemeral filesystem (`/data/openhands`), NOT the EFS mount. Events are lost
+  when the Fargate task restarts. This means conversation history is not available after archival
+  (or any task restart). Fix: configure `OH_PERSISTENCE_DIR` to point to the app's EFS mount path
+  so V1 events survive Fargate task replacements. This is a separate configuration issue tracked
+  independently from this lifecycle PR.
 
 ---
 
