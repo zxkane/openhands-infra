@@ -726,7 +726,10 @@
     var main = document.querySelector('main') || document.body;
     main.insertBefore(banner, main.firstChild);
 
-    // Hide sandbox status indicators and load conversation history
+    // Hide sandbox status indicators and attempt to load conversation history
+    // Note: V1 app-server stores events on the agent-server (sandbox), not in S3.
+    // When sandbox is archived (EFS deleted), events may not be retrievable.
+    // The trajectory/events API will return empty if no server-side events exist.
     setTimeout(function() {
       // Replace "Starting"/"Connecting" status with "Archived"
       var statusTexts = document.querySelectorAll('[class*="status"], [class*="Status"]');

@@ -3593,12 +3593,20 @@ End-to-end test of the conversation archival lifecycle: create a conversation, i
 | 5 | DynamoDB status = ARCHIVED, TTL removed | Step 7: status=ARCHIVED, ttl=null |
 | 6 | ARCHIVED conversation shows "Archived" label in sidebar | Step 8: snapshot shows badge |
 | 7 | **Archived banner displayed** | Step 9a: purple banner with "archived and is read-only" text |
-| 8 | **Conversation history loaded from S3** | Step 9b: user/assistant messages visible in chat area |
-| 9 | **Sandbox NOT starting** | Step 9c: no "Connecting..." status, shows "Archived" instead |
+| 8 | **Conversation history attempted** | Step 9b: patch calls trajectory API; messages shown if events exist in S3 |
+| 9 | **Sandbox NOT starting** | Step 9c: auto-resume skipped, no /resume call triggered |
 | 10 | Banner close button works | Step 10: clicking X removes banner |
 | 11 | `/start` returns 409 for ARCHIVED | Step 11: HTTP 409 |
 | 12 | `/resume` returns 409 for ARCHIVED | Step 11: HTTP 409 |
 | 13 | **Same conversation: resumable when PAUSED, blocked when ARCHIVED** | Steps 4 vs 9 |
+
+### Limitations
+
+- **V1 event storage**: The V1 app-server stores conversation events on the agent-server (sandbox),
+  not in app-accessible S3/EFS. When a conversation is archived and its EFS workspace deleted,
+  events may not be retrievable via the trajectory API. The archived banner will display but
+  conversation history will be empty for V1 conversations. This is a V1 architecture limitation
+  that requires upstream changes to persist events to S3 for offline access.
 
 ---
 
