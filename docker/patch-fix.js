@@ -755,26 +755,29 @@
       return;
     }
 
-    // Use app-conversations endpoint which returns sandbox_status
-    fetch('/api/v1/app-conversations?ids=' + convId)
-      .then(function(resp) { return resp.json(); })
-      .then(function(convList) {
+    // Fetch conversation status from two APIs:
+    // - /api/conversations/{id} returns ConversationStatus (ARCHIVED, STOPPED, RUNNING)
+    // - /api/v1/app-conversations returns sandbox_status (RUNNING, MISSING, PAUSED)
+    var formattedId = formatConversationId(convId);
+    Promise.all([
+      fetch('/api/conversations/' + formattedId).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/v1/app-conversations?ids=' + convId).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; })
+    ]).then(function(results) {
+        var convInfo = results[0];  // has .status (ConversationStatus: ARCHIVED, STOPPED, etc.)
+        var convList = results[1];
         var conv = convList && convList[0];
-        if (!conv) {
-          console.log('Auto-resume: conversation not found');
-          return;
-        }
 
-        console.log('Auto-resume: checking conversation, sandbox_status=' + conv.sandbox_status);
+        var conversationStatus = convInfo && convInfo.status;
+        var sandboxStatus = conv && conv.sandbox_status;
+        console.log('Auto-resume: status=' + conversationStatus + ', sandbox_status=' + sandboxStatus);
 
-        if (conv.sandbox_status === 'RUNNING' || conv.sandbox_status === 'STARTING') {
+        if (sandboxStatus === 'RUNNING' || sandboxStatus === 'STARTING') {
           // Sandbox is active, stop checking
-          console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
+          console.log('Auto-resume: sandbox is ' + sandboxStatus + ', stopping checks');
           stopChecking();
-        } else if (conv.status === 'ARCHIVED') {
+        } else if (conversationStatus === 'ARCHIVED') {
           // Conversation is archived — do NOT attempt to resume.
-          // Store in sessionStorage so we can show banner after app redirects to home.
-          console.log('Auto-resume: conversation is ARCHIVED, skipping resume');
+          console.log('Auto-resume: conversation is ARCHIVED, showing banner');
           stopChecking();
           try { sessionStorage.setItem('oh_archived_conv', convId); } catch(e) {}
           showArchivedBanner();
