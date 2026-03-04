@@ -732,6 +732,7 @@
   function removeArchivedBanner() {
     var banner = document.getElementById('archived-conversation-banner');
     if (banner) banner.remove();
+    archivedConvPath = null;
   }
 
   function checkAndResume() {
@@ -776,6 +777,7 @@
           // Show a banner informing the user this conversation is read-only.
           console.log('Auto-resume: conversation is ARCHIVED, skipping resume');
           stopChecking();
+          archivedConvPath = '/conversations/' + formatConversationId(convId);
           showArchivedBanner();
         } else if (!resumeAttempted[convId]) {
           // Sandbox is not running (MISSING, STOPPED, PAUSED, ERROR, null, etc.)
@@ -825,10 +827,30 @@
     checkStartTime = Date.now();
 
     console.log('Auto-resume: initialized for conversation ' + convId);
-    // Check every 5 seconds
-    checkInterval = setInterval(checkAndResume, 5000);
-    // Also check immediately after a delay (let page load first)
-    setTimeout(checkAndResume, 2000);
+
+    // Check IMMEDIATELY for ARCHIVED status — must fire before app's own
+    // navigation logic can redirect away from the conversation page.
+    var formattedId = formatConversationId(convId);
+    fetch('/api/v1/app-conversations?ids=' + convId)
+      .then(function(resp) { return resp.ok ? resp.json() : null; })
+      .then(function(data) {
+        var conv = data && data[0];
+        if (conv && conv.status === 'ARCHIVED') {
+          console.log('Auto-resume: conversation is ARCHIVED (early check), showing banner');
+          archivedConvPath = '/conversations/' + formatConversationId(convId);
+          showArchivedBanner();
+          // Do NOT start polling — conversation cannot be resumed
+          return;
+        }
+        // Not archived — start the normal polling cycle
+        checkInterval = setInterval(checkAndResume, 5000);
+        setTimeout(checkAndResume, 2000);
+      })
+      .catch(function() {
+        // Fallback: start polling anyway
+        checkInterval = setInterval(checkAndResume, 5000);
+        setTimeout(checkAndResume, 2000);
+      });
   }
 
   // Re-initialize on SPA navigation (React Router uses pushState/replaceState).
@@ -848,15 +870,29 @@
     }
   }
 
+  // Track if we're showing archived banner — block navigations away
+  var archivedConvPath = null;
+
   window.addEventListener('popstate', onNavigation);
   var origPushState = history.pushState;
   var origReplaceState = history.replaceState;
   history.pushState = function() {
+    // Block redirect away from ARCHIVED conversation (app tries to go home on sandbox failure)
+    if (archivedConvPath && arguments[2] && typeof arguments[2] === 'string' &&
+        arguments[2].indexOf(archivedConvPath) === -1 && arguments[2] === '/') {
+      console.log('Auto-resume: blocked redirect from ARCHIVED conversation');
+      return;
+    }
     var result = origPushState.apply(this, arguments);
     onNavigation();
     return result;
   };
   history.replaceState = function() {
+    if (archivedConvPath && arguments[2] && typeof arguments[2] === 'string' &&
+        arguments[2].indexOf(archivedConvPath) === -1 && arguments[2] === '/') {
+      console.log('Auto-resume: blocked replaceState from ARCHIVED conversation');
+      return;
+    }
     var result = origReplaceState.apply(this, arguments);
     onNavigation();
     return result;
