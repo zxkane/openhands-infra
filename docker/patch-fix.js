@@ -732,7 +732,6 @@
   function removeArchivedBanner() {
     var banner = document.getElementById('archived-conversation-banner');
     if (banner) banner.remove();
-    archivedConvPath = null;
   }
 
   function checkAndResume() {
@@ -774,10 +773,10 @@
           stopChecking();
         } else if (conv.status === 'ARCHIVED') {
           // Conversation is archived — do NOT attempt to resume.
-          // Show a banner informing the user this conversation is read-only.
+          // Store in sessionStorage so we can show banner after app redirects to home.
           console.log('Auto-resume: conversation is ARCHIVED, skipping resume');
           stopChecking();
-          archivedConvPath = '/conversations/' + formatConversationId(convId);
+          try { sessionStorage.setItem('oh_archived_conv', convId); } catch(e) {}
           showArchivedBanner();
         } else if (!resumeAttempted[convId]) {
           // Sandbox is not running (MISSING, STOPPED, PAUSED, ERROR, null, etc.)
@@ -828,29 +827,10 @@
 
     console.log('Auto-resume: initialized for conversation ' + convId);
 
-    // Check IMMEDIATELY for ARCHIVED status — must fire before app's own
-    // navigation logic can redirect away from the conversation page.
-    var formattedId = formatConversationId(convId);
-    fetch('/api/v1/app-conversations?ids=' + convId)
-      .then(function(resp) { return resp.ok ? resp.json() : null; })
-      .then(function(data) {
-        var conv = data && data[0];
-        if (conv && conv.status === 'ARCHIVED') {
-          console.log('Auto-resume: conversation is ARCHIVED (early check), showing banner');
-          archivedConvPath = '/conversations/' + formatConversationId(convId);
-          showArchivedBanner();
-          // Do NOT start polling — conversation cannot be resumed
-          return;
-        }
-        // Not archived — start the normal polling cycle
-        checkInterval = setInterval(checkAndResume, 5000);
-        setTimeout(checkAndResume, 2000);
-      })
-      .catch(function() {
-        // Fallback: start polling anyway
-        checkInterval = setInterval(checkAndResume, 5000);
-        setTimeout(checkAndResume, 2000);
-      });
+    // Check every 5 seconds
+    checkInterval = setInterval(checkAndResume, 5000);
+    // Also check immediately after a delay (let page load first)
+    setTimeout(checkAndResume, 2000);
   }
 
   // Re-initialize on SPA navigation (React Router uses pushState/replaceState).
@@ -870,39 +850,39 @@
     }
   }
 
-  // Track if we're showing archived banner — block navigations away
-  var archivedConvPath = null;
-
   window.addEventListener('popstate', onNavigation);
   var origPushState = history.pushState;
   var origReplaceState = history.replaceState;
   history.pushState = function() {
-    // Block redirect away from ARCHIVED conversation (app tries to go home on sandbox failure)
-    if (archivedConvPath && arguments[2] && typeof arguments[2] === 'string' &&
-        arguments[2].indexOf(archivedConvPath) === -1 && arguments[2] === '/') {
-      console.log('Auto-resume: blocked redirect from ARCHIVED conversation');
-      return;
-    }
     var result = origPushState.apply(this, arguments);
     onNavigation();
     return result;
   };
   history.replaceState = function() {
-    if (archivedConvPath && arguments[2] && typeof arguments[2] === 'string' &&
-        arguments[2].indexOf(archivedConvPath) === -1 && arguments[2] === '/') {
-      console.log('Auto-resume: blocked replaceState from ARCHIVED conversation');
-      return;
-    }
     var result = origReplaceState.apply(this, arguments);
     onNavigation();
     return result;
   };
 
+  // Check if we were redirected from an ARCHIVED conversation
+  function checkArchivedRedirect() {
+    try {
+      var archivedId = sessionStorage.getItem('oh_archived_conv');
+      if (archivedId && !getConversationId()) {
+        sessionStorage.removeItem('oh_archived_conv');
+        console.log('Auto-resume: showing archived banner after redirect from ' + archivedId);
+        showArchivedBanner();
+        setTimeout(removeArchivedBanner, 8000);
+      }
+    } catch(e) {}
+  }
+
   // Start when DOM is ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', function() { init(); checkArchivedRedirect(); });
   } else {
     init();
+    checkArchivedRedirect();
   }
 
   console.log('OpenHands auto-resume sandbox patch loaded');
