@@ -726,15 +726,111 @@
     var main = document.querySelector('main') || document.body;
     main.insertBefore(banner, main.firstChild);
 
-    // Replace "Starting runtime" / "Connecting" status text
+    // Hide sandbox status indicators and load conversation history
     setTimeout(function() {
+      // Replace "Starting"/"Connecting" status with "Archived"
       var statusTexts = document.querySelectorAll('[class*="status"], [class*="Status"]');
       statusTexts.forEach(function(el) {
         if (el.textContent && (el.textContent.includes('Starting') || el.textContent.includes('Connecting'))) {
           el.textContent = 'Archived';
         }
       });
-    }, 1000);
+      // Hide the bottom status bar showing "Connecting... (this may take 1-2 minutes)"
+      var bottomBars = document.querySelectorAll('[class*="toolbar"], [class*="Toolbar"], [class*="status-bar"]');
+      bottomBars.forEach(function(el) {
+        if (el.textContent && el.textContent.includes('Connecting')) {
+          el.style.display = 'none';
+        }
+      });
+    }, 1500);
+
+    // Load conversation history from S3 via trajectory API
+    loadArchivedHistory();
+  }
+
+  function loadArchivedHistory() {
+    var convId = getConversationId();
+    if (!convId) return;
+    var formattedId = formatConversationId(convId);
+
+    fetch('/api/conversations/' + formattedId + '/trajectory')
+      .then(function(resp) { return resp.ok ? resp.json() : null; })
+      .then(function(data) {
+        if (!data || !data.trajectory || !data.trajectory.length) {
+          console.log('Archived history: no events found');
+          return;
+        }
+        console.log('Archived history: loaded ' + data.trajectory.length + ' events');
+        renderArchivedHistory(data.trajectory);
+      })
+      .catch(function(err) {
+        console.warn('Archived history: failed to load', err);
+      });
+  }
+
+  function renderArchivedHistory(events) {
+    // Find the chat area — look for the "Let's start building!" container
+    var chatContainer = null;
+    var candidates = document.querySelectorAll('[class*="chat"], [class*="Chat"], [class*="messages"], [class*="Messages"]');
+    if (candidates.length) {
+      chatContainer = candidates[0];
+    }
+    // Fallback: find the element containing "Let's start building!"
+    if (!chatContainer) {
+      var allEls = document.querySelectorAll('h1, h2, h3, [class*="empty"], [class*="placeholder"]');
+      for (var i = 0; i < allEls.length; i++) {
+        if (allEls[i].textContent && allEls[i].textContent.includes("start building")) {
+          chatContainer = allEls[i].parentElement;
+          break;
+        }
+      }
+    }
+    if (!chatContainer) {
+      console.warn('Archived history: could not find chat container');
+      return;
+    }
+
+    // Clear placeholder content
+    chatContainer.style.cssText = 'overflow-y:auto;padding:20px;max-height:calc(100vh - 120px);';
+
+    // Remove existing children (placeholder buttons, "Let's start building" etc.)
+    while (chatContainer.firstChild) {
+      chatContainer.removeChild(chatContainer.firstChild);
+    }
+
+    // Render each message event
+    events.forEach(function(evt) {
+      // Only render user messages and assistant messages
+      var action = evt.action || '';
+      var observation = evt.observation || '';
+      var isUser = action === 'message' && evt.source === 'user';
+      var isAssistant = (action === 'message' && evt.source === 'agent') ||
+                        observation === 'agent_state_changed';
+
+      if (!isUser && !isAssistant) return;
+
+      var content = '';
+      if (evt.args && evt.args.content) content = evt.args.content;
+      else if (evt.message) content = evt.message;
+      if (!content || !content.trim()) return;
+
+      var msgDiv = document.createElement('div');
+      msgDiv.style.cssText = 'margin:8px 0;padding:12px 16px;border-radius:8px;' +
+        'max-width:80%;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;font-size:14px;';
+
+      if (isUser) {
+        msgDiv.style.cssText += 'background:#3b3b4f;color:#e0e0e0;margin-left:auto;text-align:right;';
+      } else {
+        msgDiv.style.cssText += 'background:#1e1e2e;color:#d0d0d0;margin-right:auto;';
+      }
+
+      msgDiv.textContent = content;
+      chatContainer.appendChild(msgDiv);
+    });
+
+    // Scroll to bottom
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    console.log('Archived history: rendered messages');
   }
 
   function removeArchivedBanner() {
