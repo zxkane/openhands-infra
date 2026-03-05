@@ -55,6 +55,10 @@ COPY user_config_loader.py /app/openhands/server/user_config_loader.py
 COPY s3_settings_store.py /app/openhands/storage/settings/
 COPY s3_secrets_store.py /app/openhands/storage/secrets/
 
+# S3-backed event service for persistent V1 conversation events
+# Replaces FilesystemEventService to survive Fargate task restarts and archival
+COPY s3_event_service.py /app/openhands/app_server/event/
+
 # Multi-tenant conversation isolation (user_id-based filtering)
 COPY cognito_sql_conversation_info_service.py /app/openhands/app_server/app_conversation/
 
