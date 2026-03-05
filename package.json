@@ -16,10 +16,10 @@
     "cdk": "cdk"
   },
   "devDependencies": {
-    "@aws-sdk/client-cloudwatch": "^3.999.0",
-    "@aws-sdk/client-dynamodb": "^3.999.0",
-    "@aws-sdk/client-ecs": "^3.999.0",
-    "@aws-sdk/client-efs": "^3.999.0",
+    "@aws-sdk/client-cloudwatch": "^3.1000.0",
+    "@aws-sdk/client-dynamodb": "^3.1000.0",
+    "@aws-sdk/client-ecs": "^3.1000.0",
+    "@aws-sdk/client-efs": "^3.1000.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.19.3",
     "@types/pg": "^8.15.5",
@@ -35,7 +35,7 @@
     "@aws-lambda-powertools/logger": "^2.31.0",
     "@aws-sdk/client-rds-data": "^3.1000.0",
     "@aws-sdk/client-s3": "^3.1000.0",
-    "@aws-sdk/client-secrets-manager": "^3.999.0",
+    "@aws-sdk/client-secrets-manager": "^3.1000.0",
     "@types/source-map-support": "^0.5.10",
     "aws-cdk-lib": "^2.240.0",
     "constructs": "^10.5.1",
