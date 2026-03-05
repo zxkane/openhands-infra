@@ -18,8 +18,6 @@ import { EFSClient, DeleteAccessPointCommand } from '@aws-sdk/client-efs';
 const REGISTRY_TABLE_NAME = process.env.REGISTRY_TABLE_NAME || '';
 const REGION = process.env.AWS_REGION_NAME || process.env.AWS_REGION || 'us-east-1';
 
-/** Configurable via CONVERSATION_RETENTION_SECONDS env var (default: 183 days = 180 retention + 3 day buffer) */
-const TTL_SECONDS = parseInt(process.env.CONVERSATION_RETENTION_SECONDS || '15811200', 10);
 
 const logger = new Logger({ serviceName: 'sandbox-task-state' });
 const dynamodb = new DynamoDBClient({ region: REGION });
@@ -95,13 +93,12 @@ async function updateStatus(conversationId: string, status: string): Promise<voi
   await dynamodb.send(new UpdateItemCommand({
     TableName: REGISTRY_TABLE_NAME,
     Key: { conversation_id: { S: conversationId } },
-    UpdateExpression: 'SET #status = :status, last_activity_at = :now, #ttl = :ttl',
+    UpdateExpression: 'SET #status = :status, last_activity_at = :now',
     ExpressionAttributeValues: {
       ':status': { S: status },
       ':now': { N: now.toString() },
-      ':ttl': { N: (now + TTL_SECONDS).toString() },
     },
-    ExpressionAttributeNames: { '#status': 'status', '#ttl': 'ttl' },
+    ExpressionAttributeNames: { '#status': 'status' },
   }));
 }
 

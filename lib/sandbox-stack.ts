@@ -78,9 +78,7 @@ export class SandboxStack extends cdk.Stack {
     const fullDomain = `${config.subDomain}.${config.domainName}`;
     const namePrefix = fullDomain.replace(/\./g, '-');
 
-    // Conversation retention: TTL = retention days + 3 day buffer (in seconds)
     const retentionDays = props.conversationRetentionDays ?? 180;
-    const conversationRetentionSeconds = String((retentionDays + 3) * 86400);
 
     // ========================================
     // DynamoDB Sandbox Registry
@@ -96,7 +94,8 @@ export class SandboxStack extends cdk.Stack {
       pointInTimeRecoverySpecification: {
         pointInTimeRecoveryEnabled: true,
       },
-      timeToLiveAttribute: 'ttl',
+      // TTL disabled: conversation lifecycle is managed by the archival Lambda,
+      // not DynamoDB auto-deletion. Auto-deletion would bypass EFS/S3 cleanup.
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
@@ -552,7 +551,6 @@ export class SandboxStack extends cdk.Stack {
         SANDBOX_IMAGE: '', // Set by ComputeStack via CDK output
         WARM_POOL_SERVICE_NAME: warmPoolService.serviceName,
         EFS_FILE_SYSTEM_ID: workspaceFileSystem.fileSystemId,
-        CONVERSATION_RETENTION_SECONDS: conversationRetentionSeconds,
         // DELETION_LAMBDA_ARN is set below after the deletion Lambda is created
       },
     });
@@ -600,7 +598,6 @@ export class SandboxStack extends cdk.Stack {
         IDLE_TIMEOUT_MINUTES: String(props.idleTimeoutMinutes ?? 30),
         SANDBOX_TASK_FAMILY: 'openhands-sandbox',
         AWS_REGION_NAME: config.region,
-        CONVERSATION_RETENTION_SECONDS: conversationRetentionSeconds,
         LOG_LEVEL: 'INFO',
         POWERTOOLS_SERVICE_NAME: 'sandbox-idle-monitor',
       },
@@ -673,7 +670,6 @@ export class SandboxStack extends cdk.Stack {
       environment: {
         REGISTRY_TABLE_NAME: registryTable.tableName,
         AWS_REGION_NAME: config.region,
-        CONVERSATION_RETENTION_SECONDS: conversationRetentionSeconds,
         LOG_LEVEL: 'INFO',
         POWERTOOLS_SERVICE_NAME: 'sandbox-task-state',
       },

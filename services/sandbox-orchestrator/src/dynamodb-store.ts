@@ -17,9 +17,6 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent } from 'node:http';
 import type { SandboxRecord, SandboxStatus } from './types.js';
 
-/** Configurable via CONVERSATION_RETENTION_SECONDS env var (default: 183 days = 180 retention + 3 day buffer) */
-const TTL_SECONDS = parseInt(process.env.CONVERSATION_RETENTION_SECONDS || '15811200', 10);
-
 export class DynamoDBStore {
   private readonly tableName: string;
   private readonly docClient: DynamoDBDocumentClient;
@@ -45,7 +42,6 @@ export class DynamoDBStore {
       ...record,
       created_at: record.created_at || now,
       last_activity_at: now,
-      ttl: now + TTL_SECONDS,
     };
     await this.docClient.send(
       new PutCommand({ TableName: this.tableName, Item: item }),
@@ -97,15 +93,14 @@ export class DynamoDBStore {
         new UpdateCommand({
           TableName: this.tableName,
           Key: { conversation_id: conversationId },
-          UpdateExpression: 'SET #status = :claimed, last_activity_at = :now, #ttl = :ttl',
+          UpdateExpression: 'SET #status = :claimed, last_activity_at = :now',
           ConditionExpression: '#status = :warm',
           ExpressionAttributeValues: {
             ':claimed': 'CLAIMED',
             ':warm': 'WARM',
             ':now': now,
-            ':ttl': now + TTL_SECONDS,
           },
-          ExpressionAttributeNames: { '#status': 'status', '#ttl': 'ttl' },
+          ExpressionAttributeNames: { '#status': 'status' },
         }),
       );
       return true;
@@ -124,15 +119,13 @@ export class DynamoDBStore {
     taskDefinitionArn?: string,
   ): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
-    let updateExpr = 'SET #status = :status, last_activity_at = :now, #ttl = :ttl';
+    let updateExpr = 'SET #status = :status, last_activity_at = :now';
     const exprValues: Record<string, unknown> = {
       ':status': status,
       ':now': now,
-      ':ttl': now + TTL_SECONDS,
     };
     const exprNames: Record<string, string> = {
       '#status': 'status',
-      '#ttl': 'ttl',
     };
 
     if (taskIp !== undefined) {
@@ -169,12 +162,8 @@ export class DynamoDBStore {
       new UpdateCommand({
         TableName: this.tableName,
         Key: { conversation_id: conversationId },
-        UpdateExpression: 'SET last_activity_at = :now, #ttl = :ttl',
-        ExpressionAttributeValues: {
-          ':now': now,
-          ':ttl': now + TTL_SECONDS,
-        },
-        ExpressionAttributeNames: { '#ttl': 'ttl' },
+        UpdateExpression: 'SET last_activity_at = :now',
+        ExpressionAttributeValues: { ':now': now },
       }),
     );
   }
@@ -206,21 +195,20 @@ export class DynamoDBStore {
     );
   }
 
-  /** Transition a sandbox to ARCHIVED status, removing TTL so the record persists indefinitely. */
+  /** Transition a sandbox to ARCHIVED status. */
   async updateStatusArchived(conversationId: string): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     await this.docClient.send(
       new UpdateCommand({
         TableName: this.tableName,
         Key: { conversation_id: conversationId },
-        UpdateExpression: 'SET #status = :archived, last_activity_at = :now REMOVE #ttl',
+        UpdateExpression: 'SET #status = :archived, last_activity_at = :now',
         ExpressionAttributeValues: {
           ':archived': 'ARCHIVED',
           ':now': now,
         },
         ExpressionAttributeNames: {
           '#status': 'status',
-          '#ttl': 'ttl',
         },
       }),
     );

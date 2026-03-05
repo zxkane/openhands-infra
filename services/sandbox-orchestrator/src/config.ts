@@ -13,6 +13,4 @@ export const config = {
   port: parseInt(process.env.PORT || '8081', 10),
   /** Lambda ARN for async conversation deletion (full data wipe) */
   deletionLambdaArn: process.env.DELETION_LAMBDA_ARN || '',
-  /** Conversation retention TTL in seconds (default: 183 days = 180 retention + 3 day buffer) */
-  conversationRetentionSeconds: parseInt(process.env.CONVERSATION_RETENTION_SECONDS || '15811200', 10),
 } as const;

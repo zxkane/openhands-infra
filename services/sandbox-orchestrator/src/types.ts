@@ -12,7 +12,6 @@ export interface SandboxRecord {
   sandbox_spec_id: string;
   last_activity_at: number;
   created_at: number;
-  ttl?: number;
   /** EFS access point ID for per-conversation isolation (created at sandbox start) */
   access_point_id?: string;
   /** Task definition ARN with per-conversation access point (registered at sandbox start) */
