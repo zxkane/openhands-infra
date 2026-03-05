@@ -689,6 +689,158 @@
     }
   }
 
+  function showArchivedBanner() {
+    if (document.getElementById('archived-conversation-banner')) return;
+
+    var banner = document.createElement('div');
+    banner.id = 'archived-conversation-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;' +
+      'background:#2d2d3a;color:#e0e0e0;padding:12px 20px;text-align:center;' +
+      'font-size:14px;border-bottom:2px solid #6b5ce7;display:flex;' +
+      'align-items:center;justify-content:center;gap:8px;';
+
+    var icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('width', '16');
+    icon.setAttribute('height', '16');
+    icon.setAttribute('viewBox', '0 0 16 16');
+    icon.style.flexShrink = '0';
+    var iconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    iconPath.setAttribute('d', 'M2 4h12v1H2V4zm1 2h10v7a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm3 2v4h4V8H6z');
+    iconPath.setAttribute('fill', '#6b5ce7');
+    icon.appendChild(iconPath);
+    banner.appendChild(icon);
+
+    var text = document.createElement('span');
+    text.style.flex = '1';
+    text.textContent = 'This conversation has been archived and is read-only. ' +
+      'Conversation history is preserved but the sandbox cannot be restarted.';
+    banner.appendChild(text);
+
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '\u2715';
+    closeBtn.style.cssText = 'background:none;border:none;color:#e0e0e0;font-size:18px;' +
+      'cursor:pointer;padding:0 4px;flex-shrink:0;line-height:1;';
+    closeBtn.addEventListener('click', removeArchivedBanner);
+    banner.appendChild(closeBtn);
+
+    var main = document.querySelector('main') || document.body;
+    main.insertBefore(banner, main.firstChild);
+
+    // Hide sandbox status indicators and attempt to load conversation history
+    // Note: V1 app-server stores events on the agent-server (sandbox), not in S3.
+    // When sandbox is archived (EFS deleted), events may not be retrievable.
+    // The trajectory/events API will return empty if no server-side events exist.
+    setTimeout(function() {
+      // Replace "Starting"/"Connecting" status with "Archived"
+      var statusTexts = document.querySelectorAll('[class*="status"], [class*="Status"]');
+      statusTexts.forEach(function(el) {
+        if (el.textContent && (el.textContent.includes('Starting') || el.textContent.includes('Connecting'))) {
+          el.textContent = 'Archived';
+        }
+      });
+      // Hide the bottom status bar showing "Connecting... (this may take 1-2 minutes)"
+      var bottomBars = document.querySelectorAll('[class*="toolbar"], [class*="Toolbar"], [class*="status-bar"]');
+      bottomBars.forEach(function(el) {
+        if (el.textContent && el.textContent.includes('Connecting')) {
+          el.style.display = 'none';
+        }
+      });
+    }, 1500);
+
+    // Load conversation history from S3 via trajectory API
+    loadArchivedHistory();
+  }
+
+  function loadArchivedHistory() {
+    var convId = getConversationId();
+    if (!convId) return;
+    var formattedId = formatConversationId(convId);
+
+    fetch('/api/conversations/' + formattedId + '/trajectory')
+      .then(function(resp) { return resp.ok ? resp.json() : null; })
+      .then(function(data) {
+        if (!data || !data.trajectory || !data.trajectory.length) {
+          console.log('Archived history: no events found');
+          return;
+        }
+        console.log('Archived history: loaded ' + data.trajectory.length + ' events');
+        renderArchivedHistory(data.trajectory);
+      })
+      .catch(function(err) {
+        console.warn('Archived history: failed to load', err);
+      });
+  }
+
+  function renderArchivedHistory(events) {
+    // Find the chat area — look for the "Let's start building!" container
+    var chatContainer = null;
+    var candidates = document.querySelectorAll('[class*="chat"], [class*="Chat"], [class*="messages"], [class*="Messages"]');
+    if (candidates.length) {
+      chatContainer = candidates[0];
+    }
+    // Fallback: find the element containing "Let's start building!"
+    if (!chatContainer) {
+      var allEls = document.querySelectorAll('h1, h2, h3, [class*="empty"], [class*="placeholder"]');
+      for (var i = 0; i < allEls.length; i++) {
+        if (allEls[i].textContent && allEls[i].textContent.includes("start building")) {
+          chatContainer = allEls[i].parentElement;
+          break;
+        }
+      }
+    }
+    if (!chatContainer) {
+      console.warn('Archived history: could not find chat container');
+      return;
+    }
+
+    // Clear placeholder content
+    chatContainer.style.cssText = 'overflow-y:auto;padding:20px;max-height:calc(100vh - 120px);';
+
+    // Remove existing children (placeholder buttons, "Let's start building" etc.)
+    while (chatContainer.firstChild) {
+      chatContainer.removeChild(chatContainer.firstChild);
+    }
+
+    // Render each message event
+    events.forEach(function(evt) {
+      // Only render user messages and assistant messages
+      var action = evt.action || '';
+      var observation = evt.observation || '';
+      var isUser = action === 'message' && evt.source === 'user';
+      var isAssistant = (action === 'message' && evt.source === 'agent') ||
+                        observation === 'agent_state_changed';
+
+      if (!isUser && !isAssistant) return;
+
+      var content = '';
+      if (evt.args && evt.args.content) content = evt.args.content;
+      else if (evt.message) content = evt.message;
+      if (!content || !content.trim()) return;
+
+      var msgDiv = document.createElement('div');
+      msgDiv.style.cssText = 'margin:8px 0;padding:12px 16px;border-radius:8px;' +
+        'max-width:80%;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;font-size:14px;';
+
+      if (isUser) {
+        msgDiv.style.cssText += 'background:#3b3b4f;color:#e0e0e0;margin-left:auto;text-align:right;';
+      } else {
+        msgDiv.style.cssText += 'background:#1e1e2e;color:#d0d0d0;margin-right:auto;';
+      }
+
+      msgDiv.textContent = content;
+      chatContainer.appendChild(msgDiv);
+    });
+
+    // Scroll to bottom
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    console.log('Archived history: rendered messages');
+  }
+
+  function removeArchivedBanner() {
+    var banner = document.getElementById('archived-conversation-banner');
+    if (banner) banner.remove();
+  }
+
   function checkAndResume() {
     var convId = getConversationId();
     if (!convId) {
@@ -710,22 +862,32 @@
       return;
     }
 
-    // Use app-conversations endpoint which returns sandbox_status
-    fetch('/api/v1/app-conversations?ids=' + convId)
-      .then(function(resp) { return resp.json(); })
-      .then(function(convList) {
+    // Fetch conversation status from two APIs:
+    // - /api/conversations/{id} returns ConversationStatus (ARCHIVED, STOPPED, RUNNING)
+    // - /api/v1/app-conversations returns sandbox_status (RUNNING, MISSING, PAUSED)
+    var formattedId = formatConversationId(convId);
+    Promise.all([
+      fetch('/api/conversations/' + formattedId).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/v1/app-conversations?ids=' + convId).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; })
+    ]).then(function(results) {
+        var convInfo = results[0];  // has .status (ConversationStatus: ARCHIVED, STOPPED, etc.)
+        var convList = results[1];
         var conv = convList && convList[0];
-        if (!conv) {
-          console.log('Auto-resume: conversation not found');
-          return;
-        }
 
-        console.log('Auto-resume: checking conversation, sandbox_status=' + conv.sandbox_status);
+        var conversationStatus = convInfo && convInfo.status;
+        var sandboxStatus = conv && conv.sandbox_status;
+        console.log('Auto-resume: status=' + conversationStatus + ', sandbox_status=' + sandboxStatus);
 
-        if (conv.sandbox_status === 'RUNNING' || conv.sandbox_status === 'STARTING') {
+        if (sandboxStatus === 'RUNNING' || sandboxStatus === 'STARTING') {
           // Sandbox is active, stop checking
-          console.log('Auto-resume: sandbox is ' + conv.sandbox_status + ', stopping checks');
+          console.log('Auto-resume: sandbox is ' + sandboxStatus + ', stopping checks');
           stopChecking();
+        } else if (conversationStatus === 'ARCHIVED') {
+          // Conversation is archived — do NOT attempt to resume.
+          console.log('Auto-resume: conversation is ARCHIVED, showing banner');
+          stopChecking();
+          try { sessionStorage.setItem('oh_archived_conv', convId); } catch(e) {}
+          showArchivedBanner();
         } else if (!resumeAttempted[convId]) {
           // Sandbox is not running (MISSING, STOPPED, PAUSED, ERROR, null, etc.)
           // Trigger sandbox start via the resume endpoint — only once per conversation.
@@ -770,9 +932,11 @@
     // Reset state for new conversation
     currentConvId = convId;
     stopChecking();
+    removeArchivedBanner();
     checkStartTime = Date.now();
 
     console.log('Auto-resume: initialized for conversation ' + convId);
+
     // Check every 5 seconds
     checkInterval = setInterval(checkAndResume, 5000);
     // Also check immediately after a delay (let page load first)
@@ -791,6 +955,7 @@
     } else if (!newConvId) {
       // Navigated away from a conversation page
       stopChecking();
+      removeArchivedBanner();
       currentConvId = null;
     }
   }
@@ -809,11 +974,25 @@
     return result;
   };
 
+  // Check if we were redirected from an ARCHIVED conversation
+  function checkArchivedRedirect() {
+    try {
+      var archivedId = sessionStorage.getItem('oh_archived_conv');
+      if (archivedId && !getConversationId()) {
+        sessionStorage.removeItem('oh_archived_conv');
+        console.log('Auto-resume: showing archived banner after redirect from ' + archivedId);
+        showArchivedBanner();
+        setTimeout(removeArchivedBanner, 8000);
+      }
+    } catch(e) {}
+  }
+
   // Start when DOM is ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', function() { init(); checkArchivedRedirect(); });
   } else {
     init();
+    checkArchivedRedirect();
   }
 
   console.log('OpenHands auto-resume sandbox patch loaded');

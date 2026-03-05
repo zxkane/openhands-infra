@@ -121,6 +121,10 @@ export interface DatabaseStackOutput {
   securityGroupId: string;
   /** RDS Proxy endpoint for connection pooling and IAM auth management */
   proxyEndpoint: string;
+  /** Aurora cluster ARN (for RDS Data API calls) */
+  clusterArn: string;
+  /** Secrets Manager ARN for Aurora admin credentials (for RDS Data API auth) */
+  adminSecretArn: string;
 }
 
 /**
@@ -173,4 +177,6 @@ export interface SandboxStackOutput {
   sandboxTaskRoleArn: string;
   /** EFS file system ID for workspace persistence (used by orchestrator for per-conversation access points) */
   efsFileSystemId: string;
+  /** Conversation deletion Lambda ARN (invoked by orchestrator for full data wipe) */
+  deletionLambdaArn?: string;
 }

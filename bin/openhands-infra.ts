@@ -240,6 +240,9 @@ clusterStack.addDependency(networkStack);
 const warmPoolSize = parseInt(app.node.tryGetContext('warmPoolSize') || '2', 10);
 const idleTimeoutDefault = config.domainName.startsWith('test.') ? 10 : 30;
 const idleTimeoutMinutes = parseInt(app.node.tryGetContext('idleTimeoutMinutes') || String(idleTimeoutDefault), 10);
+const conversationRetentionDays = parseInt(
+  app.node.tryGetContext('conversationRetentionDays') || '180', 10
+);
 
 const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   env: mainEnv,
@@ -251,6 +254,13 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   sandboxAwsPolicyFile,
   warmPoolSize,
   idleTimeoutMinutes,
+  conversationRetentionDays,
+  dataBucket: monitoringStack.output.dataBucket,
+  // Database info for deletion Lambda — uses well-known secret name to avoid
+  // cyclic dependency (Sandbox → Database → Security → Sandbox via SG imports).
+  // The deletion Lambda resolves the cluster ARN from the secret at runtime.
+  databaseSecretName: 'openhands/database/admin',
+  databaseName: 'openhands',
   description: 'OpenHands Sandbox Infrastructure - ECS Fargate Tasks and Orchestrator',
   crossRegionReferences: true,
 });

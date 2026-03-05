@@ -310,6 +310,8 @@ export class DatabaseStack extends cdk.Stack {
       databaseUser: proxyDatabaseUser,  // Use proxy user for connections
       securityGroupId: dbSecurityGroup.securityGroupId,
       proxyEndpoint: proxy.endpoint,
+      clusterArn: this.cluster.clusterArn,
+      adminSecretArn: this.cluster.secret!.secretArn,
     };
 
     // Stack outputs

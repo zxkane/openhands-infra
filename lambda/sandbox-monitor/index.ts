@@ -21,9 +21,6 @@ const IDLE_TIMEOUT_MINUTES = parseInt(process.env.IDLE_TIMEOUT_MINUTES || '30', 
 const SANDBOX_TASK_FAMILY = process.env.SANDBOX_TASK_FAMILY || 'openhands-sandbox';
 const REGION = process.env.AWS_REGION_NAME || process.env.AWS_REGION || 'us-east-1';
 
-/** Time-to-live: 7 days from last activity (matches dynamodb_store.py TTL_SECONDS) */
-const TTL_SECONDS = 7 * 24 * 3600;
-
 const logger = new Logger({ serviceName: 'sandbox-idle-monitor' });
 const dynamodb = new DynamoDBClient({ region: REGION });
 const ecs = new ECSClient({ region: REGION });
@@ -83,15 +80,13 @@ async function updateStatus(conversationId: string, status: string): Promise<voi
     Key: {
       conversation_id: { S: conversationId },
     },
-    UpdateExpression: 'SET #status = :status, last_activity_at = :now, #ttl = :ttl',
+    UpdateExpression: 'SET #status = :status, last_activity_at = :now',
     ExpressionAttributeValues: {
       ':status': { S: status },
       ':now': { N: now.toString() },
-      ':ttl': { N: (now + TTL_SECONDS).toString() },
     },
     ExpressionAttributeNames: {
       '#status': 'status',
-      '#ttl': 'ttl',
     },
   }));
 }

@@ -56,7 +56,7 @@ This document provides implementation details for the CDK stack files in this di
 | `monitoring-stack.ts` | Observability & data store | CloudWatch, S3 data bucket |
 | `database-stack.ts` | Persistent storage | Aurora Serverless v2, RDS Proxy |
 | `cluster-stack.ts` | Shared ECS infrastructure | ECS Cluster, Cloud Map namespace |
-| `sandbox-stack.ts` | Sandbox containers | DynamoDB, Orchestrator, Task definitions |
+| `sandbox-stack.ts` | Sandbox containers | DynamoDB, Orchestrator, Task definitions, Lifecycle Lambdas |
 | `compute-stack.ts` | Application runtime | Fargate services, ALB, EFS |
 | `user-config-stack.ts` | User Configuration API | Lambda (ALB target group) |
 | `auth-stack.ts` | Shared authentication | Cognito User Pool, managed login |
@@ -74,6 +74,7 @@ clusterStack.addDependency(networkStack);
 sandboxStack.addDependency(networkStack);
 sandboxStack.addDependency(monitoringStack);
 sandboxStack.addDependency(clusterStack);
+sandboxStack.addDependency(databaseStack);
 userConfigStack.addDependency(monitoringStack);
 userConfigStack.addDependency(securityStack);
 computeStack.addDependency(networkStack);

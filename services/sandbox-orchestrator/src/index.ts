@@ -7,6 +7,7 @@
 
 import Fastify from 'fastify';
 import { randomUUID } from 'node:crypto';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { config } from './config.js';
 import { DynamoDBStore } from './dynamodb-store.js';
 import { EcsManager } from './ecs-manager.js';
@@ -33,6 +34,9 @@ const ecs = new EcsManager({
   securityGroupId: config.securityGroupId,
   region: config.region,
 });
+const lambdaClient = config.deletionLambdaArn
+  ? new LambdaClient({ region: config.region })
+  : null;
 
 // ========================================
 // Helpers
@@ -44,8 +48,9 @@ const STATUS_MAP: Record<SandboxStatus, string> = {
   STARTING: 'pending',
   WARM: 'pending',
   CLAIMED: 'pending',
-  PAUSED: 'stopped',
-  STOPPED: 'stopped',
+  PAUSED: 'paused',    // App maps 'paused' → SandboxStatus.PAUSED → ConversationStatus.STOPPED (resumable)
+  STOPPED: 'paused',   // Also resumable — EFS data persists, only the ECS task stopped
+  ARCHIVED: 'stopped', // App maps 'stopped' → SandboxStatus.MISSING → ConversationStatus.ARCHIVED (not resumable)
   ERROR: 'failed',
 };
 
@@ -55,8 +60,9 @@ const POD_STATUS_MAP: Record<SandboxStatus, string> = {
   STARTING: 'pending',
   WARM: 'pending',
   CLAIMED: 'pending',
-  PAUSED: 'stopped',
-  STOPPED: 'stopped',
+  PAUSED: 'paused',    // Resumable — sandbox was idle-stopped but can restart
+  STOPPED: 'paused',   // Also resumable — EFS data persists, only the ECS task stopped
+  ARCHIVED: 'stopped', // Not resumable — archived beyond retention period
   ERROR: 'failed',
 };
 
@@ -196,11 +202,14 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
 
   request.log.info(`Starting sandbox: session=${session_id}, user=${userId}`);
 
-  // Check if already running
+  // Check existing record
   const existing = await store.getSandbox(session_id);
   if (existing && existing.status === 'RUNNING') {
     request.log.info(`Sandbox already running: session=${session_id}`);
     return recordToRuntime(existing);
+  }
+  if (existing && existing.status === 'ARCHIVED') {
+    return reply.code(409).send({ detail: 'Conversation is archived and cannot be resumed' });
   }
 
   // Per-conversation EFS isolation: create access point + register task definition
@@ -327,6 +336,9 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
   if (!record) {
     return reply.code(404).send({ detail: 'Sandbox not found' });
   }
+  if (record.status === 'ARCHIVED') {
+    return reply.code(409).send({ detail: 'Conversation is archived and cannot be resumed' });
+  }
   if (record.status === 'RUNNING' || record.status === 'STARTING') {
     return recordToRuntime(record);
   }
@@ -379,6 +391,53 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
   );
   const updated = await store.getSandbox(record.conversation_id);
   return updated ? recordToRuntime(updated) : { status: 'error' };
+});
+
+app.post<{ Body: RuntimeIdRequest }>('/delete', async (request, reply) => {
+  const runtimeId = request.body.runtime_id;
+  if (!runtimeId?.trim() || runtimeId.length > MAX_ID_LENGTH) {
+    return reply.code(400).send({ detail: 'Invalid runtime_id' });
+  }
+  const record = await store.getSandbox(runtimeId);
+  if (!record) {
+    return reply.code(404).send({ detail: 'Sandbox not found' });
+  }
+
+  request.log.info(`Deleting conversation: ${runtimeId}, user=${record.user_id}`);
+
+  // Stop ECS task if running
+  if ((record.status === 'RUNNING' || record.status === 'STARTING') && record.task_arn) {
+    try {
+      await ecs.stopTask(record.task_arn, 'Conversation deleted');
+    } catch (err) {
+      request.log.error(`Failed to stop task during delete: ${err}`);
+    }
+  }
+
+  // Clean up EFS access point and task definition
+  await cleanupEfsResources(record.access_point_id, record.task_definition_arn);
+
+  // Delete DynamoDB record
+  await store.deleteSandbox(record.conversation_id);
+
+  // Async invoke deletion Lambda for full data wipe (S3, EFS workspace, Aurora)
+  if (lambdaClient && config.deletionLambdaArn) {
+    try {
+      await lambdaClient.send(new InvokeCommand({
+        FunctionName: config.deletionLambdaArn,
+        InvocationType: 'Event', // Async — don't wait for completion
+        Payload: Buffer.from(JSON.stringify({
+          conversation_id: record.conversation_id,
+          user_id: record.user_id,
+        })),
+      }));
+      request.log.info(`Deletion Lambda invoked for ${record.conversation_id}`);
+    } catch (err) {
+      request.log.error(`Failed to invoke deletion Lambda: ${err}`);
+    }
+  }
+
+  return { status: 'deleted', session_id: record.conversation_id };
 });
 
 // NOTE: /sessions/batch MUST be declared before /sessions/:session_id

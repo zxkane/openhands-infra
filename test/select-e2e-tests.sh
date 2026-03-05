@@ -72,6 +72,11 @@ USER_CONFIG_TESTS=(
     "TC-020:Settings Pages User Isolation"
 )
 
+LIFECYCLE_TESTS=(
+    "TC-028:Conversation Archival"
+    "TC-029:Conversation Deletion"
+)
+
 # Detect change categories
 HAS_AUTH_CHANGES=false
 HAS_RUNTIME_CHANGES=false
@@ -79,6 +84,7 @@ HAS_ECS_CHANGES=false
 HAS_SANDBOX_AWS_CHANGES=false
 HAS_MCP_CHANGES=false
 HAS_USER_CONFIG_CHANGES=false
+HAS_LIFECYCLE_CHANGES=false
 
 # --all flag: select every test category
 if $RUN_ALL; then
@@ -88,6 +94,7 @@ if $RUN_ALL; then
     HAS_SANDBOX_AWS_CHANGES=true
     HAS_MCP_CHANGES=true
     HAS_USER_CONFIG_CHANGES=true
+    HAS_LIFECYCLE_CHANGES=true
 fi
 
 for file in $CHANGED_FILES; do
@@ -119,6 +126,11 @@ for file in $CHANGED_FILES; do
     # User config changes
     if [[ "$file" =~ user-config-stack\.ts ]] || [[ "$file" =~ lambda/user-config/ ]] || [[ "$file" =~ s3_.*_store\.py ]]; then
         HAS_USER_CONFIG_CHANGES=true
+    fi
+
+    # Conversation lifecycle changes (archival, deletion)
+    if [[ "$file" =~ lambda/conversation-archival/ ]] || [[ "$file" =~ lambda/conversation-delete/ ]] || [[ "$file" =~ conversationRetention ]]; then
+        HAS_LIFECYCLE_CHANGES=true
     fi
 done
 
@@ -202,6 +214,17 @@ if $HAS_USER_CONFIG_CHANGES; then
     echo ""
     echo "## User config changes detected:"
     for test in "${USER_CONFIG_TESTS[@]}"; do
+        tc="${test%%:*}"
+        name="${test#*:}"
+        echo "  - $tc: $name"
+        ADDITIONAL_TESTS+=("$test")
+    done
+fi
+
+if $HAS_LIFECYCLE_CHANGES; then
+    echo ""
+    echo "## Conversation lifecycle changes detected:"
+    for test in "${LIFECYCLE_TESTS[@]}"; do
         tc="${test%%:*}"
         name="${test#*:}"
         echo "  - $tc: $name"
