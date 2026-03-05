@@ -22,7 +22,11 @@ FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 # Install boto3 for AWS Bedrock support (required by litellm for AWS authentication)
-RUN pip install --no-cache-dir boto3
+# Upgrade openhands-tools to match agent-server-custom SDK (v1.11.5)
+# Without this, EventPage.model_validate fails on BrowserStartRecordingTool/BrowserStopRecordingTool
+# because the app-server's openhands-tools 1.11.4 doesn't know these tool types added in 1.11.5.
+# This breaks event refresh entirely, preventing S3EventService from persisting any events.
+RUN pip install --no-cache-dir boto3 openhands-tools==1.11.5
 
 # ─── Build-time: Download patched upstream files from fork ───────────────────
 # Replaces the old apply-patch.sh (2000+ line regex patching at startup).
