@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-06
+
+### Added
+
+#### Storage
+- **S3 event persistence for conversations** (#56)
+  - Introduced `S3EventService` to replace `FilesystemEventService` when `FILE_STORE=s3`.
+  - Persisted events to S3 for survival across Fargate task restarts and long-term history for archived conversations.
+  - Upgraded `openhands-tools` to v1.11.5 to resolve agent-server SDK mismatches.
+
+#### Sandboxes
+- **Conversation archival and lifecycle management** (#54)
+  - Added ARCHIVED state for conversations with configurable retention policies.
+  - Supported user-initiated conversation deletion and data lifecycle transitions:
+    - ARCHIVED conversations retain event history in S3 but can no longer resume.
+    - Deleted conversations wipe all associated data.
+
+#### Compute
+- **Target tracking auto scaling and rightsizing of app Fargate tasks** (#53)
+  - Downsized app Fargate tasks from **4 vCPU / 8 GB** to **1 vCPU / 2 GB** based on CloudWatch metrics.
+  - Implemented auto-scaling (1-3 tasks) for both the App and OpenResty services.
+  - Achieved ~75% reduction in baseline Fargate costs, reflected in updated README.md cost estimates.
+  
+- **Bedrock LLM model selection support** (#49)
+  - Enabled user-selectable Bedrock LLM models via OpenHands model selection UI.
+  - Updated default model to Claude Sonnet 4.6 for optimal cost-performance balance.
+
+#### Documentation
+- **Updated documentation with AGENTS.md migration** (#48)
+  - Consolidated tool-agnostic documentation into AGENTS.md, standardizing compatible AI coding tools.
+  - Added workflow enforcement hooks to prevent direct pushes to the main branch.
+
+### Changed
+
+#### Platform Updates
+- **Lambda Node.js runtime upgrade** (#52)
+  - Migrated all custom AWS Lambda functions from `NODEJS_22_X` to `NODEJS_24_X`, the latest LTS runtime.
+
+### Fixed
+
+#### Sandboxes
+- **Orphan ECS task detection in idle monitor** (#50)
+  - Implemented logic to detect and terminate orphan ECS tasks caused by race conditions during concurrent `/resume` requests.
+
+#### Docker and SDK
+- **Bedrock improvements and patches for agent-server SDK** (#51)
+  - Backported Bedrock updates and patches from OpenHands upstream forks.
+  - Resolved Kimi K2.5 max_output_tokens errors with custom SDK patch.
+
+[1.1.0]: https://github.com/zxkane/openhands-infra/compare/v1.0.0...v1.1.0
+
 ## [1.0.0] - 2026-02-28
 
 ### Added
