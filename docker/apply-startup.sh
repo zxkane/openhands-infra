@@ -10,6 +10,7 @@
 #   - Patch 6:  Swap AuthUserContextInjector import in openhands_cloud
 #   - Patch 27a: Database migration DDL (add user_id column if missing)
 #   - Patch 21: Verify multi-tenant store configuration
+#   - Patch 33: Wire S3EventServiceInjector into config.py
 #   - Critical patch failure checks
 #
 # SDK patches (apply-sdk-patches.py) are handled separately in agent-server-custom/.
@@ -220,6 +221,74 @@ python3 /opt/patch-vscode-url.py
 # ─── Patch 32: Fix exposed_urls for Fargate sandbox mode ─────────────────────
 python3 /opt/patch-exposed-urls.py
 
+# ─── Patch 33: Wire S3EventService into config.py for FILE_STORE=s3 ─────────
+# The fork's config.py uses FilesystemEventServiceInjector for non-Google Cloud.
+# When FILE_STORE=s3, events should persist to S3 instead of ephemeral filesystem.
+# This replaces the FilesystemEventServiceInjector fallback with S3EventServiceInjector.
+
+APP_CONFIG_FILE="/app/openhands/app_server/config.py"
+if [ -f "$APP_CONFIG_FILE" ] && [ -f "/app/openhands/app_server/event/s3_event_service.py" ]; then
+  if grep -q "S3EventServiceInjector" "$APP_CONFIG_FILE"; then
+    echo "Patch 33: S3EventServiceInjector already configured"
+  else
+    python3 << 'PYEOF'
+import sys
+
+config_path = "/app/openhands/app_server/config.py"
+
+try:
+    with open(config_path, 'r') as f:
+        content = f.read()
+
+    # Add import for S3EventServiceInjector
+    old_import = 'from openhands.app_server.event.google_cloud_event_service import (\n        GoogleCloudEventServiceInjector,\n    )'
+    new_import = old_import + '\n    from openhands.app_server.event.s3_event_service import (\n        S3EventServiceInjector,\n    )'
+
+    if old_import not in content:
+        print("WARNING: Patch 33: Could not find GoogleCloudEventServiceInjector import pattern", file=sys.stderr)
+        sys.exit(0)
+
+    content = content.replace(old_import, new_import)
+
+    # Replace the event config logic to add S3 case
+    old_config = """    if config.event is None:
+        if os.environ.get('FILE_STORE') == 'google_cloud':
+            # Legacy V0 google cloud storage configuration
+            config.event = GoogleCloudEventServiceInjector(
+                bucket_name=os.environ.get('FILE_STORE_PATH')
+            )
+        else:
+            config.event = FilesystemEventServiceInjector()"""
+
+    new_config = """    if config.event is None:
+        if os.environ.get('FILE_STORE') == 'google_cloud':
+            # Legacy V0 google cloud storage configuration
+            config.event = GoogleCloudEventServiceInjector(
+                bucket_name=os.environ.get('FILE_STORE_PATH')
+            )
+        elif os.environ.get('FILE_STORE') == 's3':
+            config.event = S3EventServiceInjector(
+                bucket_name=os.environ.get('FILE_STORE_PATH')
+            )
+        else:
+            config.event = FilesystemEventServiceInjector()"""
+
+    if old_config not in content:
+        print("WARNING: Patch 33: Could not find event config pattern", file=sys.stderr)
+        sys.exit(0)
+
+    content = content.replace(old_config, new_config)
+
+    with open(config_path, 'w') as f:
+        f.write(content)
+
+    print("Patch 33: S3EventServiceInjector configured for FILE_STORE=s3")
+except Exception as e:
+    print(f"WARNING: Patch 33 failed: {e}", file=sys.stderr)
+PYEOF
+  fi
+fi
+
 # ─── Verify security-critical fork patches ───────────────────────────────────
 # These patches are applied at build time via download-fork-patches.sh.
 # Verify that the downloaded files actually contain the expected changes.
@@ -260,6 +329,16 @@ if [ -f "$SERVER_CONFIG_FILE" ]; then
     echo "Patch 21: Multi-tenant isolation ENABLED - settings/secrets stored at users/{user_id}/"
   else
     mark_critical_failure "Patch21-multi-tenant-isolation"
+  fi
+fi
+
+# ─── Verify S3EventService configuration ──────────────────────────────────────
+
+if [ -f "$APP_CONFIG_FILE" ]; then
+  if grep -q "S3EventServiceInjector" "$APP_CONFIG_FILE"; then
+    echo "Verify: S3EventServiceInjector present in config.py"
+  else
+    echo "WARNING: S3EventServiceInjector not configured - V1 events will use ephemeral FilesystemEventService" >&2
   fi
 fi
 

@@ -200,7 +200,7 @@ Each sandbox mounts an EFS access point rooted at `/sandbox-workspace/<conversat
 | Data Type | Storage | Written By | Persistence |
 |-----------|---------|-----------|-------------|
 | Conversation Metadata | Aurora PostgreSQL | App server | Permanent |
-| Conversation Events | S3 (`FILE_STORE=s3`) | App server | Permanent (authority for UI) |
+| V1 Conversation Events | S3 (`FILE_STORE=s3`) | App server via `S3EventService` | Permanent (authority for UI) |
 | User Settings / Secrets | S3 | App server | Permanent (KMS encrypted) |
 | Workspace Files | EFS | Sandbox agent-server | Persistent (per-conversation AP) |
 | SDK Conversation Cache | EFS | Sandbox SDK | Persistent (LLM context restoration) |
@@ -241,7 +241,7 @@ When a Fargate task is replaced (deployment, scaling, health check failure):
 2. **OpenHands App Startup**:
    - Connects to Aurora via RDS Proxy (password auth, no token refresh)
    - Loads existing conversation metadata
-   - Connects to S3 for conversation events
+   - Connects to S3 for conversation events (via `S3EventService`, wired by Patch 33)
 
 3. **User Access**:
    - Authenticates via Cognito (unchanged)
