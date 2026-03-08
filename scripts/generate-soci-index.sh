@@ -61,21 +61,25 @@ if ! sudo ctr version &>/dev/null; then
   sleep 2
 fi
 
-# Login to ECR
-echo "[1/4] Logging into ECR..."
-ECR_PASSWORD=$(aws ecr get-login-password --region "${REGION}")
+# Write ECR credentials to a temporary file to avoid exposing the token
+# in process argument lists (visible via ps aux). ECR tokens are short-lived
+# (12h) but we still avoid unnecessary exposure per CWE-214.
+ECR_CREDS_FILE=$(mktemp)
+trap 'rm -f "${ECR_CREDS_FILE}"' EXIT
+echo -n "AWS:$(aws ecr get-login-password --region "${REGION}")" > "${ECR_CREDS_FILE}"
+chmod 600 "${ECR_CREDS_FILE}"
 
 # Pull the image via containerd
-echo "[2/4] Pulling image via containerd..."
-sudo ctr image pull --user "AWS:${ECR_PASSWORD}" "${IMAGE_URI}"
+echo "[1/3] Pulling image via containerd..."
+sudo ctr image pull --user "$(cat "${ECR_CREDS_FILE}")" "${IMAGE_URI}"
 
 # Create SOCI index
-echo "[3/4] Creating SOCI index..."
+echo "[2/3] Creating SOCI index..."
 sudo soci create "${IMAGE_URI}"
 
 # Push SOCI index to ECR
-echo "[4/4] Pushing SOCI index to ECR..."
-sudo soci push --user "AWS:${ECR_PASSWORD}" "${IMAGE_URI}"
+echo "[3/3] Pushing SOCI index to ECR..."
+sudo soci push --user "$(cat "${ECR_CREDS_FILE}")" "${IMAGE_URI}"
 
 echo ""
 echo "=== SOCI index generation complete ==="
