@@ -216,12 +216,18 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
   request.log.info(`Launching sandbox task for session=${session_id}`);
   const sessionApiKey = randomUUID();
 
+  const timings: Record<string, number> = {};
+  const t0 = Date.now();
+
   const efsSetup = await setupEfsIsolation(session_id, request.log);
+  timings.efs_setup_ms = Date.now() - t0;
+
   if (efsManager && config.efsFileSystemId && !efsSetup) {
     return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
 
   let result;
+  const tRunTask = Date.now();
   try {
     result = await ecs.runTask({
       conversationId: session_id,
@@ -236,11 +242,15 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     await cleanupEfsResources(efsSetup?.accessPointId, efsSetup?.taskDefinitionArn);
     return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
+  timings.run_task_api_ms = Date.now() - tRunTask;
 
   const taskArn = result.task_arn;
 
   // Try to get IP quickly (8s, fits within upstream 15s httpx timeout)
+  const tWait = Date.now();
   const taskIp = await ecs.waitForRunning(taskArn, 8);
+  timings.wait_for_running_ms = Date.now() - tWait;
+  timings.total_ms = Date.now() - t0;
 
   const status: SandboxStatus = taskIp ? 'RUNNING' : 'STARTING';
   const record: SandboxRecord = {
@@ -261,13 +271,16 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
 
   if (!taskIp) {
     // Background: wait for IP then update
+    const bgStart = Date.now();
     (async () => {
       const ip = await ecs.waitForRunning(taskArn, 180);
+      const bgTimings = { ...timings, bg_wait_ms: Date.now() - bgStart, total_ms: Date.now() - t0 };
       if (ip) {
         await store.updateStatus(session_id, 'RUNNING', ip);
-        app.log.info(`Sandbox ready (bg): session=${session_id}, ip=${ip}`);
+        app.log.info({ msg: 'sandbox-startup-timing', route: 'start', session_id, ...bgTimings });
       } else {
         app.log.error(`Sandbox failed: ${taskArn}`);
+        app.log.info({ msg: 'sandbox-startup-timing', route: 'start', session_id, failed: true, ...bgTimings });
         try {
           await ecs.stopTask(taskArn, 'Failed to start');
         } catch {
@@ -279,7 +292,7 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     })().catch((err) => app.log.error(`Background sandbox setup failed: ${err}`));
     request.log.info(`Sandbox provisioning: session=${session_id}`);
   } else {
-    request.log.info(`Sandbox ready: session=${session_id}, ip=${taskIp}`);
+    request.log.info({ msg: 'sandbox-startup-timing', route: 'start', session_id, ...timings });
   }
 
   return recordToRuntime(record);
@@ -349,14 +362,20 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
   const sandboxImage = record.sandbox_spec_id || config.sandboxImage;
   const sessionApiKey = record.session_api_key || randomUUID();
 
+  const timings: Record<string, number> = {};
+  const t0 = Date.now();
+
   // Per-conversation EFS isolation: create new access point for resumed session
   const efsSetup = await setupEfsIsolation(record.conversation_id, request.log);
+  timings.efs_setup_ms = Date.now() - t0;
+
   if (efsManager && config.efsFileSystemId && !efsSetup) {
     await store.updateStatus(record.conversation_id, 'PAUSED').catch(() => {});
     return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
 
   let result;
+  const tRunTask = Date.now();
   try {
     result = await ecs.runTask({
       conversationId: record.conversation_id,
@@ -371,10 +390,16 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
     await store.updateStatus(record.conversation_id, 'PAUSED').catch(() => {});
     return reply.code(503).send({ detail: 'Failed to start sandbox' });
   }
+  timings.run_task_api_ms = Date.now() - tRunTask;
 
   const taskArn = result.task_arn;
+  const tWait = Date.now();
   const taskIp = await ecs.waitForRunning(taskArn, 120);
+  timings.wait_for_running_ms = Date.now() - tWait;
+  timings.total_ms = Date.now() - t0;
+
   if (!taskIp) {
+    request.log.info({ msg: 'sandbox-startup-timing', route: 'resume', session_id: runtimeId, failed: true, ...timings });
     try {
       await ecs.stopTask(taskArn, 'Failed to resume');
     } catch {
@@ -384,6 +409,8 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
     await store.updateStatus(record.conversation_id, 'PAUSED').catch(() => {});
     return reply.code(503).send({ detail: 'Sandbox task failed to resume' });
   }
+
+  request.log.info({ msg: 'sandbox-startup-timing', route: 'resume', session_id: runtimeId, ...timings });
 
   await store.updateStatus(
     record.conversation_id, 'RUNNING', taskIp, taskArn,
