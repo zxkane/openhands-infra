@@ -46,7 +46,8 @@ if [ -n "${MISSING}" ]; then
   echo "Quick install (Amazon Linux 2 / Ubuntu):"
   echo "  sudo yum install -y containerd  # or: sudo apt-get install -y containerd"
   echo "  SOCI_VERSION=0.8.0"
-  echo "  curl -sSL https://github.com/awslabs/soci-snapshotter/releases/download/v\${SOCI_VERSION}/soci-snapshotter-\${SOCI_VERSION}-linux-arm64.tar.gz | sudo tar -xzC /usr/local/bin soci"
+  echo "  SOCI_ARCH=\$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+  echo "  curl -sSL https://github.com/awslabs/soci-snapshotter/releases/download/v\${SOCI_VERSION}/soci-snapshotter-\${SOCI_VERSION}-linux-\${SOCI_ARCH}.tar.gz | sudo tar -xzC /usr/local/bin soci"
   exit 1
 fi
 

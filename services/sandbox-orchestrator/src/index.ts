@@ -249,8 +249,8 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
   // Try to get IP quickly (8s, fits within upstream 15s httpx timeout)
   const tWait = Date.now();
   const taskIp = await ecs.waitForRunning(taskArn, 8);
-  timings.initial_wait_ms = Date.now() - tWait;
-  timings.total_sync_ms = Date.now() - t0;
+  timings.wait_for_running_ms = Date.now() - tWait;
+  timings.total_ms = Date.now() - t0;
 
   const status: SandboxStatus = taskIp ? 'RUNNING' : 'STARTING';
   const record: SandboxRecord = {
@@ -292,7 +292,6 @@ app.post<{ Body: StartRequest }>('/start', async (request, reply) => {
     })().catch((err) => app.log.error(`Background sandbox setup failed: ${err}`));
     request.log.info(`Sandbox provisioning: session=${session_id}`);
   } else {
-    timings.total_ms = timings.total_sync_ms;
     request.log.info({ msg: 'sandbox-startup-timing', route: 'start', session_id, ...timings });
   }
 
@@ -396,7 +395,7 @@ app.post<{ Body: RuntimeIdRequest }>('/resume', async (request, reply) => {
   const taskArn = result.task_arn;
   const tWait = Date.now();
   const taskIp = await ecs.waitForRunning(taskArn, 120);
-  timings.provision_to_running_ms = Date.now() - tWait;
+  timings.wait_for_running_ms = Date.now() - tWait;
   timings.total_ms = Date.now() - t0;
 
   if (!taskIp) {
