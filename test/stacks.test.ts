@@ -57,6 +57,7 @@ const mockSandboxOutput: SandboxStackOutput = {
   sandboxExecutionRoleArn: 'arn:aws:iam::123456789012:role/mock-execution-role',
   sandboxTaskRoleArn: 'arn:aws:iam::123456789012:role/mock-task-role',
   efsFileSystemId: 'fs-mock12345',
+  sandboxImageUri: '123456789012.dkr.ecr.us-west-2.amazonaws.com/mock-sandbox-image:latest',
 };
 
 // Mock auth output for EdgeStack tests (shared Cognito from AuthStack)
