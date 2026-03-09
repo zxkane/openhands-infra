@@ -78,6 +78,7 @@ Required context parameters:
 | `skipS3Endpoint` | Skip S3 Gateway endpoint if VPC already has one (optional) | `true` |
 | `warmPoolSize` | Number of pre-warmed sandbox Fargate tasks (optional, default: 2) | `3` |
 | `idleTimeoutMinutes` | Minutes before idle sandbox is stopped (optional, default: 30, staging: 10) | `15` |
+| `sandboxSociImageUri` | SOCI v2 image URI for Fargate lazy loading (optional, see AGENTS.md) | `<ecr-uri>:tag-soci` |
 
 ### 3. Bootstrap CDK (First Time Only)
 

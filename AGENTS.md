@@ -38,6 +38,7 @@ npx cdk diff --all --context ...
 - `edgeStackSuffix` - Suffix for Edge stack name (multi-environment)
 - `authCallbackDomains` - OAuth callback domains (JSON array or comma-separated)
 - `authDomainPrefixSuffix` - Cognito domain prefix suffix (default: "shared")
+- `sandboxSociImageUri` - SOCI v2 image URI for Fargate lazy loading (see [SOCI Optimization](#soci-image-optimization))
 
 ### Prerequisites (First-Time Deployment)
 
@@ -58,6 +59,7 @@ aws secretsmanager create-secret --name openhands/sandbox-secret-key \
 | `/docker` | Custom container images and patches |
 | `/lambda` | Lambda function code |
 | `/test` | Unit tests and E2E test cases |
+| `/scripts` | Operational scripts (SOCI index generation) |
 | `/.github` | CI/CD workflows |
 
 ## Development Guidelines
@@ -215,6 +217,8 @@ STARTING → RUNNING → (idle timeout)    → PAUSED  → (retention days) → 
 | `lambda/conversation-delete/` | On-demand conversation deletion Lambda (full data wipe) |
 | `lambda/db-bootstrap/` | Database bootstrap custom resource Lambda |
 | `lib/lambda-edge/` | Lambda@Edge handlers |
+| `scripts/generate-soci-index.sh` | SOCI v2 index generation for Fargate lazy loading |
+| `services/sandbox-orchestrator/` | Sandbox orchestrator (Fastify, ECS RunTask, EFS) |
 | `test/E2E_TEST_CASES.md` | E2E test cases |
 | `docs/ARCHITECTURE.md` | Architecture deep dive |
 | `.github/workflows/release-prepare.yml` | Automated release PR with LLM changelog |
@@ -240,6 +244,54 @@ User apps accessible via: `https://{port}-{convId}.runtime.{subdomain}.{domain}/
 |-------|---------|----------|
 | Path-based | `/runtime/{convId}/{port}/...` | Agent WebSocket, API calls |
 | Subdomain | `{port}-{convId}.runtime.{domain}/` | User apps (Flask, Express) |
+
+## SOCI Image Optimization
+
+SOCI (Seekable OCI) v2 enables Fargate lazy loading — containers start before the full image is downloaded, reducing sandbox startup from ~54s to ~20s.
+
+### How It Works
+
+1. `cdk deploy` builds and pushes the sandbox agent-server image to ECR
+2. `scripts/generate-soci-index.sh` creates a SOCI v2 index (OCI image index with ztoc artifacts) and pushes it with a `-soci` tag
+3. Redeploy Sandbox stack with `--context sandboxSociImageUri=<image-uri>-soci` to update the task definition
+4. Fargate auto-detects the SOCI index and lazy-loads the image on `RunTask`
+
+### Prerequisites
+
+- `containerd` >= 1.7 (running)
+- `soci` CLI >= 0.10 ([releases](https://github.com/awslabs/soci-snapshotter/releases))
+
+### Usage
+
+The deploy scripts (`deploy-staging.local.sh`, `deploy-production.local.sh`) automatically generate SOCI indexes and redeploy when `soci` CLI is available. For manual use:
+
+```bash
+# Generate SOCI v2 index
+SANDBOX_IMAGE_URI=$(aws cloudformation describe-stacks \
+  --stack-name OpenHands-Sandbox --region <region> \
+  --query "Stacks[0].Outputs[?OutputKey=='SandboxImageUri'].OutputValue" --output text)
+./scripts/generate-soci-index.sh "$SANDBOX_IMAGE_URI" <region>
+
+# Redeploy with SOCI image
+npx cdk deploy OpenHands-Sandbox \
+  --context sandboxSociImageUri="${SANDBOX_IMAGE_URI}-soci" \
+  --context ... --require-approval never
+```
+
+### Startup Timing Instrumentation
+
+The sandbox orchestrator logs structured timing for each startup phase:
+
+```json
+{"msg":"sandbox-startup-timing","route":"start","efs_setup_ms":1433,"run_task_api_ms":808,"bg_wait_ms":18129,"total_ms":20442}
+```
+
+Query via CloudWatch Logs Insights:
+```
+fields @timestamp, efs_setup_ms, run_task_api_ms, bg_wait_ms, total_ms
+| filter msg = "sandbox-startup-timing"
+| sort @timestamp desc
+```
 
 ## Deployment
 
