@@ -145,6 +145,25 @@
     }
   }
 
+  // Normalize git API paths - convert absolute workspace paths and bare repo names to relative paths.
+  // The agent-server's git router expects "." for the workspace root.
+  function normalizeGitUrl(url) {
+    var before = url;
+    // Handle URL-encoded paths (%2F = /)
+    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
+    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F/gi, '$1/');
+    // Handle non-encoded paths (double slash from path joining)
+    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
+    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\//g, '$1/');
+    // Handle bare repo name (only if no workspace rewrite matched above)
+    // The frontend sends the GitHub repo name (e.g., "openhands-infra") but the agent-server
+    // expects "." for the workspace root (repo is cloned at /workspace/project, not /workspace/repo-name)
+    if (url === before) {
+      url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, '$1/.');
+    }
+    return url;
+  }
+
   var origFetch = window.fetch;
   window.fetch = function(url, opts) {
     var newUrl = url;
@@ -154,20 +173,8 @@
         newUrl = buildRuntimeUrl(m[2], m[3]);
 
         // Normalize git paths - convert absolute workspace paths to relative
-        // The agent-server's git router expects "." for the workspace root
-        // Note: URL is now at runtime subdomain root, so git paths are simpler
         if (newUrl.includes('/api/git/')) {
-          // Handle URL-encoded paths (%2F = /)
-          // Case 1: Exact workspace root - .../api/git/changes/%2Fworkspace%2Fproject -> .../api/git/changes/.
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
-          // Case 2: Subdirectory under workspace - .../api/git/changes/%2Fworkspace%2Fproject%2Fsubdir -> .../api/git/changes/subdir
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F/gi, '$1/');
-
-          // Handle non-encoded paths
-          // Case 1: Exact workspace root - .../api/git/changes//workspace/project -> .../api/git/changes/.
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
-          // Case 2: Subdirectory - .../api/git/changes//workspace/project/subdir -> .../api/git/changes/subdir
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\//g, '$1/');
+          newUrl = normalizeGitUrl(newUrl);
         }
 
         console.log("Fetch patched:", url, "->", newUrl);
@@ -246,12 +253,7 @@
 
         // Normalize git paths - convert absolute workspace paths to relative
         if (newUrl.includes('/api/git/')) {
-          // Handle URL-encoded paths (%2F = /)
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F/gi, '$1/');
-          // Handle non-encoded paths
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
-          newUrl = newUrl.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\//g, '$1/');
+          newUrl = normalizeGitUrl(newUrl);
         }
 
         console.log("XHR patched:", url, "->", newUrl);

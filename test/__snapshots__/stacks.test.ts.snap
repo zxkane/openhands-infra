@@ -1507,7 +1507,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:fe3a1243dd367834f4aad158f32fa6dcdf16232e03c5ab7427f6e9c19d707d9a",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:25ed92b7c5b1b9a03827bbdb9743f924e23411f73c1f37ef547a1c8cbf84e7e4",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
