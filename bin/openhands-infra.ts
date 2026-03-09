@@ -244,6 +244,8 @@ const conversationRetentionDays = parseInt(
   app.node.tryGetContext('conversationRetentionDays') || '180', 10
 );
 
+const sandboxSociImageUri = getContextString('sandboxSociImageUri', undefined);
+
 const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   env: mainEnv,
   config,
@@ -255,6 +257,7 @@ const sandboxStack = new SandboxStack(app, `${prefix}-Sandbox`, {
   warmPoolSize,
   idleTimeoutMinutes,
   conversationRetentionDays,
+  sandboxSociImageUri,
   dataBucket: monitoringStack.output.dataBucket,
   // Database info for deletion Lambda — uses well-known secret name to avoid
   // cyclic dependency (Sandbox → Database → Security → Sandbox via SG imports).

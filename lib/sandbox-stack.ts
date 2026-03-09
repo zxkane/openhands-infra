@@ -50,6 +50,8 @@ export interface SandboxStackProps extends cdk.StackProps {
   databaseSecretName?: string;
   /** Database name (deletion Lambda) */
   databaseName?: string;
+  /** SOCI-enabled sandbox image URI (overrides CDK-built image for Fargate lazy loading) */
+  sandboxSociImageUri?: string;
 }
 
 /**
@@ -328,10 +330,17 @@ export class SandboxStack extends cdk.Stack {
       platform: Platform.LINUX_ARM64,
     });
 
+    // Use SOCI-enabled image when provided (overrides CDK-built image for Fargate lazy loading).
+    // The SOCI image is generated post-deploy by scripts/generate-soci-index.sh and passed
+    // via --context sandboxSociImageUri on subsequent deploys.
+    const sandboxContainerImage = props.sandboxSociImageUri
+      ? ecs.ContainerImage.fromRegistry(props.sandboxSociImageUri)
+      : ecs.ContainerImage.fromDockerImageAsset(sandboxImageAsset);
+
     // Agent-server container (main sandbox container)
     const agentServerContainer = sandboxTaskDefinition.addContainer('agent-server', {
       containerName: 'agent-server',
-      image: ecs.ContainerImage.fromDockerImageAsset(sandboxImageAsset),
+      image: sandboxContainerImage,
       essential: true,
       // Override entrypoint: skip /sbin/docker-init (not available in Fargate)
       // Fargate uses initProcessEnabled instead for PID 1 signal handling
