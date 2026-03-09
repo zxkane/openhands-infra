@@ -50,6 +50,8 @@ RUNTIME_TESTS=(
     "TC-009:Verify Web App Subdomain"
     "TC-010:Verify VS Code URL Rewriting"
     "TC-027:SPA Navigation Starts Sandbox"
+    "TC-030:Changes Tab Without GitHub Repo"
+    "TC-031:Changes Tab With GitHub Repo"
 )
 
 ECS_PERSISTENCE_TESTS=(

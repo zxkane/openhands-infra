@@ -1479,6 +1479,8 @@ Use this checklist to track test execution:
 | TC-022 | Conversation List User Isolation | [ ] | Multi-tenant DB isolation (Patch 27) |
 | TC-021 | Secrets Re-injection After ECS Task Recycling | [ ] | Patch 22/23/28/29: secrets re-injected into resumed sandbox |
 | TC-025 | Cross-Sandbox Network Isolation | [ ] | Sandbox tasks cannot reach each other (SG hardening) |
+| TC-030 | Changes Tab Without GitHub Repo | [ ] | Git changes API returns 200, files listed |
+| TC-031 | Changes Tab With GitHub Repo | [ ] | Regression: bare repo name normalized to `.` |
 
 ---
 
@@ -3686,3 +3688,160 @@ Verify that the orchestrator `/delete` endpoint fully deletes conversation data 
 | 4 | EFS workspace removed | Directory no longer exists |
 | 5 | Conversation gone from UI | Not in conversation list |
 | 6 | Deletion Lambda logged | Check CloudWatch logs for `openhands-conversation-delete` |
+
+---
+
+## TC-030: Verify Changes Tab Without GitHub Repo
+
+### Description
+Verify that the "Changes" tab works correctly for a conversation that is **not** connected to a GitHub repository. The git changes API should return successfully and the Changes panel should display modified files.
+
+### Prerequisites
+- TC-003 completed (logged in)
+- TC-005 completed (new conversation created without a GitHub repo)
+- Agent has created or modified files (e.g., TC-006 Flask app)
+
+### Steps
+
+1. Navigate to an existing conversation where the agent has modified files
+   ```javascript
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/conversations/<convId>",
+     type: "url"
+   })
+   ```
+
+2. Wait for conversation to load
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: ["What do you want to build?", "Waiting for task"],
+     timeout: 15000
+   })
+   ```
+
+3. Click the "Changes" button in the toolbar (the `<>` icon)
+   ```javascript
+   // Take snapshot to find the Changes button
+   mcp__chrome-devtools__take_snapshot({})
+   // Click the Changes button
+   mcp__chrome-devtools__click({ uid: "<changes-button-uid>" })
+   ```
+
+4. Verify the Changes panel loads with file list
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: ["app.py", ".gitignore", "No changes"],
+     timeout: 10000
+   })
+   ```
+
+5. Verify the git changes API returned 200 (not 500)
+   ```javascript
+   mcp__chrome-devtools__list_network_requests({
+     resourceTypes: ["fetch", "xhr"]
+   })
+   // Look for: GET /runtime/<convId>/8000/api/git/changes/ → 200
+   // Previously this could return 500 if the path was not normalized
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Changes button clickable | Button exists in toolbar |
+| 2 | Git changes API returns 200 | Network request `/api/git/changes/` or `/api/git/changes/.` returns 200 |
+| 3 | Changed files listed | Files modified by agent appear in Changes panel |
+| 4 | No 500 errors | No server errors in network requests |
+
+---
+
+## TC-031: Verify Changes Tab With GitHub Repo (Regression)
+
+### Description
+Verify that the "Changes" tab works correctly for a conversation that opened a **GitHub repository**. This is a regression test for the bug where the frontend sends the bare repo name (e.g., `openhands-infra`) in the git changes API path, causing a 500 error because the agent-server expects `.` for the workspace root.
+
+**Bug scenario**: Frontend sends `GET /api/git/changes/openhands-infra` → agent-server prepends `/workspace/` → looks for `/workspace/openhands-infra` → not found (repo is at `/workspace/project`) → 500 error.
+
+**Fix**: `patch-fix.js` normalizes bare repo names to `.` before the request reaches the agent-server.
+
+### Prerequisites
+- TC-003 completed (logged in)
+- GitHub integration configured (or use direct repo URL)
+
+### Steps
+
+1. Start a new conversation connected to a GitHub repository
+   ```javascript
+   // Navigate to home page
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/",
+     type: "url"
+   })
+   // Use "Open Repository" to connect a GitHub repo (e.g., zxkane/openhands-infra)
+   // Or start a conversation and ask the agent to clone a repo
+   ```
+
+2. Wait for sandbox to be ready and repo to be cloned
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: ["Waiting for task", "What do you want to build?"],
+     timeout: 180000
+   })
+   ```
+
+3. Ask the agent to make a small change to trigger git diff
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input-uid>",
+     value: "Create a file called test-changes.txt with the text 'hello world'"
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   ```
+
+4. Wait for the agent to complete the task
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: ["Waiting for task", "test-changes.txt"],
+     timeout: 120000
+   })
+   ```
+
+5. Click the "Changes" button in the toolbar
+   ```javascript
+   mcp__chrome-devtools__take_snapshot({})
+   mcp__chrome-devtools__click({ uid: "<changes-button-uid>" })
+   ```
+
+6. Verify the Changes panel loads successfully (no 500 error)
+   ```javascript
+   mcp__chrome-devtools__wait_for({
+     text: ["test-changes.txt", "No changes", "diff"],
+     timeout: 15000
+   })
+   ```
+
+7. Verify git changes API returned 200
+   ```javascript
+   mcp__chrome-devtools__list_network_requests({
+     resourceTypes: ["fetch", "xhr"]
+   })
+   // Look for: GET /runtime/<convId>/8000/api/git/changes/. → 200
+   // The bare repo name (e.g., "openhands-infra") should be rewritten to "."
+   // by normalizeGitUrl() in patch-fix.js
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Repo cloned successfully | Agent has access to repo files |
+| 2 | Changes button works | No 500 error on click |
+| 3 | Git changes API returns 200 | Network request shows `/api/git/changes/.` → 200 |
+| 4 | Bare repo name normalized | Request URL contains `/api/git/changes/.` not `/api/git/changes/<repo-name>` |
+| 5 | Changed files displayed | `test-changes.txt` appears in Changes panel |
+
+### Notes
+
+- This test specifically validates the `normalizeGitUrl()` function in `patch-fix.js`
+- The bare repo name rewrite (`openhands-infra` → `.`) only applies when a GitHub repo is connected
+- Without the fix, this scenario returns HTTP 500 with `InvalidGitRepositoryError`
