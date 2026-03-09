@@ -1,32 +1,43 @@
 /**
  * Regression test for patch-fix.js git path normalization.
  *
- * The agent-server git router expects "." for the workspace root.
- * The frontend may send various path formats that need normalizing:
- *   - /workspace/project  (absolute workspace path)
- *   - %2Fworkspace%2Fproject  (URL-encoded)
- *   - repo-name  (bare GitHub repo name)
+ * The agent-server git router expects "." for the workspace root,
+ * or file paths relative to the workspace root for diff requests.
+ *
+ * The frontend sends paths in these forms:
+ *   %2Fworkspace%2Fproject%2F<repo>              -> "." (changes)
+ *   %2Fworkspace%2Fproject%2F<repo>%2F<file>     -> <file> (diff)
+ *   <repo>                                       -> "." (changes)
+ *   <repo>%2F<file>                              -> <file> (diff)
+ *   //workspace/project/<repo>                   -> "." (changes)
+ *   //workspace/project/<repo>/<file>            -> <file> (diff)
  *
  * Run: node docker/test_patch_fix_git_paths.js
  */
 
 // Mirrors the normalizeGitUrl function from patch-fix.js exactly.
 function normalizeGitUrl(url) {
-  // URL-encoded paths: workspace root + optional repo dir name -> "."
-  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject(%2F[^%/]+)?$/gi, '$1/.');
-  // Strip workspace prefix from deeper sub-paths
-  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F/gi, '$1/');
-  // Non-encoded paths: workspace root + optional repo dir name -> "."
-  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project(\/[^/]+)?$/g, '$1/.');
-  // Strip workspace prefix from deeper sub-paths
-  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\//g, '$1/');
-  // Bare repo name (skip if segment contains %2F = multi-segment sub-path)
-  url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, function(match, prefix, segment) {
-    if (segment.indexOf('%2F') !== -1 || segment.indexOf('%2f') !== -1) {
-      return match;
-    }
-    return prefix + '/.';
-  });
+  var before = url;
+  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F([^%/]+)(%2F(.*))?$/gi,
+    function(match, prefix, ws, repo, hasMore, filePath) {
+      if (filePath) { return prefix + '/' + filePath; }
+      return prefix + '/.';
+    });
+  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
+  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\/([^/]+)(\/(.*))?$/g,
+    function(match, prefix, ws, repo, hasMore, filePath) {
+      if (filePath) { return prefix + '/' + filePath; }
+      return prefix + '/.';
+    });
+  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
+  if (url === before) {
+    url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, function(match, prefix, segment) {
+      var idx = segment.indexOf('%2F');
+      if (idx === -1) idx = segment.indexOf('%2f');
+      if (idx !== -1) { return prefix + '/' + segment.substring(idx + 3); }
+      return prefix + '/.';
+    });
+  }
   return url;
 }
 
@@ -46,104 +57,139 @@ function assertEqual(actual, expected, description) {
 
 const base = 'https://example.com/runtime/abc123/4443';
 
-// === Bare repo name (the bug being fixed) ===
+// =============================================
+// CHANGES API - bare repo name
+// =============================================
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/openhands-infra`),
   `${base}/api/git/changes/.`,
-  'bare repo name: openhands-infra -> .'
+  'changes: bare repo name -> .'
 );
 
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/my-project`),
   `${base}/api/git/changes/.`,
-  'bare repo name: my-project -> .'
-);
-
-assertEqual(
-  normalizeGitUrl(`${base}/api/git/diff/some-repo`),
-  `${base}/api/git/diff/.`,
-  'bare repo name with diff action'
+  'changes: bare repo name (my-project) -> .'
 );
 
 // Already-correct "." path should not be changed
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/.`),
   `${base}/api/git/changes/.`,
-  'already "." should not change'
+  'changes: already "." should not change'
 );
 
-// === URL-encoded workspace paths ===
+// =============================================
+// CHANGES API - URL-encoded workspace paths
+// =============================================
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject`),
   `${base}/api/git/changes/.`,
-  'URL-encoded /workspace/project -> .'
+  'changes: URL-encoded /workspace/project -> .'
 );
 
-// Single segment after workspace root is treated as repo name, not sub-path
-assertEqual(
-  normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fsrc`),
-  `${base}/api/git/changes/.`,
-  'URL-encoded /workspace/project/src -> . (single segment = repo name)'
-);
-
-// Multi-segment sub-paths are preserved
-assertEqual(
-  normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fsrc%2Flib`),
-  `${base}/api/git/changes/src%2Flib`,
-  'URL-encoded /workspace/project/src/lib -> src%2Flib (multi-segment preserved)'
-);
-
-assertEqual(
-  normalizeGitUrl(`${base}/api/git/changes/%2Fopenhands%2Fproject`),
-  `${base}/api/git/changes/.`,
-  'URL-encoded /openhands/project -> .'
-);
-
-// === URL-encoded workspace path + repo directory name (THE ACTUAL BUG) ===
-// Frontend sends: %2Fworkspace%2Fproject%2Fopenhands-infra
-// After stripping %2Fworkspace%2Fproject%2F, "openhands-infra" remains
-// The bare repo name catch-all must normalize it to "."
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fopenhands-infra`),
   `${base}/api/git/changes/.`,
-  'URL-encoded /workspace/project/openhands-infra -> . (not bare openhands-infra)'
+  'changes: URL-encoded /workspace/project/openhands-infra -> .'
 );
 
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fmy-app`),
   `${base}/api/git/changes/.`,
-  'URL-encoded /workspace/project/my-app -> . (not bare my-app)'
+  'changes: URL-encoded /workspace/project/my-app -> .'
 );
 
-// === Non-encoded workspace paths (double slash from path joining) ===
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/changes/%2Fopenhands%2Fproject`),
+  `${base}/api/git/changes/.`,
+  'changes: URL-encoded /openhands/project -> .'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/changes/%2Fopenhands%2Fproject%2Fmy-repo`),
+  `${base}/api/git/changes/.`,
+  'changes: URL-encoded /openhands/project/my-repo -> .'
+);
+
+// =============================================
+// CHANGES API - non-encoded workspace paths
+// =============================================
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes//workspace/project`),
   `${base}/api/git/changes/.`,
-  'non-encoded //workspace/project -> .'
+  'changes: non-encoded //workspace/project -> .'
 );
 
-// Single segment after workspace root is treated as repo name
-assertEqual(
-  normalizeGitUrl(`${base}/api/git/changes//workspace/project/lib`),
-  `${base}/api/git/changes/.`,
-  'non-encoded //workspace/project/lib -> . (single segment = repo name)'
-);
-
-// Multi-segment sub-paths are preserved
-assertEqual(
-  normalizeGitUrl(`${base}/api/git/changes//workspace/project/src/lib`),
-  `${base}/api/git/changes/src/lib`,
-  'non-encoded //workspace/project/src/lib -> src/lib (multi-segment preserved)'
-);
-
-// === Non-encoded workspace path + repo directory name ===
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes//workspace/project/openhands-infra`),
   `${base}/api/git/changes/.`,
-  'non-encoded //workspace/project/openhands-infra -> . (not bare openhands-infra)'
+  'changes: non-encoded //workspace/project/openhands-infra -> .'
 );
 
-// === Non-git API paths should not be affected ===
+// =============================================
+// DIFF API - URL-encoded workspace + repo + file (THE ACTUAL BUG)
+// =============================================
+// Frontend sends: %2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore
+// Should become: .gitignore (file relative to workspace root)
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/%2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore`),
+  `${base}/api/git/diff/.gitignore`,
+  'diff: URL-encoded /workspace/project/repo/.gitignore -> .gitignore'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/%2Fworkspace%2Fproject%2Fopenhands-infra%2Fsrc%2Findex.ts`),
+  `${base}/api/git/diff/src%2Findex.ts`,
+  'diff: URL-encoded /workspace/project/repo/src/index.ts -> src%2Findex.ts'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/%2Fworkspace%2Fproject%2Fmy-app%2FREADME.md`),
+  `${base}/api/git/diff/README.md`,
+  'diff: URL-encoded /workspace/project/my-app/README.md -> README.md'
+);
+
+// =============================================
+// DIFF API - non-encoded workspace + repo + file
+// =============================================
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff//workspace/project/openhands-infra/.gitignore`),
+  `${base}/api/git/diff/.gitignore`,
+  'diff: non-encoded //workspace/project/repo/.gitignore -> .gitignore'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff//workspace/project/openhands-infra/src/index.ts`),
+  `${base}/api/git/diff/src/index.ts`,
+  'diff: non-encoded //workspace/project/repo/src/index.ts -> src/index.ts'
+);
+
+// =============================================
+// DIFF API - bare repo name + file
+// =============================================
+// Frontend sends: openhands-infra%2F.gitignore (from user's report)
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/openhands-infra%2F.gitignore`),
+  `${base}/api/git/diff/.gitignore`,
+  'diff: bare repo%2F.gitignore -> .gitignore'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/openhands-infra%2Fproject%2Fopenhands-infra`),
+  `${base}/api/git/diff/project%2Fopenhands-infra`,
+  'diff: bare repo%2Fproject%2Frepo -> project%2Frepo'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/some-repo`),
+  `${base}/api/git/diff/.`,
+  'diff: bare repo name only -> .'
+);
+
+// =============================================
+// Non-git API paths should not be affected
+// =============================================
 assertEqual(
   normalizeGitUrl(`${base}/api/conversations/abc123`),
   `${base}/api/conversations/abc123`,

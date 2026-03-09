@@ -3823,13 +3823,41 @@ the interceptor will normalize the bare repo name to `.`.
    //             -> https://<host>/runtime/<convId>/8000/api/git/changes/."
    ```
 
+6. Open the conversation with the repo connected, click a changed file to trigger diff
+   ```javascript
+   // Navigate to the conversation that has zxkane/openhands-infra connected
+   mcp__chrome-devtools__navigate_page({
+     url: "https://<subdomain>.<domain>/conversations/<convId>",
+     type: "url"
+   })
+   // Wait for Changes tab to load, then click a changed file
+   // The frontend sends: /api/git/diff/%2Fworkspace%2Fproject%2Fopenhands-infra%2F<filename>
+   // The interceptor must strip the workspace+repo prefix, leaving just <filename>
+   ```
+
+7. Verify the diff API URL was rewritten correctly
+   ```javascript
+   mcp__chrome-devtools__list_console_messages({ types: ["log"] })
+   // Look for:
+   // "XHR patched: https://<ip>:8000/api/git/diff/%2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore
+   //           -> https://<host>/runtime/<convId>/8000/api/git/diff/.gitignore"
+   ```
+
+8. Verify the diff request returns 200 (not 500)
+   ```javascript
+   mcp__chrome-devtools__list_network_requests({ resourceTypes: ["fetch", "xhr"] })
+   // Look for: GET /runtime/<convId>/8000/api/git/diff/.gitignore → 200
+   ```
+
 ### Acceptance Criteria
 
 | # | Criteria | Verification |
 |---|----------|--------------|
-| 1 | Interceptor matches localhost URL | Console log shows "Fetch patched:" message |
-| 2 | Bare repo name normalized | Final URL contains `/api/git/changes/.` not `/api/git/changes/openhands-infra` |
-| 3 | URL-encoded paths also normalized | XHR log shows `%2Fworkspace%2Fproject` → `.` |
+| 1 | Interceptor matches localhost URL | Console log shows "Fetch patched:" or "XHR patched:" message |
+| 2 | Changes API: bare repo name normalized | URL contains `/api/git/changes/.` not `/api/git/changes/openhands-infra` |
+| 3 | Changes API: URL-encoded path normalized | `%2Fworkspace%2Fproject%2Fopenhands-infra` → `.` |
+| 4 | Diff API: workspace+repo prefix stripped | `%2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore` → `.gitignore` |
+| 5 | Diff API returns 200 | Network request shows `/api/git/diff/.gitignore` → 200 |
 
 ### Alternative: Full Flow with Connected Repo
 
@@ -3850,6 +3878,7 @@ mcp__chrome-devtools__evaluate_script({
 // Navigate to the conversation, wait for sandbox, then click Changes button
 // The frontend will call: http://<private-ip>:8000/api/git/changes/openhands-infra
 // which gets intercepted and rewritten to /api/git/changes/.
+// Click a changed file to trigger diff — the diff path gets normalized too.
 ```
 
 ### Notes
@@ -3857,10 +3886,12 @@ mcp__chrome-devtools__evaluate_script({
 - This test validates the `normalizeGitUrl()` function in `patch-fix.js`
 - The interceptor only triggers for URLs matching `httpPattern` (localhost, `host.docker.internal`,
   VPC private IPs like `172.31.x.x`) — these are the URLs the agent-server returns to the frontend
-- The frontend sends bare repo names (e.g., `openhands-infra`) when a repo is connected via
-  `selected_repository` in the conversation creation API
+- The frontend sends paths in two forms:
+  - Changes API: `%2Fworkspace%2Fproject%2F<repo>` or bare `<repo>` → normalized to `.`
+  - Diff API: `%2Fworkspace%2Fproject%2F<repo>%2F<file>` or `<repo>%2F<file>` → normalized to `<file>`
 - Public repos (e.g., `zxkane/openhands-infra`) do NOT require GitHub integration — they can be
   opened via `POST /api/v1/app-conversations` with `selected_repository`
-- Without the fix, the agent-server looks for `/workspace/openhands-infra` instead of
-  `/workspace/project`, returning HTTP 500 with `InvalidGitRepositoryError`
-- The fix is also covered by 10 unit regression tests in `docker/test_patch_fix_git_paths.js`
+- Without the fix, the agent-server receives the wrong path and returns HTTP 500:
+  - Changes: looks for `/workspace/openhands-infra` → `InvalidGitRepositoryError`
+  - Diff: looks for `/workspace/openhands-infra/project/openhands-infra` → `File does not exist`
+- The fix is covered by 19 unit regression tests in `docker/test_patch_fix_git_paths.js`
