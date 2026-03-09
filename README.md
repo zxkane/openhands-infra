@@ -1,6 +1,48 @@
-# OpenHands AWS Infrastructure
+<div align="center">
 
-AWS CDK TypeScript project for deploying [OpenHands](https://github.com/All-Hands-AI/OpenHands) - an AI-driven development platform.
+# 🚀 OpenHands on AWS
+
+### Self-host your AI coding agent — fully serverless, zero idle cost
+
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/zxkane/openhands-infra/actions/workflows/ci.yml/badge.svg)](https://github.com/zxkane/openhands-infra/actions/workflows/ci.yml)
+[![CDK](https://img.shields.io/badge/AWS_CDK-TypeScript-orange)](https://aws.amazon.com/cdk/)
+[![OpenHands](https://img.shields.io/badge/OpenHands-Compatible-green)](https://github.com/All-Hands-AI/OpenHands)
+
+Deploy [OpenHands](https://github.com/All-Hands-AI/OpenHands) on AWS with **production-grade infrastructure** in minutes.
+ECS Fargate • Bedrock LLM • Per-conversation isolation • Self-healing architecture.
+
+[**Getting Started**](#-quick-start) · [**Architecture**](#architecture-overview) · [**Cost Estimate**](#cost-estimate) · [**Blog Post**](https://kane.mx/posts/2026/serverless-multi-tenant-openhands-on-aws/)
+
+</div>
+
+---
+
+## Why This Project?
+
+Running OpenHands locally is great for trying it out. Running it for a **team** or in **production** is a different story:
+
+| Challenge | How This Project Solves It |
+|-----------|---------------------------|
+| **"I don't want to manage servers"** | Fully serverless — ECS Fargate, Aurora Serverless, no EC2 instances |
+| **"Idle cost is too high"** | Sandboxes scale to zero when not in use; pay only for active conversations |
+| **"Multi-user access control"** | Cognito authentication with 30-day sessions, per-user conversation isolation |
+| **"My conversations disappear on restart"** | Self-healing: Aurora + S3 + EFS persist everything across Fargate task replacements |
+| **"I need AWS access from the AI agent"** | Optional scoped IAM credentials for sandbox containers (least-privilege) |
+| **"Setting up infra is painful"** | One `cdk deploy --all` command — 10 stacks deployed in the right order automatically |
+
+## ✨ Key Features
+
+- **🏗️ Fully Serverless** — ECS Fargate (ARM64) for compute, Aurora Serverless v2 for database, no instances to patch
+- **💰 Zero Idle Cost** — Sandbox containers spin up per-conversation and stop automatically after idle timeout
+- **🔒 Per-Conversation Isolation** — Each sandbox gets a dedicated EFS access point; no cross-conversation access
+- **🔄 Self-Healing Architecture** — Conversations resume seamlessly after Fargate task replacement (Aurora + S3 + EFS)
+- **🤖 AWS Bedrock** — LLM inference via IAM Role, no API keys to manage
+- **🌐 Multi-Domain Support** — Share one backend across multiple CloudFront distributions and domains
+- **🔐 Enterprise Security** — Cognito auth, WAF, VPC Endpoints, private subnets, KMS encryption, Secrets Manager
+- **🚀 Runtime Subdomain** — Agent-built apps accessible via `{port}-{convId}.runtime.{subdomain}.{domain}`
+- **📊 Observability** — CloudWatch Logs, Alarms, Container Insights, AWS Backup (14-day retention)
+- **🏎️ Warm Pool** — Pre-warmed sandbox tasks for instant conversation starts
 
 ## Architecture Overview
 
@@ -20,47 +62,62 @@ Runtime Apps:
 {port}-{convId}.runtime.{subdomain}.{domain} → CloudFront → Lambda@Edge → OpenResty → Sandbox Fargate Task
 ```
 
-Key features:
-- **ECS Fargate**: Fully serverless compute — App, OpenResty, and sandbox containers all run on Fargate
-- **CloudFront with Origin Verification**: ALB requires X-Origin-Verify header - direct access returns 403
-- **Per-Conversation Isolation**: Each sandbox gets a dedicated EFS access point, preventing cross-conversation access
-- **Self-Healing Architecture**: Conversation history persists across Fargate task replacements
-- **Runtime Subdomain Routing**: User apps accessible via `{port}-{convId}.runtime.{subdomain}.{domain}` with proper in-app routing
+> 📐 For a detailed architecture deep dive (10-stack breakdown, data flows, sandbox lifecycle), see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Features
+## 🚀 Quick Start
 
-- **ECS Fargate (ARM64)**: Fully serverless compute for App, OpenResty, and sandbox containers
-- **Per-Conversation Sandbox Isolation**: Each conversation gets a dedicated EFS access point and Fargate task
-- **AWS Bedrock**: LLM inference via IAM Role (no API keys)
-- **Aurora Serverless v2**: PostgreSQL database with RDS Proxy for connection pooling and high availability
-- **S3 Data Persistence**: Conversation events, settings stored in S3 (survives task replacement)
-- **EFS Workspace Persistence**: Per-conversation EFS access points at `/sandbox-workspace/<conversation_id>/`
-- **Self-Healing**: Fargate services + persistent database + S3 + EFS = no data loss on task replacement
-- **Sandbox Orchestrator**: Lambda-based orchestrator manages sandbox lifecycle via DynamoDB registry
-- **Security**: Cognito auth (30-day session), WAF, VPC Endpoints, private subnets, Secrets Manager, KMS
-- **Monitoring**: CloudWatch Logs, Alarms, Container Insights
-- **Backup**: AWS Backup with 14-day retention, Aurora automatic backups (35 days)
-- **Runtime Subdomain**: Apps run at domain root with proper internal routing and cookie isolation
-- **Sandbox AWS Access**: Optional feature enabling sandbox containers to access AWS services with scoped IAM credentials
-
-## Prerequisites
+### Prerequisites
 
 - AWS CLI configured with appropriate credentials
 - Node.js 22+ and npm
 - Existing VPC with private subnets and NAT Gateway
 - Existing Route 53 Hosted Zone
 
-## Deployment
-
 ### 1. Install Dependencies
 
 ```bash
+git clone https://github.com/zxkane/openhands-infra.git
+cd openhands-infra
 npm install
 ```
 
-### 2. Configure Context
+### 2. Bootstrap CDK (First Time Only)
 
-Required context parameters:
+```bash
+npx cdk bootstrap --region <your-main-region>
+npx cdk bootstrap --region us-east-1  # Required for Lambda@Edge and CloudFront
+```
+
+### 3. Create Sandbox Secret Key (First Time Only)
+
+```bash
+aws secretsmanager create-secret \
+  --name openhands/sandbox-secret-key \
+  --secret-string "$(openssl rand -base64 32)" \
+  --region <your-main-region> \
+  --description "OpenHands sandbox secret key for session encryption"
+```
+
+> **Note**: This secret must exist in each region where you deploy.
+
+### 4. Deploy
+
+```bash
+npx cdk deploy --all \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<hosted-zone-id> \
+  --context domainName=<domain-name> \
+  --context subDomain=<subdomain> \
+  --context region=<region> \
+  --require-approval never
+```
+
+That's it! Access OpenHands at `https://<subdomain>.<domain-name>` 🎉
+
+## Configuration
+
+<details>
+<summary><strong>📋 All Context Parameters</strong></summary>
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
@@ -80,62 +137,11 @@ Required context parameters:
 | `idleTimeoutMinutes` | Minutes before idle sandbox is stopped (optional, default: 30, staging: 10) | `15` |
 | `sandboxSociImageUri` | SOCI v2 image URI for Fargate lazy loading (optional, see AGENTS.md) | `<ecr-uri>:tag-soci` |
 
-### 3. Bootstrap CDK (First Time Only)
-
-CDK must be bootstrapped in both regions since Edge resources are deployed to us-east-1:
-
-```bash
-npx cdk bootstrap --region <your-main-region>
-npx cdk bootstrap --region us-east-1  # Required for Lambda@Edge and CloudFront
-```
-
-### 4. Create Sandbox Secret Key (First Time Only)
-
-The sandbox secret key is used to encrypt secrets in conversation state, enabling session resume after sandbox restart. Create it before deployment:
-
-```bash
-aws secretsmanager create-secret \
-  --name openhands/sandbox-secret-key \
-  --secret-string "$(openssl rand -base64 32)" \
-  --region <your-main-region> \
-  --description "OpenHands sandbox secret key for session encryption"
-```
-
-**Note**: This secret must exist in each region where you deploy. If deploying to multiple regions, create the secret in each region.
-
-### 5. Deploy
-
-```bash
-# Deploy all stacks
-npx cdk deploy --all \
-  --context vpcId=<vpc-id> \
-  --context hostedZoneId=<hosted-zone-id> \
-  --context domainName=<domain-name> \
-  --context subDomain=<subdomain> \
-  --context region=<region> \
-  --require-approval never
-```
-
-**Deployment Order** (handled automatically by CDK):
-0. Auth (us-east-1) - shared Cognito (managed login branding + multi-domain callbacks)
-1. Network (main region)
-2. Monitoring (main region) - independent, creates S3 data bucket
-3. Security (main region) - depends on Network, Monitoring
-4. Database (main region) - depends on Network, Security
-5. UserConfig (main region) - depends on Security, Monitoring
-6. Cluster (main region) - shared ECS cluster + Cloud Map namespace
-7. Sandbox (main region) - depends on Network, Monitoring, Cluster
-8. Compute (main region) - depends on all above
-9. Edge (us-east-1) - depends on Compute, Auth
-
-### 6. Access OpenHands
-
-After deployment, access OpenHands at:
-```
-https://<subdomain>.<domain-name>
-```
+</details>
 
 ## Stack Structure
+
+The project deploys **10 stacks** with automatic dependency resolution:
 
 | Stack | Region | Description |
 |-------|--------|-------------|
@@ -150,14 +156,41 @@ https://<subdomain>.<domain-name>
 | `OpenHands-Compute` | Main | Fargate services (App + OpenResty), ALB, EFS |
 | `OpenHands-Edge-*` | us-east-1 | Lambda@Edge, CloudFront, WAF, Route 53 (per domain/environment) |
 
-**Notes**:
-- Cognito is provisioned in `OpenHands-Auth` so multiple Edge stacks can reuse a single user pool/client.
-- To add another domain/environment, include it in `authCallbackDomains`, deploy `OpenHands-Auth`, then deploy a new `OpenHands-Edge-<edgeStackSuffix>`.
-- The Database stack is **required** for self-healing architecture - it persists conversation history across Fargate task replacements.
+**Deployment Order** (handled automatically by CDK):
+0. Auth → 1. Network → 2. Monitoring → 3. Security → 4. Database → 5. UserConfig → 6. Cluster → 7. Sandbox → 8. Compute → 9. Edge
 
-## Multi-Domain Deployment
+## Cost Estimate
 
-You can deploy multiple OpenHands instances on different domains, all sharing the same backend infrastructure (Compute, Database, etc.) but with separate CloudFront distributions and DNS records.
+### Base Infrastructure (~$250-350/month)
+
+| Component | Monthly Cost (USD) | Notes |
+|-----------|--------------------|-------|
+| Fargate App Service (1 vCPU / 2 GB ARM64) | ~$30 | Auto-scales 1-3 |
+| Fargate OpenResty Service (0.25 vCPU / 512 MB) | ~$8 | Auto-scales 1-3 |
+| Fargate Sandbox Tasks | ~$0-50 | On-demand, per-conversation |
+| Aurora Serverless v2 | ~$43-80 | 0.5-4 ACU |
+| RDS Proxy | ~$18 | |
+| CloudFront | ~$85 | 1TB data transfer |
+| VPC Endpoints (10) | ~$60 | |
+| ALB | ~$25 | |
+| Other (EFS, S3, NAT, CW, R53, DDB) | ~$10-50 | Usage-dependent |
+
+### Bedrock LLM Cost (Variable)
+
+| Model | Input (per 1M tokens) | Output (per 1M tokens) |
+|-------|----------------------|------------------------|
+| Claude Opus 4.5 | $5 | $25 |
+| Claude Sonnet 4.5 | $3 | $15 |
+| Claude Haiku 4.5 | $1 | $5 |
+
+**Example**: 10M input + 2M output tokens/month with Claude Sonnet 4.5 ≈ **$60/month**
+
+## Advanced Topics
+
+<details>
+<summary><strong>🌐 Multi-Domain Deployment</strong></summary>
+
+You can deploy multiple OpenHands instances on different domains, all sharing the same backend infrastructure.
 
 ### Architecture
 
@@ -201,10 +234,7 @@ You can deploy multiple OpenHands instances on different domains, all sharing th
 
 ### Step 1: Configure Shared Authentication
 
-First, configure the Auth stack with all domains that will use it:
-
 ```bash
-# Deploy Auth stack with all callback domains
 npx cdk deploy OpenHands-Auth \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<primary-hosted-zone-id> \
@@ -216,8 +246,6 @@ npx cdk deploy OpenHands-Auth \
 ```
 
 ### Step 2: Deploy Backend Infrastructure
-
-Deploy the shared backend infrastructure (only once):
 
 ```bash
 npx cdk deploy OpenHands-Network OpenHands-Monitoring OpenHands-Security \
@@ -233,10 +261,8 @@ npx cdk deploy OpenHands-Network OpenHands-Monitoring OpenHands-Security \
 
 ### Step 3: Deploy Edge Stacks for Each Domain
 
-Deploy a separate Edge stack for each domain:
-
 ```bash
-# Domain 1 (e.g., openhands.test.example.com)
+# Domain 1
 npx cdk deploy OpenHands-Edge-Test \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<hosted-zone-for-test-example-com> \
@@ -247,7 +273,7 @@ npx cdk deploy OpenHands-Edge-Test \
   --exclusively \
   --require-approval never
 
-# Domain 2 (e.g., openhands.prod.example.com)
+# Domain 2
 npx cdk deploy OpenHands-Edge-Prod \
   --context vpcId=<vpc-id> \
   --context hostedZoneId=<hosted-zone-for-prod-example-com> \
@@ -261,136 +287,30 @@ npx cdk deploy OpenHands-Edge-Prod \
 
 **Important**: Use `--exclusively` flag when deploying individual Edge stacks to avoid redeploying the backend stacks with different domain context.
 
-### How It Works
+### Managing Domains
 
-1. **Shared Cognito**: All domains use the same Cognito User Pool. Users can log in with the same credentials on any domain.
+**Adding a new domain:**
+1. Update Auth stack with the new callback domain
+2. Deploy a new Edge stack with `--context edgeStackSuffix=<Name> --exclusively`
 
-2. **ALB Origin Verification**: The internet-facing ALB is protected by a custom `X-Origin-Verify` header. Direct access returns 403 - only CloudFront with the valid header can reach the ALB.
+**Removing a domain:**
+1. `aws cloudformation delete-stack --stack-name OpenHands-Edge-<Suffix> --region us-east-1`
+2. Optionally update Auth stack to remove the callback domain
 
-3. **SSM Parameter Sharing**: ComputeStack writes ALB DNS name and origin secret to SSM parameters in us-east-1. Edge stacks read from these parameters, avoiding CDK cross-region reference conflicts.
+</details>
 
-4. **Unique Resource Names**: Each Edge stack has unique CloudFront ResponseHeadersPolicy names (includes domain) to avoid naming conflicts.
+<details>
+<summary><strong>🔄 Conversation Resume (Self-Healing)</strong></summary>
 
-### Adding a New Domain
-
-To add a new domain to an existing deployment:
-
-1. **Update Auth stack** with the new callback domain:
-   ```bash
-   npx cdk deploy OpenHands-Auth \
-     --context authCallbackDomains='["existing.com","new-domain.com"]' \
-     ...
-   ```
-
-2. **Deploy new Edge stack**:
-   ```bash
-   npx cdk deploy OpenHands-Edge-NewDomain \
-     --context hostedZoneId=<zone-for-new-domain> \
-     --context domainName=new-domain.com \
-     --context edgeStackSuffix=NewDomain \
-     --exclusively \
-     ...
-   ```
-
-### Removing a Domain
-
-To remove a domain:
-
-1. **Delete the Edge stack**:
-   ```bash
-   aws cloudformation delete-stack --stack-name OpenHands-Edge-<Suffix> --region us-east-1
-   ```
-
-2. **Optionally update Auth stack** to remove the callback domain (not required, but keeps config clean).
-
-## Cost Estimate
-
-### Base Infrastructure (~$250-350/month)
-
-| Component | Monthly Cost (USD) | Usage Assumption |
-|-----------|--------------------|------------------|
-| Fargate App Service (1 vCPU / 2 GB ARM64, auto-scales 1-3) | ~$30 | 730 hours baseline, scales on demand |
-| Fargate OpenResty Service (0.25 vCPU / 512 MB, auto-scales 1-3) | ~$8 | 730 hours baseline, scales on demand |
-| Fargate Sandbox Tasks | ~$0-50 | On-demand, per-conversation |
-| Aurora Serverless v2 | ~$43-80 | 0.5-4 ACU (scales with usage) |
-| RDS Proxy | ~$18 | 730 hours |
-| EFS | ~$1-10 | Per-conversation workspace storage |
-| S3 Data Bucket | ~$1-5 | Depends on usage |
-| NAT Gateway | ~$0-35 | Depends on traffic |
-| CloudFront | ~$85 | 1TB data transfer |
-| ALB | ~$25 | 730 hours + LCUs |
-| VPC Endpoints (10) | ~$60 | 10 endpoints × 730 hours |
-| CloudWatch | ~$5 | Logs, metrics, Container Insights |
-| Route 53 | ~$1 | 1 hosted zone + queries |
-| DynamoDB (Sandbox Registry) | ~$1 | On-demand, low traffic |
-
-### Bedrock Usage (Variable)
-
-Claude 4.5 models available on Amazon Bedrock:
-
-| Model | Model ID | Input (per 1M) | Output (per 1M) |
-|-------|----------|----------------|-----------------|
-| Claude Opus 4.5 | `anthropic.claude-opus-4-5-20251101-v1:0` | $5 | $25 |
-| Claude Sonnet 4.5 | `anthropic.claude-sonnet-4-5-20250929-v1:0` | $3 | $15 |
-| Claude Haiku 4.5 | `anthropic.claude-haiku-4-5-20251001-v1:0` | $1 | $5 |
-
-**Example**: 10M input + 2M output tokens/month with Claude Sonnet 4.5 ≈ $60/month
-
-**Note**: Claude Sonnet 4.5 pricing increases for prompts >200K tokens ($6 input / $22.50 output per 1M).
-
-## VPC Requirements
-
-Your existing VPC must have:
-- At least 2 private subnets in different AZs
-- NAT Gateway for outbound internet access
-- DNS hostnames enabled
-
-## Data Persistence
-
-OpenHands data is stored durably for self-healing across Fargate task replacements:
-
-| Data Type | Storage | Persistence |
-|-----------|---------|-------------|
-| Conversation Metadata | Aurora PostgreSQL | Permanent (via RDS Proxy) |
-| Conversation Events | S3 | Permanent (survives task replacement) |
-| User Settings / Secrets | S3 | Permanent (KMS envelope encryption) |
-| Workspace Files | EFS | Persistent (per-conversation access points) |
-| SDK Conversation Cache | EFS | Persistent (enables LLM context restoration) |
-| Sandbox Registry | DynamoDB | Permanent (task state, user ownership) |
-
-**Aurora Serverless v2 with RDS Proxy**:
-- PostgreSQL 15.8 with RDS Proxy for connection pooling
-- Password-based authentication via Secrets Manager (no token refresh needed)
-- Serverless v2: 0.5-4 ACU (auto-scales with usage)
-- 35-day automatic backup retention
-- Storage encryption enabled
-- CloudWatch logs export
-- Removal policy: SNAPSHOT (creates final backup on deletion)
-
-**RDS Proxy Benefits**:
-- Connection pooling for efficient database connections
-- Automatic failover handling
-- No IAM token refresh required (uses stable passwords from Secrets Manager)
-- Improved application availability during database maintenance
-
-**S3 Bucket Configuration**:
-- SSE-S3 encryption
-- Versioning enabled (30-day retention for old versions)
-- Block all public access
-- Enforce SSL
-- Removal policy: RETAIN (data preserved if stack is deleted)
-
-### Conversation Resume (Self-Healing)
-
-When sandbox Fargate tasks stop (idle timeout, crash, or deployment), conversations become `ARCHIVED`. All conversation data is preserved:
+When sandbox Fargate tasks stop (idle timeout, crash, or deployment), conversations become `ARCHIVED`. All data is preserved:
 
 | Data | Storage | Survives Task Stop |
 |------|---------|-------------------|
-| Conversation metadata | Aurora PostgreSQL | ✅ Yes |
-| Conversation events/history | S3 | ✅ Yes |
-| Workspace files | EFS (per-conversation access point) | ✅ Yes |
+| Conversation metadata | Aurora PostgreSQL | ✅ |
+| Conversation events/history | S3 | ✅ |
+| Workspace files | EFS (per-conversation access point) | ✅ |
 
-**Auto-Resume Flow**:
+**Auto-Resume Flow:**
 
 ```
 User clicks archived conversation
@@ -408,107 +328,25 @@ App → Orchestrator Lambda:
 Page reloads → conversation is usable again
 ```
 
-**What happens automatically**:
-1. User navigates to an archived conversation
-2. Frontend patch detects `status: ARCHIVED` and triggers resume
-3. Orchestrator creates a new EFS access point rooted at `/sandbox-workspace/<conversation_id>/`
-4. New Fargate sandbox task launches with the workspace mounted at `/mnt/efs/`
-5. Page reloads and conversation is ready for use
+Workspace files on EFS are preserved via the access point, so code and files from the previous session remain available after resume.
 
-**Note**: The workspace files on EFS are preserved via the access point, so any code or files created in the previous session are still available after resume.
+</details>
 
-## Session Management
+<details>
+<summary><strong>🔐 Sandbox AWS Access</strong></summary>
 
-Cognito token validity configuration:
-
-| Token Type | Validity | Description |
-|------------|----------|-------------|
-| Access Token | 1 hour | API access token |
-| ID Token | 1 day | Identity token (stored in cookie) |
-| Refresh Token | 30 days | Used to obtain new tokens |
-
-Users stay logged in for up to 30 days without re-authentication.
-
-## Runtime Subdomain Routing
-
-When AI agents run applications (e.g., Flask, Node.js) inside the sandbox, they are accessible via dedicated runtime subdomains:
-
-```
-https://{port}-{convId}.runtime.{subdomain}.{domain}/
-```
-
-**Example**: `https://5000-abc123def456.runtime.openhands.example.com/`
-
-### Benefits
-
-| Feature | Benefit |
-|---------|---------|
-| Domain Root | Apps run at `/` - internal routes (e.g., `/add`, `/api`) work correctly |
-| Cookie Isolation | Each runtime has isolated cookies (no cross-runtime cookie leakage) |
-| Security Headers | X-Frame-Options, CSP, X-XSS-Protection automatically applied |
-| No Authentication | Runtime subdomains bypass Cognito (apps are public within the conversation) |
-
-### Architecture
-
-```
-User Browser
-    ↓
-https://5000-{convId}.runtime.openhands.example.com/
-    ↓
-CloudFront (matches *.runtime.* wildcard certificate)
-    ↓
-Lambda@Edge (viewer-request: parse subdomain, rewrite URI to /runtime/{convId}/{port}/...)
-    ↓
-ALB → OpenResty (Fargate service)
-    ↓
-Sandbox Discovery (DynamoDB lookup by convId → Fargate task IP:port, verify user ownership)
-    ↓
-User App (Flask/Node.js/etc. inside sandbox Fargate task)
-```
-
-### Security Considerations
-
-- **Cookie Isolation**: Cookies set by runtime apps are scoped to the exact subdomain only
-- **No Domain Attribute**: Cookies don't leak to parent domain or other subdomains
-- **SameSite=Strict**: Cross-site requests don't carry cookies
-- **Security Headers**: Lambda@Edge origin-response adds protective headers
-
-## Sandbox AWS Access
-
-This optional feature enables AI agents running in sandbox containers to access AWS services (e.g., S3, DynamoDB, Lambda) using scoped IAM credentials.
-
-### Enabling Sandbox AWS Access
+Enable AI agents in sandbox containers to access AWS services with scoped IAM credentials:
 
 ```bash
 npx cdk deploy --all \
   --context sandboxAwsAccess=true \
   --context sandboxAwsPolicyFile=config/sandbox-aws-policy.json \
-  --context vpcId=<vpc-id> \
-  --context hostedZoneId=<hosted-zone-id> \
-  --context domainName=<domain-name> \
-  --context subDomain=<subdomain> \
-  --context region=<region> \
-  --require-approval never
+  ...
 ```
 
-### ⚠️ IMPORTANT: Customize the Policy File
+### ⚠️ Customize the Policy File
 
-The default `config/sandbox-aws-policy.json` grants broad permissions (`Action: "*"`). **You MUST customize this file for your specific use case** to follow the principle of least privilege.
-
-**Default policy (overly permissive - customize this!):**
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowAllExceptDenied",
-      "Effect": "Allow",
-      "Action": "*",
-      "Resource": "*"
-    }
-  ]
-}
-```
+The default `config/sandbox-aws-policy.json` grants broad permissions. **Customize this for your use case!**
 
 **Example: Purpose-built policy for S3 and DynamoDB only:**
 ```json
@@ -533,7 +371,7 @@ The default `config/sandbox-aws-policy.json` grants broad permissions (`Action: 
 
 ### Hardcoded Explicit Denies
 
-Regardless of what you configure in the policy file, the following actions are **always denied** to prevent privilege escalation:
+These actions are **always denied** regardless of your policy:
 
 | Category | Denied Actions |
 |----------|----------------|
@@ -543,87 +381,145 @@ Regardless of what you configure in the policy file, the following actions are *
 | Account | `organizations:*`, `account:*`, `billing:*` |
 | Role Assumption | `sts:AssumeRole` (prevents lateral movement) |
 
-### How It Works
+</details>
 
-1. **IAM Role**: SandboxStack creates a sandbox task role with your custom policy + explicit denies
-2. **Task Role Assignment**: Sandbox Fargate tasks are launched with the scoped IAM role attached directly
-3. **ECS Task Role Credentials**: AWS SDK and CLI in the sandbox container automatically use the task role credentials via the ECS credential provider (no manual credential refresh needed)
-4. **AWS CLI**: The agent-server container includes AWS CLI v2, which automatically uses the Fargate task role
+<details>
+<summary><strong>🌍 Runtime Subdomain Routing</strong></summary>
 
-## Security
+When AI agents run applications (e.g., Flask, Node.js) inside the sandbox, they are accessible via dedicated runtime subdomains:
 
-- Fargate tasks in private subnets only
-- Per-conversation EFS isolation via access points (no cross-conversation access)
-- All AWS service access via VPC Endpoints
-- IAM Roles with least privilege for each service (App, Sandbox, Orchestrator)
-- Database credentials stored in AWS Secrets Manager
-- RDS Proxy with TLS-encrypted connections
-- User secrets protected by KMS envelope encryption
-- Cognito authentication for all requests (30-day session)
-- Lambda@Edge header spoofing prevention (clears & re-injects verified user headers)
-- WAF protection with rate limiting
-- S3 and Aurora storage encryption enabled
-
-## Useful Commands
-
-```bash
-# Build TypeScript
-npm run build
-
-# Watch for changes
-npm run watch
-
-# Run tests
-npm run test
-
-# Show diff before deploy
-npx cdk diff --all --context ...
-
-# Synthesize CloudFormation
-npx cdk synth --all --context ...
-
-# Destroy all stacks
-npx cdk destroy --all --context ...
+```
+https://{port}-{convId}.runtime.{subdomain}.{domain}/
 ```
 
-## Troubleshooting
+**Example**: `https://5000-abc123def456.runtime.openhands.example.com/`
 
-### VPC Lookup Fails
-Ensure the VPC exists and your AWS credentials have `ec2:DescribeVpcs` permission.
+| Feature | Benefit |
+|---------|---------|
+| Domain Root | Apps run at `/` — internal routes work correctly |
+| Cookie Isolation | Each runtime has isolated cookies |
+| Security Headers | X-Frame-Options, CSP, X-XSS-Protection applied automatically |
+| No Authentication | Runtime subdomains bypass Cognito (public within conversation) |
 
-### Certificate Validation Pending
-ACM certificates use DNS validation. Ensure the Hosted Zone is correctly configured.
+### Architecture
 
-### Fargate Task Not Starting
-Check CloudWatch Logs at `/openhands/application` for container startup errors. Check ECS service events for Fargate capacity issues.
+```
+User Browser
+    ↓
+https://5000-{convId}.runtime.openhands.example.com/
+    ↓
+CloudFront (matches *.runtime.* wildcard certificate)
+    ↓
+Lambda@Edge (viewer-request: parse subdomain, rewrite URI)
+    ↓
+ALB → OpenResty → Sandbox Discovery (DynamoDB) → User App
+```
+
+</details>
+
+<details>
+<summary><strong>💾 Data Persistence</strong></summary>
+
+| Data Type | Storage | Persistence |
+|-----------|---------|-------------|
+| Conversation Metadata | Aurora PostgreSQL | Permanent (via RDS Proxy) |
+| Conversation Events | S3 | Permanent (survives task replacement) |
+| User Settings / Secrets | S3 | Permanent (KMS envelope encryption) |
+| Workspace Files | EFS | Persistent (per-conversation access points) |
+| SDK Conversation Cache | EFS | Persistent (enables LLM context restoration) |
+| Sandbox Registry | DynamoDB | Permanent (task state, user ownership) |
+
+**Aurora Serverless v2**: PostgreSQL 15.8, RDS Proxy connection pooling, 0.5-4 ACU auto-scaling, 35-day backups.
+
+**S3 Bucket**: SSE-S3 encryption, versioning (30-day retention), RETAIN removal policy.
+
+</details>
+
+<details>
+<summary><strong>🔒 Security</strong></summary>
+
+- Fargate tasks in private subnets only
+- Per-conversation EFS isolation via access points
+- All AWS service access via VPC Endpoints
+- IAM Roles with least privilege per service
+- Database credentials in Secrets Manager
+- RDS Proxy with TLS-encrypted connections
+- User secrets protected by KMS envelope encryption
+- Cognito authentication (30-day sessions)
+- Lambda@Edge header spoofing prevention
+- WAF protection with rate limiting
+- S3 and Aurora storage encryption
+
+**Session Management:**
+
+| Token Type | Validity | Description |
+|------------|----------|-------------|
+| Access Token | 1 hour | API access token |
+| ID Token | 1 day | Identity token (stored in cookie) |
+| Refresh Token | 30 days | Used to obtain new tokens |
+
+</details>
+
+## VPC Requirements
+
+Your existing VPC must have:
+- At least 2 private subnets in different AZs
+- NAT Gateway for outbound internet access
+- DNS hostnames enabled
 
 ## CI/CD
-
-This project uses GitHub Actions for continuous integration:
 
 | Workflow | Trigger | Description |
 |----------|---------|-------------|
 | **CI** | Push/PR to main, develop | Build TypeScript, run all tests (Jest + pytest) |
 | **Security Scan** | Push/PR to main, daily | npm audit, Checkov, git-secrets, Semgrep SAST, cfn-lint |
 
-### Running Tests Locally
+```bash
+npm run test        # Run all tests
+npm run test:ts     # TypeScript tests only
+npm run test:py     # Python tests only
+npm run test:ts -- -u  # Update snapshots
+```
+
+## Useful Commands
 
 ```bash
-# Run all tests (build + TypeScript + Python)
-npm run test
-
-# Run TypeScript tests only
-npm run test:ts
-
-# Run Python tests only (requires .venv)
-npm run test:py
-
-# Update snapshots after intentional changes
-npm run test:ts -- -u
+npm run build       # Build TypeScript
+npm run watch       # Watch for changes
+npx cdk diff --all  # Show diff before deploy
+npx cdk synth --all # Synthesize CloudFormation
+npx cdk destroy --all  # Destroy all stacks
 ```
+
+## Troubleshooting
+
+<details>
+<summary>Common issues</summary>
+
+**VPC Lookup Fails** — Ensure the VPC exists and your AWS credentials have `ec2:DescribeVpcs` permission.
+
+**Certificate Validation Pending** — ACM certificates use DNS validation. Ensure the Hosted Zone is correctly configured.
+
+**Fargate Task Not Starting** — Check CloudWatch Logs at `/openhands/application` for container startup errors. Check ECS service events for Fargate capacity issues.
+
+</details>
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
 
 This infrastructure project deploys [OpenHands](https://github.com/All-Hands-AI/OpenHands). See the [OpenHands License](https://github.com/All-Hands-AI/OpenHands/blob/main/LICENSE) for the main application.
+
+---
+
+<div align="center">
+
+**If this project helps you deploy OpenHands, consider giving it a ⭐**
+
+Built with ❤️ using [AWS CDK](https://aws.amazon.com/cdk/) and [OpenHands](https://github.com/All-Hands-AI/OpenHands)
+
+</div>
