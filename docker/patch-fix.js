@@ -148,19 +148,27 @@
   // Normalize git API paths - convert absolute workspace paths and bare repo names to relative paths.
   // The agent-server's git router expects "." for the workspace root.
   function normalizeGitUrl(url) {
-    var before = url;
     // Handle URL-encoded paths (%2F = /)
-    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
+    // Match both exact workspace root and workspace root + repo directory name
+    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject(%2F[^%/]+)?$/gi, '$1/.');
+    // Strip workspace prefix from deeper sub-paths (e.g., %2Fworkspace%2Fproject%2Fsrc%2Flib -> src%2Flib)
     url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F/gi, '$1/');
     // Handle non-encoded paths (double slash from path joining)
-    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
+    // Match both exact workspace root and workspace root + repo directory name
+    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project(\/[^/]+)?$/g, '$1/.');
+    // Strip workspace prefix from deeper sub-paths (e.g., //workspace/project/src/lib -> src/lib)
     url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\//g, '$1/');
-    // Handle bare repo name (only if no workspace rewrite matched above)
-    // The frontend sends the GitHub repo name (e.g., "openhands-infra") but the agent-server
-    // expects "." for the workspace root (repo is cloned at /workspace/project, not /workspace/repo-name)
-    if (url === before) {
-      url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, '$1/.');
-    }
+    // Handle bare repo name (no workspace prefix at all).
+    // The frontend sends the GitHub repo name (e.g., "openhands-infra") directly.
+    // A single real path segment after /api/git/<action>/ that doesn't start with "." is a repo name.
+    // The segment must not contain %2F/%2f (URL-encoded slash), which would indicate a
+    // multi-segment sub-path left over from workspace prefix stripping.
+    url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, function(match, prefix, segment) {
+      if (segment.indexOf('%2F') !== -1 || segment.indexOf('%2f') !== -1) {
+        return match; // multi-segment sub-path, keep as-is
+      }
+      return prefix + '/.';
+    });
     return url;
   }
 

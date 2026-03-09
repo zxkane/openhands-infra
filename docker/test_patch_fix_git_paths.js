@@ -12,17 +12,21 @@
 
 // Mirrors the normalizeGitUrl function from patch-fix.js exactly.
 function normalizeGitUrl(url) {
-  var before = url;
-  // URL-encoded paths
-  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
+  // URL-encoded paths: workspace root + optional repo dir name -> "."
+  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject(%2F[^%/]+)?$/gi, '$1/.');
+  // Strip workspace prefix from deeper sub-paths
   url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F/gi, '$1/');
-  // Non-encoded paths
-  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
+  // Non-encoded paths: workspace root + optional repo dir name -> "."
+  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project(\/[^/]+)?$/g, '$1/.');
+  // Strip workspace prefix from deeper sub-paths
   url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\//g, '$1/');
-  // Bare repo name -- only if no workspace rewrite above changed the URL
-  if (url === before) {
-    url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, '$1/.');
-  }
+  // Bare repo name (skip if segment contains %2F = multi-segment sub-path)
+  url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, function(match, prefix, segment) {
+    if (segment.indexOf('%2F') !== -1 || segment.indexOf('%2f') !== -1) {
+      return match;
+    }
+    return prefix + '/.';
+  });
   return url;
 }
 
@@ -75,16 +79,40 @@ assertEqual(
   'URL-encoded /workspace/project -> .'
 );
 
+// Single segment after workspace root is treated as repo name, not sub-path
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fsrc`),
-  `${base}/api/git/changes/src`,
-  'URL-encoded /workspace/project/src -> src'
+  `${base}/api/git/changes/.`,
+  'URL-encoded /workspace/project/src -> . (single segment = repo name)'
+);
+
+// Multi-segment sub-paths are preserved
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fsrc%2Flib`),
+  `${base}/api/git/changes/src%2Flib`,
+  'URL-encoded /workspace/project/src/lib -> src%2Flib (multi-segment preserved)'
 );
 
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes/%2Fopenhands%2Fproject`),
   `${base}/api/git/changes/.`,
   'URL-encoded /openhands/project -> .'
+);
+
+// === URL-encoded workspace path + repo directory name (THE ACTUAL BUG) ===
+// Frontend sends: %2Fworkspace%2Fproject%2Fopenhands-infra
+// After stripping %2Fworkspace%2Fproject%2F, "openhands-infra" remains
+// The bare repo name catch-all must normalize it to "."
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fopenhands-infra`),
+  `${base}/api/git/changes/.`,
+  'URL-encoded /workspace/project/openhands-infra -> . (not bare openhands-infra)'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/changes/%2Fworkspace%2Fproject%2Fmy-app`),
+  `${base}/api/git/changes/.`,
+  'URL-encoded /workspace/project/my-app -> . (not bare my-app)'
 );
 
 // === Non-encoded workspace paths (double slash from path joining) ===
@@ -94,10 +122,25 @@ assertEqual(
   'non-encoded //workspace/project -> .'
 );
 
+// Single segment after workspace root is treated as repo name
 assertEqual(
   normalizeGitUrl(`${base}/api/git/changes//workspace/project/lib`),
-  `${base}/api/git/changes/lib`,
-  'non-encoded //workspace/project/lib -> lib'
+  `${base}/api/git/changes/.`,
+  'non-encoded //workspace/project/lib -> . (single segment = repo name)'
+);
+
+// Multi-segment sub-paths are preserved
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/changes//workspace/project/src/lib`),
+  `${base}/api/git/changes/src/lib`,
+  'non-encoded //workspace/project/src/lib -> src/lib (multi-segment preserved)'
+);
+
+// === Non-encoded workspace path + repo directory name ===
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/changes//workspace/project/openhands-infra`),
+  `${base}/api/git/changes/.`,
+  'non-encoded //workspace/project/openhands-infra -> . (not bare openhands-infra)'
 );
 
 // === Non-git API paths should not be affected ===
