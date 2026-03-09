@@ -3766,7 +3766,10 @@ Verify that the "Changes" tab works correctly for a conversation that opened a *
 
 ### Prerequisites
 - TC-003 completed (logged in)
-- GitHub integration configured (or use direct repo URL)
+- **GitHub integration configured** — the test user must have connected their GitHub account
+  via Settings > Integrations. Without this, the frontend does not send the repo name in the
+  git changes API path, and the bare repo name bug cannot be triggered through the UI.
+- A public GitHub repository to open (e.g., `zxkane/openhands-infra`)
 
 ### Steps
 
@@ -3777,8 +3780,9 @@ Verify that the "Changes" tab works correctly for a conversation that opened a *
      url: "https://<subdomain>.<domain>/",
      type: "url"
    })
-   // Use "Open Repository" to connect a GitHub repo (e.g., zxkane/openhands-infra)
-   // Or start a conversation and ask the agent to clone a repo
+   // Click "Open Repository" and select a GitHub repo (e.g., zxkane/openhands-infra)
+   // This requires GitHub integration — without it, use the "New Conversation" flow
+   // and the repo name will NOT appear in the git changes path (see TC-030 instead)
    ```
 
 2. Wait for sandbox to be ready and repo to be cloned
@@ -3843,5 +3847,11 @@ Verify that the "Changes" tab works correctly for a conversation that opened a *
 ### Notes
 
 - This test specifically validates the `normalizeGitUrl()` function in `patch-fix.js`
-- The bare repo name rewrite (`openhands-infra` → `.`) only applies when a GitHub repo is connected
+- The bare repo name rewrite (`openhands-infra` → `.`) only applies when a GitHub repo is
+  **connected via the OpenHands integration** (Settings > Integrations > GitHub)
+- Without GitHub integration, conversations show "No Repo Connected" and the frontend sends
+  `/api/git/changes/` (empty path) — this does NOT trigger the bare repo name bug
+- Manually cloning a repo with `git clone` inside the sandbox does NOT connect the repo to
+  the conversation metadata, so the frontend still won't send the repo name
 - Without the fix, this scenario returns HTTP 500 with `InvalidGitRepositoryError`
+- The fix is also covered by 10 unit regression tests in `docker/test_patch_fix_git_paths.js`
