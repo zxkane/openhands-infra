@@ -343,14 +343,47 @@ aws cognito-idp admin-set-user-password \
 - **Placeholder replacement**: Use `{{PLACEHOLDER}}` syntax, replaced at synth time
 - **Deletion note**: Lambda@Edge requires hours for cleanup after CloudFront removal
 
+### SOCI v2 Index Generation (Post-Deploy)
+
+After deploying the Sandbox stack, generate a SOCI v2 index to enable Fargate lazy loading (~62% faster sandbox startup). Requires `containerd` and `soci` CLI >= v0.10.
+
+```bash
+# 1. Get the sandbox image URI from CloudFormation output
+SANDBOX_IMAGE_URI=$(aws cloudformation describe-stacks \
+  --stack-name OpenHands-Sandbox --region <region> \
+  --query "Stacks[0].Outputs[?OutputKey=='SandboxImageUri'].OutputValue" --output text)
+
+# 2. Generate SOCI v2 index (pulls image, creates index, pushes -soci tag)
+./scripts/generate-soci-index.sh "$SANDBOX_IMAGE_URI" <region>
+
+# 3. Redeploy Sandbox stack with SOCI image to update task definition
+npx cdk deploy OpenHands-Sandbox \
+  --context sandboxSociImageUri="${SANDBOX_IMAGE_URI}-soci" \
+  --context vpcId=<vpc-id> \
+  --context hostedZoneId=<zone-id> \
+  --context domainName=<domain> \
+  --context subDomain=<sub> \
+  --context region=<region> \
+  --require-approval never
+```
+
+**Note**: The deploy scripts (`deploy-staging.local.sh`, `deploy-production.local.sh`) automate steps 1-3 when `soci` CLI is available. SOCI generation only needs to run once per image build — subsequent deploys that don't change the Docker image can skip it by passing the existing `sandboxSociImageUri`.
+
+| Scenario | Action |
+|----------|--------|
+| First deploy / image changed | Run full SOCI generation (steps 1-3) |
+| Config-only change (no image rebuild) | Pass existing `sandboxSociImageUri` context |
+| `soci` CLI not installed | Skip — sandbox works without SOCI (slower startup) |
+
 ## Post-Deploy Workflow
 
 **MANDATORY**: After infrastructure changes, proceed through all steps without stopping.
 
 1. **Build & Test**: `npm run build && npm run test`
 2. **Deploy**: See commands above
-3. **E2E Test**: See `test/E2E_TEST_CASES.md`
-4. **Verify**:
+3. **SOCI** (optional): Generate SOCI v2 index if sandbox image changed (see above)
+4. **E2E Test**: See `test/E2E_TEST_CASES.md`
+5. **Verify**:
    - Login portal without error
    - Conversations list loads (200 OK)
    - New conversation reaches "Waiting for task"
