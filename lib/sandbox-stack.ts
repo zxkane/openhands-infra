@@ -50,6 +50,8 @@ export interface SandboxStackProps extends cdk.StackProps {
   databaseSecretName?: string;
   /** Database name (deletion Lambda) */
   databaseName?: string;
+  /** SOCI-enabled sandbox image URI (overrides CDK-built image for Fargate lazy loading) */
+  sandboxSociImageUri?: string;
 }
 
 /**
@@ -322,12 +324,23 @@ export class SandboxStack extends cdk.Stack {
       },
     });
 
+    // Sandbox agent-server image (DockerImageAsset for ECR URI export + SOCI index generation)
+    const sandboxImageAsset = new DockerImageAsset(this, 'SandboxAgentServerImage', {
+      directory: path.join(__dirname, '..', 'docker', 'agent-server-custom'),
+      platform: Platform.LINUX_ARM64,
+    });
+
+    // Use SOCI-enabled image when provided (overrides CDK-built image for Fargate lazy loading).
+    // The SOCI image is generated post-deploy by scripts/generate-soci-index.sh and passed
+    // via --context sandboxSociImageUri on subsequent deploys.
+    const sandboxContainerImage = props.sandboxSociImageUri
+      ? ecs.ContainerImage.fromRegistry(props.sandboxSociImageUri)
+      : ecs.ContainerImage.fromDockerImageAsset(sandboxImageAsset);
+
     // Agent-server container (main sandbox container)
     const agentServerContainer = sandboxTaskDefinition.addContainer('agent-server', {
       containerName: 'agent-server',
-      image: ecs.ContainerImage.fromAsset(path.join(__dirname, '..', 'docker', 'agent-server-custom'), {
-        platform: Platform.LINUX_ARM64,
-      }),
+      image: sandboxContainerImage,
       essential: true,
       // Override entrypoint: skip /sbin/docker-init (not available in Fargate)
       // Fargate uses initProcessEnabled instead for PID 1 signal handling
@@ -888,6 +901,7 @@ export class SandboxStack extends cdk.Stack {
       sandboxTaskRoleArn: sandboxTaskRole.roleArn,
       efsFileSystemId: workspaceFileSystem.fileSystemId,
       deletionLambdaArn: deletionLambda.functionArn,
+      sandboxImageUri: sandboxImageAsset.imageUri,
     };
 
     new cdk.CfnOutput(this, 'ClusterArn', {
@@ -913,6 +927,11 @@ export class SandboxStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'OrchestratorImageUri', {
       value: orchestratorImage.imageUri,
       description: 'Sandbox Orchestrator Docker image URI',
+    });
+
+    new cdk.CfnOutput(this, 'SandboxImageUri', {
+      value: sandboxImageAsset.imageUri,
+      description: 'Sandbox agent-server image URI (ECR) for SOCI index generation',
     });
   }
 }

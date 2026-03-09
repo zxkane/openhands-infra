@@ -179,4 +179,6 @@ export interface SandboxStackOutput {
   efsFileSystemId: string;
   /** Conversation deletion Lambda ARN (invoked by orchestrator for full data wipe) */
   deletionLambdaArn?: string;
+  /** Sandbox agent-server image URI in ECR (for SOCI index generation) */
+  sandboxImageUri: string;
 }
