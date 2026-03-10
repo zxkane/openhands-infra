@@ -897,8 +897,8 @@ Verify that VS Code editor URLs (main domain with port) are correctly rewritten 
 
 5. Look for VS Code URL patterns in agent output or browser behavior
    ```
-   Original: http://<subdomain>.<domain>:49955/?tkn=xxx&folder=/workspace
-   Rewritten: https://49955-<convId>.runtime.<subdomain>.<domain>/?tkn=xxx&folder=/workspace
+   Original: http://<subdomain>.<domain>:49955/?tkn=xxx&folder=/workspace/project
+   Rewritten: https://49955-<convId>.runtime.<subdomain>.<domain>/?tkn=xxx&folder=/workspace/project
    ```
 
 6. Verify the rewritten URL works

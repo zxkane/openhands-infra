@@ -46,14 +46,8 @@ NEW = '''def _build_service_url(url: str, service_name: str):
 
 if OLD in content:
     content = content.replace(OLD, NEW)
-    # Also fix VS Code folder path to /workspace (not /workspace/project)
-    # for consistency with Changes panel which shows /workspace/ level git changes
-    content = content.replace(
-        "folder=%2Fworkspace%2Fproject",
-        "folder=%2Fworkspace"
-    )
     with open(SERVICE_FILE, "w") as f:
         f.write(content)
-    print("Patch 32: Fixed _build_service_url + VS Code folder path for Fargate")
+    print("Patch 32: Fixed _build_service_url for Fargate")
 else:
     print("WARNING: Patch 32 pattern not found in remote_sandbox_service.py")
