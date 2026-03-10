@@ -408,7 +408,7 @@ mcp__chrome-devtools__evaluate_script({
     };
   }`
 })
-// Expected: { status: 200, url: "http://localhost:60001/?tkn=...", isLocalhost: true }
+// Expected: { status: 200, url: "http://localhost:8001/?tkn=...", isLocalhost: true }
 // If url contains VPC IP (172.31.x.x) → Patch 32 not applied
 // If url contains "vscode-" prefix → Patch 32 not applied
 
@@ -421,7 +421,7 @@ mcp__chrome-devtools__evaluate_script({
     const parts = host.split('.');
     const subdomain = parts[0];
     const domain = parts.slice(1).join('.');
-    const runtimeUrl = 'https://60001-' + convId + '.runtime.' + subdomain + '.' + domain + '/';
+    const runtimeUrl = 'https://8001-' + convId + '.runtime.' + subdomain + '.' + domain + '/';
     return runtimeUrl;
   }`
 })
