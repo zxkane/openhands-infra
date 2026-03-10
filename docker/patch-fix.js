@@ -161,29 +161,46 @@
   //   /api/git/diff//workspace/project/<repo>/<file>                -> project/<repo>/<file>
   //   /api/git/changes/%2Fworkspace%2Fproject                       -> . (no repo)
   //   /api/git/changes//workspace/project                           -> . (no repo)
+  //   /api/git/diff/%2Fworkspace%2Fproject%2F<file>                 -> ./<file> (no repo, file)
+  //   /api/git/diff//workspace/project/<file>                       -> ./<file> (no repo, file)
+  //
+  // Repo names never start with "." — segments starting with "." are files in workspace root.
   function normalizeGitUrl(url) {
     var before = url;
     // URL-encoded: %2Fworkspace%2Fproject%2F<repo-name> with optional file path
-    // Preserve as project/<repo> (changes API) or project/<repo>/<file> (diff API)
-    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F([^%/]+)(%2F(.*))?$/gi,
+    // Repo names never start with "." — dotfiles are workspace root files, not repos.
+    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F([^%.][^%/]*)(%2F(.*))?$/gi,
       function(match, prefix, ws, repo, hasMore, filePath) {
         if (filePath) {
           return prefix + '/project/' + repo + '/' + filePath;
         }
         return prefix + '/project/' + repo;
       });
-    // URL-encoded: exact workspace root (no repo name) -> "."
-    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
+    // URL-encoded: workspace root with optional file path -> "." or "./<file>"
+    url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject(%2F(.*))?$/gi,
+      function(match, prefix, ws, hasMore, filePath) {
+        if (filePath) {
+          return prefix + '/./' + filePath;
+        }
+        return prefix + '/.';
+      });
     // Non-encoded: //workspace/project/<repo-name> with optional file path
-    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\/([^/]+)(\/(.*))?$/g,
+    // Repo names never start with "." — dotfiles are workspace root files, not repos.
+    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\/([^/.][^/]*)(\/(.*))?$/g,
       function(match, prefix, ws, repo, hasMore, filePath) {
         if (filePath) {
           return prefix + '/project/' + repo + '/' + filePath;
         }
         return prefix + '/project/' + repo;
       });
-    // Non-encoded: exact workspace root (no repo name) -> "."
-    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
+    // Non-encoded: workspace root with optional file path -> "." or "./<file>"
+    url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project(\/(.*))?$/g,
+      function(match, prefix, ws, hasMore, filePath) {
+        if (filePath) {
+          return prefix + '/./' + filePath;
+        }
+        return prefix + '/.';
+      });
     // Bare repo name or repo+file (no workspace prefix).
     // Only run if no workspace stripping regex matched above.
     if (url === before) {

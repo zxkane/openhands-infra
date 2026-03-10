@@ -15,6 +15,8 @@
  *   //workspace/project/<repo>/<file>            -> project/<repo>/<file> (diff)
  *   %2Fworkspace%2Fproject                       -> . (no repo)
  *   //workspace/project                          -> . (no repo)
+ *   %2Fworkspace%2Fproject%2F<dotfile>           -> ./<dotfile> (no repo, file)
+ *   //workspace/project/<dotfile>                -> ./<dotfile> (no repo, file)
  *
  * Run: node docker/test_patch_fix_git_paths.js
  */
@@ -22,18 +24,26 @@
 // Mirrors the normalizeGitUrl function from patch-fix.js exactly.
 function normalizeGitUrl(url) {
   var before = url;
-  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F([^%/]+)(%2F(.*))?$/gi,
+  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject%2F([^%.][^%/]*)(%2F(.*))?$/gi,
     function(match, prefix, ws, repo, hasMore, filePath) {
       if (filePath) { return prefix + '/project/' + repo + '/' + filePath; }
       return prefix + '/project/' + repo;
     });
-  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject$/gi, '$1/.');
-  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\/([^/]+)(\/(.*))?$/g,
+  url = url.replace(/(\/api\/git\/[^/]+)\/%2F(workspace|openhands)%2Fproject(%2F(.*))?$/gi,
+    function(match, prefix, ws, hasMore, filePath) {
+      if (filePath) { return prefix + '/./' + filePath; }
+      return prefix + '/.';
+    });
+  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project\/([^/.][^/]*)(\/(.*))?$/g,
     function(match, prefix, ws, repo, hasMore, filePath) {
       if (filePath) { return prefix + '/project/' + repo + '/' + filePath; }
       return prefix + '/project/' + repo;
     });
-  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project$/g, '$1/.');
+  url = url.replace(/(\/api\/git\/[^/]+)\/\/(workspace|openhands)\/project(\/(.*))?$/g,
+    function(match, prefix, ws, hasMore, filePath) {
+      if (filePath) { return prefix + '/./' + filePath; }
+      return prefix + '/.';
+    });
   if (url === before) {
     url = url.replace(/(\/api\/git\/[^/]+)\/([^/.][^/]*)$/g, function(match, prefix, segment) {
       var idx = segment.indexOf('%2F');
@@ -133,6 +143,38 @@ assertEqual(
   normalizeGitUrl(`${base}/api/git/changes//workspace/project/openhands-infra`),
   `${base}/api/git/changes/project/openhands-infra`,
   'changes: non-encoded //workspace/project/openhands-infra -> project/openhands-infra'
+);
+
+// =============================================
+// DIFF API - no repo, workspace root file (URL-encoded)
+// =============================================
+// When no repo is connected, files like .gitignore are at workspace root.
+// Frontend sends: %2Fworkspace%2Fproject%2F.gitignore (dotfile = not a repo)
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/%2Fworkspace%2Fproject%2F.gitignore`),
+  `${base}/api/git/diff/./.gitignore`,
+  'diff: URL-encoded /workspace/project/.gitignore -> ./.gitignore (no repo, dotfile)'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff/%2Fworkspace%2Fproject%2F.env`),
+  `${base}/api/git/diff/./.env`,
+  'diff: URL-encoded /workspace/project/.env -> ./.env (no repo, dotfile)'
+);
+
+// =============================================
+// DIFF API - no repo, workspace root file (non-encoded)
+// =============================================
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff//workspace/project/.gitignore`),
+  `${base}/api/git/diff/./.gitignore`,
+  'diff: non-encoded //workspace/project/.gitignore -> ./.gitignore (no repo, dotfile)'
+);
+
+assertEqual(
+  normalizeGitUrl(`${base}/api/git/diff//workspace/project/.env.local`),
+  `${base}/api/git/diff/./.env.local`,
+  'diff: non-encoded //workspace/project/.env.local -> ./.env.local (no repo, dotfile)'
 );
 
 // =============================================
