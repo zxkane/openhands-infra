@@ -1480,7 +1480,7 @@ Use this checklist to track test execution:
 | TC-021 | Secrets Re-injection After ECS Task Recycling | [ ] | Patch 22/23/28/29: secrets re-injected into resumed sandbox |
 | TC-025 | Cross-Sandbox Network Isolation | [ ] | Sandbox tasks cannot reach each other (SG hardening) |
 | TC-030 | Changes Tab Without GitHub Repo | [ ] | Git changes API returns 200, files listed |
-| TC-031 | Changes Tab With GitHub Repo | [ ] | Regression: bare repo name normalized to `.` |
+| TC-031 | Changes Tab With GitHub Repo | [ ] | Nested repo: git changes visible for connected repo |
 
 ---
 
@@ -3758,11 +3758,11 @@ Verify that the "Changes" tab works correctly for a conversation that is **not**
 ## TC-031: Verify Changes Tab With GitHub Repo (Regression)
 
 ### Description
-Verify that the "Changes" tab works correctly for a conversation that opened a **GitHub repository**. This is a regression test for the bug where the frontend sends the bare repo name (e.g., `openhands-infra`) in the git changes API path, causing a 500 error because the agent-server expects `.` for the workspace root.
+Verify that the "Changes" tab works correctly for a conversation that opened a **GitHub repository** and that file modifications inside the connected repo are visible. This is a regression test for the bug where git changes/diff queries couldn't find the correct nested git repo.
 
-**Bug scenario**: Frontend sends `GET /api/git/changes/openhands-infra` → agent-server prepends `/workspace/` → looks for `/workspace/openhands-infra` → not found (repo is at `/workspace/project`) → 500 error.
+**Bug scenario**: The repo is cloned to `/workspace/project/<repo>/` which is a nested git repo. Previously, paths were normalized to `.` (workspace root) which only showed the outer `/workspace` repo — modifications inside the cloned repo were invisible.
 
-**Fix**: `patch-fix.js` normalizes bare repo names to `.` before the request reaches the agent-server.
+**Fix**: `patch-fix.js` normalizes paths to `project/<repo>` so the agent-server resolves to the correct nested git repository. Additionally, `git init /workspace/project` was removed from the sandbox entrypoint to avoid creating an unnecessary intermediate git repo.
 
 ### Prerequisites
 - TC-003 completed (logged in)
@@ -3771,11 +3771,11 @@ Verify that the "Changes" tab works correctly for a conversation that opened a *
 ### Steps
 
 The `normalizeGitUrl()` function in `patch-fix.js` intercepts `fetch()` and `XMLHttpRequest.open()`
-calls matching localhost/private-IP patterns and rewrites them. We can directly verify the rewrite
-by calling `fetch('http://localhost:8000/api/git/changes/<repo-name>')` from the browser console —
-the interceptor will normalize the bare repo name to `.`.
+calls matching localhost/private-IP patterns and rewrites them. We verify that bare repo names and
+URL-encoded workspace paths are normalized to `project/<repo>` so the agent-server resolves to the
+correct nested git repository.
 
-1. Navigate to an existing conversation with a running sandbox
+1. Navigate to an existing conversation with a running sandbox (connected to a GitHub repo)
    ```javascript
    mcp__chrome-devtools__navigate_page({
      url: "https://<subdomain>.<domain>/conversations/<convId>",
@@ -3798,8 +3798,8 @@ the interceptor will normalize the bare repo name to `.`.
    // The patch-fix.js interceptor will:
    //   1. Match httpPattern (localhost:8000)
    //   2. buildRuntimeUrl() -> /runtime/<convId>/8000/api/git/changes/<repo-name>
-   //   3. normalizeGitUrl() -> rewrites bare repo name to "."
-   //   4. Final URL: /runtime/<convId>/8000/api/git/changes/.
+   //   3. normalizeGitUrl() -> rewrites bare repo name to "project/<repo>"
+   //   4. Final URL: /runtime/<convId>/8000/api/git/changes/project/<repo>
    mcp__chrome-devtools__evaluate_script({
      function: `async () => {
        const resp = await fetch('http://localhost:8000/api/git/changes/openhands-infra');
@@ -3808,9 +3808,10 @@ the interceptor will normalize the bare repo name to `.`.
    })
    ```
 
-4. Verify the URL was rewritten (bare repo name → ".")
+4. Verify the URL was rewritten (bare repo name → `project/<repo>`)
    ```javascript
-   // The finalUrl should end with /api/git/changes/. (NOT /api/git/changes/openhands-infra)
+   // The finalUrl should end with /api/git/changes/project/openhands-infra
+   // (NOT /api/git/changes/openhands-infra or /api/git/changes/.)
    // Status may be 200 (if auth cookies present) or 401 (path-based routing auth)
    // The key verification is the URL rewrite, not the response status
    ```
@@ -3820,44 +3821,61 @@ the interceptor will normalize the bare repo name to `.`.
    mcp__chrome-devtools__list_console_messages({ types: ["log"] })
    // Look for:
    // "Fetch patched: http://localhost:8000/api/git/changes/openhands-infra
-   //             -> https://<host>/runtime/<convId>/8000/api/git/changes/."
+   //             -> https://<host>/runtime/<convId>/8000/api/git/changes/project/openhands-infra"
    ```
 
-6. Open the conversation with the repo connected, click a changed file to trigger diff
+6. Click the "Changes" tab/button to view file changes in the connected repo
    ```javascript
    // Navigate to the conversation that has zxkane/openhands-infra connected
    mcp__chrome-devtools__navigate_page({
      url: "https://<subdomain>.<domain>/conversations/<convId>",
      type: "url"
    })
-   // Wait for Changes tab to load, then click a changed file
-   // The frontend sends: /api/git/diff/%2Fworkspace%2Fproject%2Fopenhands-infra%2F<filename>
-   // The interceptor must strip the workspace+repo prefix, leaving just <filename>
+   // Wait for Changes tab to load
+   // The frontend calls: /api/git/changes/%2Fworkspace%2Fproject%2Fopenhands-infra
+   // The interceptor rewrites to: /api/git/changes/project/openhands-infra
+   // The agent-server resolves this as /workspace/project/openhands-infra (the cloned repo)
    ```
 
-7. Verify the diff API URL was rewritten correctly
+7. Verify that changed files inside the connected repo are listed
+   ```javascript
+   // The Changes tab should show modified files from the cloned repo
+   // (e.g., files the agent modified inside /workspace/project/openhands-infra/)
+   // If the repo was just cloned with no modifications, Changes should be empty (not an error)
+   mcp__chrome-devtools__take_snapshot({})
+   // Verify: no error messages, file list renders (or empty state if no changes)
+   ```
+
+8. Click a changed file to trigger diff
+   ```javascript
+   // The frontend sends: /api/git/diff/%2Fworkspace%2Fproject%2Fopenhands-infra%2F<filename>
+   // The interceptor rewrites to: /api/git/diff/project/openhands-infra/<filename>
+   ```
+
+9. Verify the diff API URL was rewritten correctly
    ```javascript
    mcp__chrome-devtools__list_console_messages({ types: ["log"] })
    // Look for:
    // "XHR patched: https://<ip>:8000/api/git/diff/%2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore
-   //           -> https://<host>/runtime/<convId>/8000/api/git/diff/.gitignore"
+   //           -> https://<host>/runtime/<convId>/8000/api/git/diff/project/openhands-infra/.gitignore"
    ```
 
-8. Verify the diff request returns 200 (not 500)
-   ```javascript
-   mcp__chrome-devtools__list_network_requests({ resourceTypes: ["fetch", "xhr"] })
-   // Look for: GET /runtime/<convId>/8000/api/git/diff/.gitignore → 200
-   ```
+10. Verify the diff request returns 200 (not 500)
+    ```javascript
+    mcp__chrome-devtools__list_network_requests({ resourceTypes: ["fetch", "xhr"] })
+    // Look for: GET /runtime/<convId>/8000/api/git/diff/project/openhands-infra/.gitignore → 200
+    ```
 
 ### Acceptance Criteria
 
 | # | Criteria | Verification |
 |---|----------|--------------|
 | 1 | Interceptor matches localhost URL | Console log shows "Fetch patched:" or "XHR patched:" message |
-| 2 | Changes API: bare repo name normalized | URL contains `/api/git/changes/.` not `/api/git/changes/openhands-infra` |
-| 3 | Changes API: URL-encoded path normalized | `%2Fworkspace%2Fproject%2Fopenhands-infra` → `.` |
-| 4 | Diff API: workspace+repo prefix stripped | `%2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore` → `.gitignore` |
-| 5 | Diff API returns 200 | Network request shows `/api/git/diff/.gitignore` → 200 |
+| 2 | Changes API: bare repo name normalized | URL contains `/api/git/changes/project/openhands-infra` (not bare name or `.`) |
+| 3 | Changes API: URL-encoded path normalized | `%2Fworkspace%2Fproject%2Fopenhands-infra` → `project/openhands-infra` |
+| 4 | Changes tab shows connected repo files | Modified files from the cloned repo are listed (or empty state if no changes) |
+| 5 | Diff API: path preserves repo context | `%2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore` → `project/openhands-infra/.gitignore` |
+| 6 | Diff API returns 200 | Network request shows `/api/git/diff/project/openhands-infra/.gitignore` → 200 |
 
 ### Alternative: Full Flow with Connected Repo
 
@@ -3877,8 +3895,9 @@ mcp__chrome-devtools__evaluate_script({
 })
 // Navigate to the conversation, wait for sandbox, then click Changes button
 // The frontend will call: http://<private-ip>:8000/api/git/changes/openhands-infra
-// which gets intercepted and rewritten to /api/git/changes/.
-// Click a changed file to trigger diff — the diff path gets normalized too.
+// which gets intercepted and rewritten to /api/git/changes/project/openhands-infra
+// The agent-server resolves /workspace/project/openhands-infra — the cloned repo
+// Click a changed file to trigger diff — the diff path preserves the repo context too.
 ```
 
 ### Notes
@@ -3887,11 +3906,13 @@ mcp__chrome-devtools__evaluate_script({
 - The interceptor only triggers for URLs matching `httpPattern` (localhost, `host.docker.internal`,
   VPC private IPs like `172.31.x.x`) — these are the URLs the agent-server returns to the frontend
 - The frontend sends paths in two forms:
-  - Changes API: `%2Fworkspace%2Fproject%2F<repo>` or bare `<repo>` → normalized to `.`
-  - Diff API: `%2Fworkspace%2Fproject%2F<repo>%2F<file>` or `<repo>%2F<file>` → normalized to `<file>`
+  - Changes API: `%2Fworkspace%2Fproject%2F<repo>` or bare `<repo>` → normalized to `project/<repo>`
+  - Diff API: `%2Fworkspace%2Fproject%2F<repo>%2F<file>` or `<repo>%2F<file>` → normalized to `project/<repo>/<file>`
+- The agent-server WORKDIR is `/workspace`, so `project/<repo>` resolves to `/workspace/project/<repo>/` — the cloned repo directory
+- `git init /workspace/project` was removed from the sandbox entrypoint to avoid creating an unnecessary intermediate git repo
+  that would shadow the cloned repo's changes
 - Public repos (e.g., `zxkane/openhands-infra`) do NOT require GitHub integration — they can be
   opened via `POST /api/v1/app-conversations` with `selected_repository`
-- Without the fix, the agent-server receives the wrong path and returns HTTP 500:
-  - Changes: looks for `/workspace/openhands-infra` → `InvalidGitRepositoryError`
-  - Diff: looks for `/workspace/openhands-infra/project/openhands-infra` → `File does not exist`
+- Without the fix, the Changes tab showed empty for connected repos because it queried the outer
+  `/workspace` repo instead of the nested cloned repo at `/workspace/project/<repo>/`
 - The fix is covered by 19 unit regression tests in `docker/test_patch_fix_git_paths.js`
