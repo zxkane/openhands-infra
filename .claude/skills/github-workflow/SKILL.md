@@ -187,6 +187,8 @@ Run `test/select-e2e-tests.sh` to automatically determine which tests to run bas
 | TC-008 | Verify In-App Routing | Docker/runtime changes |
 | TC-009 | Verify Web App Subdomain | Docker/runtime changes |
 | TC-010 | Verify VS Code URL Rewriting | Docker/patch-fix.js changes |
+| TC-030 | Changes Tab Without GitHub Repo | Docker/runtime changes |
+| TC-031 | Changes Tab With GitHub Repo | Docker/patch-fix.js changes |
 | TC-011 | Cross-User Access Denied | Auth/authorization changes |
 | TC-012 | Unauthenticated Access Denied | Auth changes |
 | TC-013 | Main App Access Works | Auth changes (regression) |
