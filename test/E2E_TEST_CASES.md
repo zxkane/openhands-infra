@@ -3876,6 +3876,26 @@ correct nested git repository.
 | 4 | Changes tab shows connected repo files | Modified files from the cloned repo are listed (or empty state if no changes) |
 | 5 | Diff API: path preserves repo context | `%2Fworkspace%2Fproject%2Fopenhands-infra%2F.gitignore` → `project/openhands-infra/.gitignore` |
 | 6 | Diff API returns 200 | Network request shows `/api/git/diff/project/openhands-infra/.gitignore` → 200 |
+| 7 | No-repo: Changes API uses workspace root | `%2Fworkspace%2Fproject` → `.` (no repo connected) |
+| 8 | No-repo: dotfile diff uses workspace root | `%2Fworkspace%2Fproject%2F.gitignore` → `./.gitignore` (not `project/.gitignore`) |
+| 9 | No-repo: clicking .gitignore shows diff | Diff view renders file content without "Internal Server Error" |
+
+### No-Repo Dotfile Regression Test
+
+When no repo is connected, the workspace root has `.gitignore` from `git init /workspace`. Clicking
+it to view the diff must NOT produce "Internal Server Error: File does not exist: /mnt/efs/project/.gitignore".
+
+1. Create a new scratch conversation (no repo connected)
+2. Wait for sandbox to start and Changes tab to show `.gitignore`
+3. Click `.gitignore` to expand the diff
+4. Verify console log shows correct rewrite:
+   ```
+   XHR patched: https://<ip>:8000/api/git/diff/%2Fworkspace%2Fproject%2F.gitignore
+             -> https://<host>/runtime/<convId>/8000/api/git/diff/./.gitignore
+   ```
+   - The path must be `./.gitignore` (dotfile treated as file in workspace root)
+   - NOT `project/.gitignore` (dotfile incorrectly treated as repo name)
+5. Verify diff view renders the `.gitignore` content without errors
 
 ### Alternative: Full Flow with Connected Repo
 
@@ -3908,6 +3928,8 @@ mcp__chrome-devtools__evaluate_script({
 - The frontend sends paths in two forms:
   - Changes API: `%2Fworkspace%2Fproject%2F<repo>` or bare `<repo>` → normalized to `project/<repo>`
   - Diff API: `%2Fworkspace%2Fproject%2F<repo>%2F<file>` or `<repo>%2F<file>` → normalized to `project/<repo>/<file>`
+- **Dotfile distinction**: Repo names never start with `.`. Segments starting with `.` (e.g., `.gitignore`, `.env`)
+  are treated as files in the workspace root, not repo names. `%2Fworkspace%2Fproject%2F.gitignore` → `./.gitignore`
 - The agent-server WORKDIR is `/workspace`, so `project/<repo>` resolves to `/workspace/project/<repo>/` — the cloned repo directory
 - `git init /workspace/project` was removed from the sandbox entrypoint to avoid creating an unnecessary intermediate git repo
   that would shadow the cloned repo's changes
