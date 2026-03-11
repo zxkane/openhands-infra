@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-11
+
+### Added
+
+#### Sandboxes
+- **Startup timing instrumentation and SOCI support** (#58)
+  - Added structured timing logs (`sandbox-startup-timing`) to benchmark sandbox startup phases in `/start` and `/resume` routes.
+  - Integrated SOCI v2 index generation via `soci convert` for Fargate lazy image loading (requires `soci` CLI >= v0.10).
+  - Introduced `sandboxSociImageUri` CDK context parameter for SOCI-enabled sandbox image override.
+  - Exported sandbox image ECR URI as `CfnOutput` for SOCI index generation scripts.
+
+### Changed
+
+#### Documentation
+- **Improved README for discoverability and engagement** (#60)
+  - Restructured README to include a hero section, badges, and explicit value propositions.
+  - Transformed features list into an emoji-tagged Key Features section for easier scanning.
+  - Enhanced comparison tables and quick links for first-time visitor comprehension.
+
+### Fixed
+
+#### Docker
+- **Correct VS Code port mapping from 60001 to 8001** (#62)
+  - Resolved 502 runtime subdomain errors caused by incorrect port mapping (`60001` → `8001`) in `patch-exposed-urls.py`.
+  - Fixed `can_connect(ip, 60001)` requests that failed to establish upstream connections due to mismatched port configurations in the agent-server SDK.
+
+- **Preserve project/<repo> path for nested repo git changes** (#61)
+  - Corrected empty Changes tab for conversations linked to GitHub repositories.
+  - Updated `normalizeGitUrl()` to preserve `project/<repo>` paths for accurate nested repo resolution.
+  - Removed unnecessary intermediate `git init /workspace/project` repo creation shadowing actual repo changes.
+
+- **Normalize git API paths for connected repos** (#59)
+  - Fixed 500 errors in git Changes tab when connecting GitHub repositories to conversations.
+  - Adjusted `patch-fix.js` to properly normalize workspace paths containing nested repo directories.
+
+[1.2.0]: https://github.com/zxkane/openhands-infra/compare/v1.1.0...v1.2.0
+
 ## [1.1.0] - 2026-03-06
 
 ### Added
