@@ -7,7 +7,7 @@ the correct port for each service.
 
 The VSCODE exposed URL should use the agent-server's /api/vscode/url
 endpoint to get the real VS Code URL, since VS Code runs on a different
-port (60001) than the agent-server (8000).
+port (8001, the agent-server SDK default) than the agent-server (8000).
 """
 import sys
 
@@ -36,7 +36,7 @@ NEW = '''def _build_service_url(url: str, service_name: str):
     # https://{port}-{convId}.runtime.{subdomain}.{domain}/
     # Using localhost instead of VPC IP ensures the URL goes through
     # the frontend rewriter → CloudFront → ALB → OpenResty → sandbox
-    _port_map = {'vscode': 60001, 'work-1': 12000, 'work-2': 12001}
+    _port_map = {'vscode': 8001, 'work-1': 12000, 'work-2': 12001}
     port = _port_map.get(service_name)
     if port:
         return f'http://localhost:{port}'
@@ -46,14 +46,8 @@ NEW = '''def _build_service_url(url: str, service_name: str):
 
 if OLD in content:
     content = content.replace(OLD, NEW)
-    # Also fix VS Code folder path to /workspace (not /workspace/project)
-    # for consistency with Changes panel which shows /workspace/ level git changes
-    content = content.replace(
-        "folder=%2Fworkspace%2Fproject",
-        "folder=%2Fworkspace"
-    )
     with open(SERVICE_FILE, "w") as f:
         f.write(content)
-    print("Patch 32: Fixed _build_service_url + VS Code folder path for Fargate")
+    print("Patch 32: Fixed _build_service_url for Fargate")
 else:
     print("WARNING: Patch 32 pattern not found in remote_sandbox_service.py")
