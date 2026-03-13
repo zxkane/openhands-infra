@@ -109,6 +109,7 @@ jobs:
             checkov-report.json
             npm-audit.json
             security-findings.json
+          retention-days: 3
 
       - name: Comment PR with security summary
         if: github.event_name == 'pull_request'
@@ -262,3 +263,4 @@ jobs:
         with:
           name: security-summary
           path: security-summary.md
+          retention-days: 3
