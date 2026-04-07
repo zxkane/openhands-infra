@@ -48,6 +48,7 @@ NEW = '''def _build_service_url(url: str, service_name: str, runtime_id: str) ->
     # Patch 32: Use localhost:port for Fargate sandbox URLs
     # The frontend (patch-fix.js) rewrites localhost:{port} to
     # https://{port}-{convId}.runtime.{subdomain}.{domain}/
+    from urllib.parse import urlparse
     _port_map = {'vscode': 60001, 'work-1': 12000, 'work-2': 12001}
     port = _port_map.get(service_name)
     if port:
