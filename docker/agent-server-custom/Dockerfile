@@ -20,7 +20,7 @@ RUN pip install uv
 
 # Clone the OpenHands SDK repository
 WORKDIR /build
-RUN git clone --depth 1 --branch v1.11.5 https://github.com/OpenHands/software-agent-sdk.git .
+RUN git clone --depth 1 --branch v1.15.0 https://github.com/OpenHands/software-agent-sdk.git .
 
 # Copy and run SDK patches
 # Patches 23-26: Handle invalid/masked secrets during conversation resume
@@ -193,7 +193,7 @@ RUN id -u openhands 2>/dev/null || useradd -m -s /bin/bash openhands
 COPY --from=builder /build/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
 
 # Copy VSCode server from official agent-server image
-COPY --from=ghcr.io/openhands/agent-server:0b7ccc9-python /openhands/.openvscode-server /openhands/.openvscode-server
+COPY --from=ghcr.io/openhands/agent-server:1.15.0-python /openhands/.openvscode-server /openhands/.openvscode-server
 
 # Set permissions
 RUN chown -R openhands:openhands /openhands && \

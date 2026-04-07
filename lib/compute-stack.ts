@@ -32,8 +32,8 @@ import {
  * Default Docker image versions - update these when new stable versions are released.
  * Latest release: https://github.com/OpenHands/OpenHands/releases
  */
-const DEFAULT_OPENHANDS_VERSION = '1.4.0';
-const DEFAULT_RUNTIME_VERSION = '1.4-nikolaik';
+const DEFAULT_OPENHANDS_VERSION = '1.6.0';
+const DEFAULT_RUNTIME_VERSION = '1.6-nikolaik';
 
 /**
  * Read OpenHands config.toml from the config directory.

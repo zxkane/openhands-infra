@@ -6,20 +6,18 @@
 #
 # Environment variables:
 #   FORK_REPO  - GitHub org/repo (default: zxkane/openhands)
-#   FORK_REF   - Branch or tag   (default: custom-v1.4.0-fargate-r3)
+#   FORK_REF   - Branch or tag   (default: custom-v1.6.0-fargate-r1)
 set -e
 
 FORK_REPO="${FORK_REPO:-zxkane/openhands}"
-# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r3)
-# Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
-# r2: Added resume_conversation() for agent-server registration on conversation resume
-# r3: Bedrock default credential chain, inference profiles, max_output_tokens fix
-FORK_REF="${FORK_REF:-270abfa167248e8802b4f05e7731fd17629b3726}"
+# Pin to commit SHA for reproducible builds (tag: custom-v1.6.0-fargate-r1)
+# Fargate branch: RemoteSandboxService compatible, multi-tenant isolation, Bedrock enhancements
+FORK_REF="${FORK_REF:-016596f076261043d8cef519e47d138974c0dfcf}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
-# 14 upstream Python files modified in the fork (docker_sandbox_service.py removed — no Docker patches needed)
+# 13 upstream Python files modified in the fork
+# Removed from v1.4.0: remote_sandbox_service.py (pod_status fix absorbed upstream)
 FILES="
-openhands/app_server/sandbox/remote_sandbox_service.py
 openhands/app_server/app_conversation/app_conversation_service.py
 openhands/app_server/app_conversation/live_status_app_conversation_service.py
 openhands/app_server/app_conversation/app_conversation_router.py
