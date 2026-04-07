@@ -1470,7 +1470,6 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
                 "Value": "[core]
 workspace_base = "/data/openhands/workspace"
 max_concurrent_conversations = 10
-send_telemetry = false
 conversation_max_age_seconds = 15552000
 default_agent = "CodeActAgent"
 [llm]
