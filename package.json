@@ -45,6 +45,7 @@
   },
   "overrides": {
     "fast-xml-parser": "5.4.1",
-    "minimatch": "10.2.4"
+    "minimatch": "10.2.4",
+    "handlebars": "4.7.9"
   }
 }
