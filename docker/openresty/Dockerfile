@@ -1,6 +1,8 @@
 # OpenResty runtime proxy
 # Routes /runtime/{conversation_id}/{port}/... to sandbox Fargate task IP:port
 # Discovers sandbox IPs via the Sandbox Orchestrator API (Cloud Map DNS)
+# LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
+ARG LAST_UPDATED=2026-04-08
 FROM openresty/openresty:1.27.1.2-alpine-fat
 
 # Upgrade Alpine packages to fix CVEs:
