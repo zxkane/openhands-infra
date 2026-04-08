@@ -1329,7 +1329,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               {
                 "Name": "SANDBOX_RUNTIME_CONTAINER_IMAGE",
                 "Value": {
-                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:c0d52754f0dd74e49028cbe1dc06dc154f755592fa4840c778601400ef829a17",
+                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:6d50db6af4a1010108c5ef8ed623d7114516e939f05e505cbad7c230cea4e744",
                 },
               },
               {
@@ -1351,10 +1351,6 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               {
                 "Name": "USER_AUTH_CLASS",
                 "Value": "openhands.server.user_auth.cognito_user_auth.CognitoUserAuth",
-              },
-              {
-                "Name": "LLM_MODEL",
-                "Value": "bedrock/global.anthropic.claude-sonnet-4-6",
               },
               {
                 "Name": "LLM_AWS_REGION_NAME",
@@ -1401,7 +1397,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "AGENT_SERVER_IMAGE_TAG",
-                "Value": "b909bf647b340b1f9a3227de0f347c3cf51d7a5ccbf840bee718ef9b7579ad5e",
+                "Value": "2f8488ba6943116de97881d9999741e4636f108c6df72b5bee8c7e3f55ddd238",
               },
               {
                 "Name": "AGENT_ENABLE_BROWSING",
@@ -1470,7 +1466,6 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
                 "Value": "[core]
 workspace_base = "/data/openhands/workspace"
 max_concurrent_conversations = 10
-send_telemetry = false
 conversation_max_age_seconds = 15552000
 default_agent = "CodeActAgent"
 [llm]
@@ -1507,7 +1502,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:ee46f00a1dbd4a279611aea0978d01d2261603681673d2e968c34a9d647ebe99",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:deab8f475177f25208ab4b7741db6dbb9792a3e3dbf72f508d3f3847e25ea69e",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
@@ -1726,7 +1721,7 @@ security_analyzer = "llm"",
         "Name": "/openhands/docker/openhands-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.4.0",
+        "Value": "1.6.0",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -1872,7 +1867,7 @@ security_analyzer = "llm"",
               "Timeout": 5,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:da11d90c0714674cdb360dd40386637cbe0b0a461143f140249d216e51bc651f",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:43bbc2171ffe21b8f9e54b816ef24868d6d7bf58985b0c9fb76ae48609050ac6",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
@@ -1966,7 +1961,7 @@ security_analyzer = "llm"",
         "Name": "/openhands/docker/runtime-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.4-nikolaik",
+        "Value": "1.6-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
     },

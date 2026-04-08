@@ -8,8 +8,7 @@ workspace_base = "/data/openhands/workspace"
 # Maximum number of concurrent conversations
 max_concurrent_conversations = 10
 
-# Disable anonymous usage data collection
-send_telemetry = false
+# NOTE: send_telemetry removed in v1.6.0 (no longer a valid config key)
 
 # Maximum age of a conversation in seconds (180 days)
 # Default is 10 days (864000), we extend to 180 days for better user experience

@@ -42,16 +42,21 @@ const lambdaClient = config.deletionLambdaArn
 // Helpers
 // ========================================
 
-/** Maps SandboxStatus to the API status string returned to callers. */
+/** Maps SandboxStatus to the API status string returned to callers.
+ * Values must match the upstream RemoteSandboxService.STATUS_MAPPING in
+ * openhands/app_server/sandbox/remote_sandbox_service.py:
+ *   running → RUNNING, starting → STARTING, paused → PAUSED,
+ *   stopped → MISSING, error → ERROR
+ */
 const STATUS_MAP: Record<SandboxStatus, string> = {
   RUNNING: 'running',
-  STARTING: 'pending',
-  WARM: 'pending',
-  CLAIMED: 'pending',
+  STARTING: 'starting', // upstream expects 'starting', not 'pending'
+  WARM: 'starting',
+  CLAIMED: 'starting',
   PAUSED: 'paused',    // App maps 'paused' → SandboxStatus.PAUSED → ConversationStatus.STOPPED (resumable)
   STOPPED: 'paused',   // Also resumable — EFS data persists, only the ECS task stopped
   ARCHIVED: 'stopped', // App maps 'stopped' → SandboxStatus.MISSING → ConversationStatus.ARCHIVED (not resumable)
-  ERROR: 'failed',
+  ERROR: 'error',      // upstream expects 'error', not 'failed'
 };
 
 /** Maps SandboxStatus to the pod_status string returned to callers. */

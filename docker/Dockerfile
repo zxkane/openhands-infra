@@ -15,28 +15,25 @@
 
 # Pin to specific version for stability
 # Check https://github.com/All-Hands-AI/OpenHands/releases for latest releases
-ARG OPENHANDS_VERSION=1.4.0
+# LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
+ARG LAST_UPDATED=2026-04-08
+ARG OPENHANDS_VERSION=1.6.0
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
 
 # Upgrade system packages to fix CVEs (openssl, gnutls28, etc.)
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 # Install boto3 for AWS Bedrock support (required by litellm for AWS authentication)
-# Upgrade openhands-tools to match agent-server-custom SDK (v1.11.5)
-# Without this, EventPage.model_validate fails on BrowserStartRecordingTool/BrowserStopRecordingTool
-# because the app-server's openhands-tools 1.11.4 doesn't know these tool types added in 1.11.5.
-# This breaks event refresh entirely, preventing S3EventService from persisting any events.
-RUN pip install --no-cache-dir boto3 openhands-tools==1.11.5
+# Upgrade openhands-tools to match agent-server-custom SDK (v1.15.0)
+RUN pip install --no-cache-dir boto3 openhands-tools==1.15.0
 
 # ─── Build-time: Download patched upstream files from fork ───────────────────
 # Replaces the old apply-patch.sh (2000+ line regex patching at startup).
 # The fork (zxkane/openhands) has clean per-feature commits against the release tag.
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
-# Pin to commit SHA for reproducible builds (tag: custom-v1.4.0-fargate-r3)
-# Fargate branch: Docker-specific patches removed, RemoteSandboxService compatible
-# r2: Added resume_conversation() for agent-server registration on conversation resume
-# r3: Bedrock default credential chain, inference profiles, max_output_tokens fix
-ARG FORK_REF=270abfa167248e8802b4f05e7731fd17629b3726
+# Pin to commit SHA for reproducible builds (tag: custom-v1.6.0-fargate-r1)
+# Fargate branch: RemoteSandboxService compatible, multi-tenant isolation, Bedrock enhancements
+ARG FORK_REF=7a481ec3a7ec071851a3a854bd0c76b338c88e7b
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
@@ -58,10 +55,6 @@ COPY user_config_loader.py /app/openhands/server/user_config_loader.py
 # Store data at users/{user_id}/settings.json and users/{user_id}/secrets.json
 COPY s3_settings_store.py /app/openhands/storage/settings/
 COPY s3_secrets_store.py /app/openhands/storage/secrets/
-
-# S3-backed event service for persistent V1 conversation events
-# Replaces FilesystemEventService to survive Fargate task restarts and archival
-COPY s3_event_service.py /app/openhands/app_server/event/
 
 # Multi-tenant conversation isolation (user_id-based filtering)
 COPY cognito_sql_conversation_info_service.py /app/openhands/app_server/app_conversation/

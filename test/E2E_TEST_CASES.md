@@ -3416,6 +3416,47 @@ Compute/Docker changes (triggered by `compute-stack.ts`, `security-stack.ts`, `d
    // Expected: contains "bedrock/" prefix and "sonnet-4-6"
    ```
 
+7. **Regression: Verify user model selection is passed to conversation (not overridden by env var)**
+   ```javascript
+   // Save a non-default model via API
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       await fetch('/api/settings', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ llm_model: 'bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0' })
+       });
+       return (await fetch('/api/settings').then(r => r.json())).llm_model;
+     }`
+   })
+   // Expected: "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+   // Start a new conversation
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}", type: "url" })
+   mcp__chrome-devtools__wait_for({ text: "New Conversation", timeout: 10000 })
+   mcp__chrome-devtools__click({ uid: "<new-conversation-button>" })
+   mcp__chrome-devtools__wait_for({ text: "What do you want", timeout: 120000 })
+
+   // Ask the agent to check LLM_MODEL env var in sandbox
+   mcp__chrome-devtools__type_text({ text: "Run: echo $LLM_MODEL", submitKey: "Enter" })
+   // Wait for response
+   mcp__chrome-devtools__wait_for({ text: "no output", timeout: 120000 })
+   // Expected: LLM_MODEL env var is empty (not hardcoded to sonnet)
+   // The model should be passed via StartConversationRequest, not env var
+
+   // Restore default model
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       await fetch('/api/settings', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ llm_model: 'bedrock/global.anthropic.claude-sonnet-4-6' })
+       });
+       return 'restored';
+     }`
+   })
+   ```
+
 ### Acceptance Criteria
 
 | # | Criteria | Verification |
@@ -3426,6 +3467,7 @@ Compute/Docker changes (triggered by `compute-stack.ts`, `security-stack.ts`, `d
 | 4 | Model change persists | Selected model saved and used for new conversations |
 | 5 | Agent responds with changed model | New conversation works with non-default model |
 | 6 | First-time auto-settings | `/api/settings` returns 200 with Bedrock model for new users |
+| 7 | **Model not overridden by env var** | `LLM_MODEL` env var is empty in sandbox; model comes from user settings via StartConversationRequest |
 
 ---
 

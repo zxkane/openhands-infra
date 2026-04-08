@@ -1,12 +1,11 @@
 # OpenResty runtime proxy
 # Routes /runtime/{conversation_id}/{port}/... to sandbox Fargate task IP:port
 # Discovers sandbox IPs via the Sandbox Orchestrator API (Cloud Map DNS)
-FROM openresty/openresty:1.27.1.2-alpine-fat
+# LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
+ARG LAST_UPDATED=2026-04-08
+FROM openresty/openresty:1.29.2.3-alpine-fat
 
-# Upgrade Alpine packages to fix CVEs:
-#   openssl  3.5.4 → 3.5.5 (CVE-2025-15467, CVE-2025-69420, CVE-2025-69421, etc.)
-#   libpng   1.6.54 → 1.6.55 (CVE-2026-25646)
-#   busybox  1.37.0-r19 → 1.37.0-r20 (CVE-2025-46394, CVE-2024-58251)
+# Upgrade Alpine packages to pick up latest security patches
 RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
 
 # Install lua-resty-http for Orchestrator API communication

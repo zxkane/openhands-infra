@@ -32,8 +32,8 @@ import {
  * Default Docker image versions - update these when new stable versions are released.
  * Latest release: https://github.com/OpenHands/OpenHands/releases
  */
-const DEFAULT_OPENHANDS_VERSION = '1.4.0';
-const DEFAULT_RUNTIME_VERSION = '1.4-nikolaik';
+const DEFAULT_OPENHANDS_VERSION = '1.6.0';
+const DEFAULT_RUNTIME_VERSION = '1.6-nikolaik';
 
 /**
  * Read OpenHands config.toml from the config directory.
@@ -431,7 +431,9 @@ export class ComputeStack extends cdk.Stack {
       LOG_ALL_EVENTS: 'true',
       HIDE_LLM_SETTINGS: 'false',
       USER_AUTH_CLASS: 'openhands.server.user_auth.cognito_user_auth.CognitoUserAuth',
-      LLM_MODEL: 'bedrock/global.anthropic.claude-sonnet-4-6',
+      // LLM_MODEL removed — model is configured via config.toml [llm].model
+      // and overridden per-user via Settings.llm_model (saved in S3).
+      // Hardcoding LLM_MODEL env var would override user's model selection.
       LLM_AWS_REGION_NAME: config.region,
       AWS_REGION: config.region,
       AWS_DEFAULT_REGION: config.region,

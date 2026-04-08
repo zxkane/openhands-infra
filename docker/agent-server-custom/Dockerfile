@@ -6,6 +6,8 @@
 # Runtime patches are in docker/apply-patch.sh for the OpenHands container.
 
 # Stage 1: Build the binary
+# LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
+ARG LAST_UPDATED=2026-04-08
 FROM python:3.12-slim-bookworm AS builder
 
 # Install build dependencies
@@ -20,10 +22,10 @@ RUN pip install uv
 
 # Clone the OpenHands SDK repository
 WORKDIR /build
-RUN git clone --depth 1 --branch v1.11.5 https://github.com/OpenHands/software-agent-sdk.git .
+RUN git clone --depth 1 --branch v1.15.0 https://github.com/OpenHands/software-agent-sdk.git .
 
 # Copy and run SDK patches
-# Patches 23-26: Handle invalid/masked secrets during conversation resume
+# Patches 23, 25-27: Handle invalid/masked secrets + Bedrock max_output_tokens
 # See apply-sdk-patches.py for detailed documentation
 COPY apply-sdk-patches.py /build/
 RUN python3 /build/apply-sdk-patches.py /build
@@ -193,7 +195,7 @@ RUN id -u openhands 2>/dev/null || useradd -m -s /bin/bash openhands
 COPY --from=builder /build/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
 
 # Copy VSCode server from official agent-server image
-COPY --from=ghcr.io/openhands/agent-server:0b7ccc9-python /openhands/.openvscode-server /openhands/.openvscode-server
+COPY --from=ghcr.io/openhands/agent-server:1.15.0-python /openhands/.openvscode-server /openhands/.openvscode-server
 
 # Set permissions
 RUN chown -R openhands:openhands /openhands && \

@@ -125,25 +125,17 @@ Dual storage architecture -- app-server writes to S3 (authority), sandbox SDK wr
 | Data Type | Storage | Written By | Notes |
 |-----------|---------|-----------|-------|
 | Conversation metadata | Aurora PostgreSQL | App server | User ID, title, timestamps |
-| V1 conversation events | **S3** (`FILE_STORE=s3`) | App server via `S3EventService` | Authority for UI display, persists across task restarts |
+| V1 conversation events | **S3** (`FILE_STORE=s3`) | App server via `AwsEventService` (upstream) | Authority for UI display, persists across task restarts |
 | User settings / secrets | S3 | App server | LLM config, API keys |
 | Workspace code | **EFS** | Sandbox agent-server | `/workspace/project` persisted via access point |
 | SDK conversation cache | **EFS** | Sandbox agent-server SDK | `events/`, `base_state.json` -- LLM context restoration |
 
-### V1 Event Persistence (`S3EventService`)
+### V1 Event Persistence (`AwsEventService`)
 
-V1 conversation events are stored in S3 via `S3EventService` (custom module in `docker/s3_event_service.py`):
+V1 conversation events are stored in S3 via `AwsEventService` (upstream since v1.6.0):
 - **S3 path**: `users/{user_id}/v1_conversations/{conv_id_hex}/{event_id_hex}.json`
-- **Wired in** at container startup by Patch 33 in `apply-startup.sh` (modifies `config.py` to use `S3EventServiceInjector` when `FILE_STORE=s3`)
-- **Follows** the same pattern as upstream `GoogleCloudEventService`
-- **Without this**: The default `FilesystemEventService` writes to the container's ephemeral filesystem (`/root/.openhands/`), which is lost on Fargate task restart
-
-| Scenario | Without S3EventService | With S3EventService |
-|----------|----------------------|---------------------|
-| Active conversation | Events in ephemeral filesystem | Events in S3 |
-| App task restart | **Events lost** | Events load from S3 |
-| ARCHIVED conversation | **History permanently lost** | History loads from S3 |
-| Sandbox stopped | No event access | Events from S3 |
+- **Configured automatically** when `FILE_STORE=s3` via `get_storage_provider()` in `config.py`
+- **Replaces** the custom `S3EventService` module used in v1.4.0 (same S3 path format, fully compatible)
 
 ### SDK Conversation Cache (`OH_CONVERSATIONS_PATH`)
 
@@ -207,7 +199,6 @@ STARTING → RUNNING → (idle timeout)    → PAUSED  → (retention days) → 
 | `lib/sandbox-stack.ts` | Sandbox orchestration (DynamoDB, Lambda, Fargate tasks) |
 | `config/config.toml` | OpenHands app config (LLM, sandbox) |
 | `config/sandbox-aws-policy.json` | Customizable IAM policy for sandbox |
-| `docker/s3_event_service.py` | S3-backed V1 conversation event persistence |
 | `docker/patch-fix.js` | Frontend patches (URL rewriting) |
 | `docker/openresty/` | OpenResty proxy container (Fargate service) |
 | `lambda/user-config/` | User config API Lambda |
