@@ -8,10 +8,12 @@ the final binary is immutable.
 
 Patches:
   - Patch 23: Skip invalid/masked secrets during conversation resume (AgentContext)
-  - Patch 24: Use exclude_none=True in model_dump() (conversation_service)
   - Patch 25: Filter invalid secrets from JSON before model_validate_json
   - Patch 26: Filter invalid secret_sources from ConversationState
   - Patch 27: Fix Bedrock max_output_tokens when litellm reports context window as output limit
+
+Removed:
+  - Patch 24: (SDK v1.15.0 already uses model_dump(mode="json"), no longer needed)
 
 Usage:
   python3 apply-sdk-patches.py /path/to/build/directory
@@ -131,42 +133,6 @@ def patch_23_agent_context(build_dir: Path) -> bool:
     print("Patch 23: Successfully patched agent_context.py")
     return True
 
-
-def patch_24_conversation_service_model_dump(build_dir: Path) -> bool:
-    """
-    Patch 24: Fix _compose_conversation_info to exclude None values.
-
-    When the frontend polls /api/conversations, the state is dumped to dict
-    and re-validated. Secrets with None values cause validation errors.
-    """
-    conv_service_file = build_dir / "openhands-agent-server/openhands/agent_server/conversation_service.py"
-
-    if not conv_service_file.exists():
-        print(f"ERROR: Patch 24 - File not found: {conv_service_file}")
-        return False
-
-    content = conv_service_file.read_text()
-
-    # Fix: **state.model_dump() -> **state.model_dump(exclude_none=True)
-    # In SDK v1.15.0+, model_dump already has mode="json" arg — skip if args present
-    old_pattern = r'(\*\*state\.model_dump\(\))'
-    if re.search(old_pattern, content):
-        content = re.sub(
-            old_pattern,
-            r'**state.model_dump(exclude_none=True)',
-            content
-        )
-        print("Patch 24: Updated _compose_conversation_info to use exclude_none=True")
-    else:
-        alt_pattern = r'(\*\*state\.model_dump\([^)]*\))'
-        if re.search(alt_pattern, content):
-            print("Patch 24: model_dump() already has arguments (likely v1.15.0+), skipping")
-        else:
-            print("Patch 24: No state.model_dump() found (pattern may have changed), skipping")
-
-    conv_service_file.write_text(content)
-    print("Patch 24: Successfully patched conversation_service.py")
-    return True
 
 
 def patch_25_json_preprocessing(build_dir: Path) -> bool:
@@ -485,7 +451,7 @@ def main():
 
     # Apply all patches
     results.append(("Patch 23", patch_23_agent_context(build_dir)))
-    results.append(("Patch 24", patch_24_conversation_service_model_dump(build_dir)))
+    # Patch 24 removed — SDK v1.15.0 already uses model_dump(mode="json")
     results.append(("Patch 25", patch_25_json_preprocessing(build_dir)))
     results.append(("Patch 26", patch_26_conversation_state(build_dir)))
     results.append(("Patch 27", patch_27_bedrock_max_output_tokens(build_dir)))

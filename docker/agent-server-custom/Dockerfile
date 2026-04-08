@@ -25,7 +25,7 @@ WORKDIR /build
 RUN git clone --depth 1 --branch v1.15.0 https://github.com/OpenHands/software-agent-sdk.git .
 
 # Copy and run SDK patches
-# Patches 23-26: Handle invalid/masked secrets during conversation resume
+# Patches 23, 25-27: Handle invalid/masked secrets + Bedrock max_output_tokens
 # See apply-sdk-patches.py for detailed documentation
 COPY apply-sdk-patches.py /build/
 RUN python3 /build/apply-sdk-patches.py /build
