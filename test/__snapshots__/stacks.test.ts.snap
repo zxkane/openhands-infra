@@ -1506,7 +1506,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:7ce5f7d905b5496588f3041de72742f65b724ef00c89f139ca5866f79d22077a",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:deab8f475177f25208ab4b7741db6dbb9792a3e3dbf72f508d3f3847e25ea69e",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
@@ -1871,7 +1871,7 @@ security_analyzer = "llm"",
               "Timeout": 5,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:dd108313c869d9b905de45e22977eef2ba447131a727d104d8d4719d1a75dbeb",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:43bbc2171ffe21b8f9e54b816ef24868d6d7bf58985b0c9fb76ae48609050ac6",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
