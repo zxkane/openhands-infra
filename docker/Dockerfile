@@ -57,7 +57,6 @@ COPY s3_settings_store.py /app/openhands/storage/settings/
 COPY s3_secrets_store.py /app/openhands/storage/secrets/
 
 # Multi-tenant conversation isolation (user_id-based filtering)
-# NOTE: s3_event_service.py removed — upstream 1.6.0 has native AwsEventService
 COPY cognito_sql_conversation_info_service.py /app/openhands/app_server/app_conversation/
 
 # Frontend JavaScript patches (URL rewriting, auto-close settings modal)

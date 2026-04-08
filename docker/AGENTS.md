@@ -13,7 +13,6 @@ This document covers the Docker container configuration, OpenResty proxy, and pa
 | `cognito_user_auth.py` | CognitoUserAuth class for OpenHands |
 | `cognito_file_conversation_store.py` | User-scoped conversation storage |
 | `cognito_sql_conversation_info_service.py` | Multi-tenant conversation isolation |
-| `s3_event_service.py` | S3-backed V1 conversation event persistence |
 | `s3_settings_store.py` | User-scoped settings store |
 | `s3_secrets_store.py` | User-scoped secrets store |
 | `user_config_loader.py` | User MCP configuration loader |
@@ -81,7 +80,6 @@ Operations that must happen at container startup (not build time):
 | 6 | Swap AuthUserContextInjector import in openhands_cloud | No |
 | 27a | Database migration DDL (add user_id column) | No |
 | 21 | Verify multi-tenant S3 store configuration | **Yes** |
-| 33 | Wire S3EventServiceInjector into config.py | No |
 
 ### SDK Patches (`apply-sdk-patches.py`)
 
