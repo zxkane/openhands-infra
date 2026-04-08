@@ -1353,10 +1353,6 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
                 "Value": "openhands.server.user_auth.cognito_user_auth.CognitoUserAuth",
               },
               {
-                "Name": "LLM_MODEL",
-                "Value": "bedrock/global.anthropic.claude-sonnet-4-6",
-              },
-              {
                 "Name": "LLM_AWS_REGION_NAME",
                 "Value": "us-west-2",
               },
@@ -1401,7 +1397,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "AGENT_SERVER_IMAGE_TAG",
-                "Value": "5017efda35af9a2727656f1624801f1f2248d9c631735d031130e05c06cbd12e",
+                "Value": "2f8488ba6943116de97881d9999741e4636f108c6df72b5bee8c7e3f55ddd238",
               },
               {
                 "Name": "AGENT_ENABLE_BROWSING",

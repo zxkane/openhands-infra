@@ -431,7 +431,9 @@ export class ComputeStack extends cdk.Stack {
       LOG_ALL_EVENTS: 'true',
       HIDE_LLM_SETTINGS: 'false',
       USER_AUTH_CLASS: 'openhands.server.user_auth.cognito_user_auth.CognitoUserAuth',
-      LLM_MODEL: 'bedrock/global.anthropic.claude-sonnet-4-6',
+      // LLM_MODEL removed — model is configured via config.toml [llm].model
+      // and overridden per-user via Settings.llm_model (saved in S3).
+      // Hardcoding LLM_MODEL env var would override user's model selection.
       LLM_AWS_REGION_NAME: config.region,
       AWS_REGION: config.region,
       AWS_DEFAULT_REGION: config.region,
