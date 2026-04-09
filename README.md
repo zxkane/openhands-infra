@@ -508,6 +508,22 @@ npx cdk destroy --all  # Destroy all stacks
 
 Contributions are welcome! Please feel free to submit issues and pull requests.
 
+### AI Agent Skills
+
+This project uses [autonomous-dev-team](https://github.com/zxkane/autonomous-dev-team) skills for AI-assisted development with Claude Code, Kiro CLI, and Codex. Install after cloning:
+
+```bash
+npx skills add zxkane/autonomous-dev-team -s '*' -a claude-code -a kiro-cli -a codex -y
+```
+
+Or restore from the lock file:
+
+```bash
+npx skills experimental_install
+```
+
+These skills enforce TDD, git worktree isolation, PR workflows, and E2E testing. See `CLAUDE.md` for the full workflow.
+
 ## License
 
 This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.

@@ -56,8 +56,30 @@ The 10-step workflow is not a suggestion — every step must be completed:
 - Steps 8-9: Deploy to staging + run E2E tests (use `test/select-e2e-tests.sh`)
 - Step 10: Report ready status (DO NOT MERGE unless user explicitly says to)
 
+## AI Agent Skills Setup
+
+Skills provide structured workflows for AI coding agents. Install once per clone:
+
+```bash
+npx skills add zxkane/autonomous-dev-team -s '*' -a claude-code -a kiro-cli -a codex -y
+```
+
+Or restore from the lock file:
+
+```bash
+npx skills experimental_install
+```
+
+| Skill | Purpose |
+|-------|---------|
+| `autonomous-dev` | Full dev lifecycle: worktree, TDD, PR, CI, review bots, E2E |
+| `autonomous-review` | PR code review, acceptance verification, merge decisions |
+| `autonomous-common` | Shared hooks and scripts (loaded automatically) |
+| `autonomous-dispatcher` | Issue scanning and pipeline orchestration |
+| `create-issue` | Structured GitHub issue creation |
+
 ## Quick Reference
 
-- **Development workflow**: Use `.claude/skills/autonomous-dev/` for PR creation, review comments, reviewer bots
-- **Code review**: Use `.claude/skills/autonomous-review/` for PR review, acceptance verification, merge decisions
-- **Issue creation**: Use `.claude/skills/create-issue/` for creating structured GitHub issues
+- **Development workflow**: Use `/autonomous-dev` for PR creation, review comments, reviewer bots
+- **Code review**: Use `/autonomous-review` for PR review, acceptance verification, merge decisions
+- **Issue creation**: Use `/create-issue` for creating structured GitHub issues
