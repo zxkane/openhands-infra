@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-04-09
+
+### Changed
+
+#### Platform Updates
+- **Upgrade OpenHands from v1.4.0 to v1.6.0** (#65)
+  - Merged 341 upstream commits, upgrading the base OpenHands image, SDK (v1.11.5 → v1.15.0), and runtime.
+  - Removed custom `S3EventService` module — upstream v1.6.0 ships native `AwsEventService` with identical S3 path format, making the custom implementation redundant.
+  - Updated `_build_service_url` patch for new 3-arg signature in v1.6.0 (`url, service_name, runtime_id`).
+  - Aligned orchestrator STATUS_MAP values with upstream expectations (`starting`/`error` instead of `pending`/`failed`).
+  - Removed deprecated `send_telemetry` config key (removed upstream in v1.6.0).
+  - Fork: `custom/v1.6.0-fargate-r1` (20 cherry-picked commits from v1.4.0 fork).
+
+#### Developer Experience
+- **Replace github-workflow skill with autonomous-dev-team** (#66)
+  - Migrated from custom `github-workflow` skill to upstream [autonomous-dev-team](https://github.com/zxkane/autonomous-dev-team) skills.
+  - New skills (`autonomous-dev`, `autonomous-review`, `autonomous-common`, `autonomous-dispatcher`, `create-issue`) support Claude Code, Kiro CLI, and Codex agents.
+  - Install via `npx skills add zxkane/autonomous-dev-team -s '*' -a claude-code -a kiro-cli -a codex -y`.
+
+### Fixed
+
+#### CI/CD
+- **Add retention-days to security scan artifacts** (#64)
+  - Set `retention-days: 3` on security scan artifact uploads to prevent GitHub Actions storage quota exhaustion (was defaulting to 90 days, causing 912 accumulated artifacts).
+
+### Security
+
+- Fixed npm CVEs: handlebars 4.7.9, fast-xml-parser 5.5.10, minimatch 10.2.5, picomatch 4.0.4, path-to-regexp 8.4.2, brace-expansion 5.0.5 (#65)
+
+[1.3.0]: https://github.com/zxkane/openhands-infra/compare/v1.2.0...v1.3.0
+
 ## [1.2.0] - 2026-03-11
 
 ### Added
