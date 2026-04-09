@@ -41,7 +41,6 @@ __pycache__/
 .claude/skills/create-issue
 .kiro/skills/
 .codex/skills/
-skills-lock.json
 
 # Sandbox Orchestrator build artifacts
 services/sandbox-orchestrator/dist/
