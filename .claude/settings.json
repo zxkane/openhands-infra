@@ -11,22 +11,67 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-push-to-main.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/block-push-to-main.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-commit-outside-worktree.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/block-commit-outside-worktree.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-code-simplifier.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-design-canvas.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-pr-review.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-code-simplifier.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-pr-review.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-unit-tests.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/warn-skip-verification.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-shellcheck.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-rebase-before-push.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-test-plan.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/check-test-plan.sh",
             "timeout": 5
           }
         ]
@@ -38,18 +83,54 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-commit-clear.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/post-git-action-clear.sh commit code-simplifier",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-push-clear.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/post-git-action-clear.sh commit design-canvas",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-git-push.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/post-git-action-clear.sh push pr-review",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/post-git-push.sh",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/post-file-edit-reminder.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/post-file-edit-reminder.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/skills/autonomous-common/hooks/verify-completion.sh",
+            "timeout": 10
           }
         ]
       }
