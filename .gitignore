@@ -35,6 +35,14 @@ __pycache__/
 # Git worktrees
 .worktrees/
 
+# Skills (installed via npx skills add)
+.agents/
+.claude/skills/autonomous-*
+.claude/skills/create-issue
+.kiro/skills/
+.codex/skills/
+skills-lock.json
+
 # Sandbox Orchestrator build artifacts
 services/sandbox-orchestrator/dist/
 services/sandbox-orchestrator/node_modules/

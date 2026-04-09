@@ -4,7 +4,7 @@
 
 ## Development Workflow (MANDATORY)
 
-**CRITICAL**: All feature development, bug fixes, and dependency updates MUST strictly follow the `github-workflow` skill.
+**CRITICAL**: All feature development, bug fixes, and dependency updates MUST strictly follow the `autonomous-dev` skill.
 
 ### Mandatory Rules (Hook Enforced)
 
@@ -16,8 +16,8 @@
 ### Rule 1: ALWAYS Invoke the Skill First
 
 Before ANY code changes — features, fixes, refactors, dependency bumps — you MUST:
-1. **Invoke skill**: Use `/github-workflow` or read `.claude/skills/github-workflow/SKILL.md`
-2. **Follow ALL 10 steps** in order — NO shortcuts, NO skipping steps
+1. **Invoke skill**: Use `/autonomous-dev` or read `.claude/skills/autonomous-dev/SKILL.md`
+2. **Follow ALL steps** in order — NO shortcuts, NO skipping steps
 3. **Do NOT merge** - Report status and wait for user decision
 
 **Common violation**: Skipping skill invocation and jumping straight to coding. This causes missed steps (reviewer bot iteration, PR templates, E2E test selection). The skill is not optional guidance — it is the required process.
@@ -58,4 +58,6 @@ The 10-step workflow is not a suggestion — every step must be completed:
 
 ## Quick Reference
 
-- **GitHub workflow**: Use `.claude/skills/github-workflow/` for PR creation, review comments, reviewer bots
+- **Development workflow**: Use `.claude/skills/autonomous-dev/` for PR creation, review comments, reviewer bots
+- **Code review**: Use `.claude/skills/autonomous-review/` for PR review, acceptance verification, merge decisions
+- **Issue creation**: Use `.claude/skills/create-issue/` for creating structured GitHub issues
