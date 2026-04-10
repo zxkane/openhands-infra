@@ -15,12 +15,15 @@ FORK_REPO="${FORK_REPO:-zxkane/openhands}"
 FORK_REF="${FORK_REF:-7a481ec3a7ec071851a3a854bd0c76b338c88e7b}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
-# 14 upstream Python files modified in the fork
+# 17 upstream Python files modified/added in the fork
 FILES="
 openhands/app_server/sandbox/remote_sandbox_service.py
 openhands/app_server/app_conversation/app_conversation_service.py
 openhands/app_server/app_conversation/live_status_app_conversation_service.py
 openhands/app_server/app_conversation/app_conversation_router.py
+openhands/app_server/app_conversation/app_conversation_models.py
+openhands/app_server/app_conversation/hook_loader.py
+openhands/app_server/app_conversation/skill_loader.py
 openhands/app_server/event_callback/webhook_router.py
 openhands/app_server/services/db_session_injector.py
 openhands/server/config/server_config.py
