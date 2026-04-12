@@ -33,6 +33,9 @@ import {
  * Latest release: https://github.com/OpenHands/OpenHands/releases
  */
 const DEFAULT_OPENHANDS_VERSION = '1.6.0';
+// Pin base image to exact manifest digest to prevent Docker build cache from using stale layers.
+// Update: docker manifest inspect docker.openhands.dev/openhands/openhands:<version> | jq '.digest'
+const DEFAULT_OPENHANDS_IMAGE_DIGEST = 'sha256:5c0dc26f467bf8e47a6e76308edb7a30af4084b17e23a3460b5467008b12111b';
 const DEFAULT_RUNTIME_VERSION = '1.6-nikolaik';
 
 /**
@@ -318,6 +321,7 @@ export class ComputeStack extends cdk.Stack {
       platform: Platform.LINUX_ARM64,
       buildArgs: {
         OPENHANDS_VERSION: DEFAULT_OPENHANDS_VERSION,
+        OPENHANDS_IMAGE_DIGEST: DEFAULT_OPENHANDS_IMAGE_DIGEST,
       },
       exclude: [
         'agent-server',
