@@ -16,7 +16,7 @@
 # Pin to specific version for stability
 # Check https://github.com/All-Hands-AI/OpenHands/releases for latest releases
 # LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
-ARG LAST_UPDATED=2026-04-08
+ARG LAST_UPDATED=2026-04-12
 ARG OPENHANDS_VERSION=1.6.0
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
 
