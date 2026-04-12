@@ -15,10 +15,13 @@
 
 # Pin to specific version for stability
 # Check https://github.com/All-Hands-AI/OpenHands/releases for latest releases
-# LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
-ARG LAST_UPDATED=2026-04-12
+# OPENHANDS_IMAGE_DIGEST pins the exact base image content (multi-arch manifest digest).
+# This prevents Docker build cache from silently using a stale base image layer.
+# To update: docker manifest inspect docker.openhands.dev/openhands/openhands:<version>
+# and use the top-level digest (sha256:...) from the manifest list.
 ARG OPENHANDS_VERSION=1.6.0
-FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}
+ARG OPENHANDS_IMAGE_DIGEST=sha256:5c0dc26f467bf8e47a6e76308edb7a30af4084b17e23a3460b5467008b12111b
+FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}@${OPENHANDS_IMAGE_DIGEST}
 
 # Upgrade system packages to fix CVEs (openssl, gnutls28, etc.)
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
