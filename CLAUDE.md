@@ -70,6 +70,12 @@ Or restore from the lock file:
 npx skills experimental_install
 ```
 
+After installing skills, create the hooks symlink for SKILL.md frontmatter hook resolution:
+
+```bash
+ln -sf .claude/skills/autonomous-common/hooks hooks
+```
+
 | Skill | Purpose |
 |-------|---------|
 | `autonomous-dev` | Full dev lifecycle: worktree, TDD, PR, CI, review bots, E2E |
