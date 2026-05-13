@@ -1,6 +1,6 @@
 FROM public.ecr.aws/docker/library/node:24-alpine AS builder
 
-RUN apk -U upgrade --no-cache
+RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN npx tsc
 # Production stage
 FROM public.ecr.aws/docker/library/node:24-alpine
 
-RUN apk -U upgrade --no-cache
+RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
 
 WORKDIR /app
 
