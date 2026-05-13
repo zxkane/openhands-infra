@@ -1,5 +1,7 @@
 FROM public.ecr.aws/docker/library/node:24-alpine AS builder
 
+RUN apk -U upgrade --no-cache
+
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
@@ -11,6 +13,8 @@ RUN npx tsc
 
 # Production stage
 FROM public.ecr.aws/docker/library/node:24-alpine
+
+RUN apk -U upgrade --no-cache
 
 WORKDIR /app
 
