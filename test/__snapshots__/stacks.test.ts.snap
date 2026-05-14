@@ -1329,7 +1329,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               {
                 "Name": "SANDBOX_RUNTIME_CONTAINER_IMAGE",
                 "Value": {
-                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:6f582a364ab5879a4fe0423e5b1a152fe57c8d7ed3a428dbb88804b93e2b9550",
+                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:bc79f5b244ecc004e45131d0b9b4366aec71cabda6dc7b40b22783f26ae4a033",
                 },
               },
               {
@@ -1350,7 +1350,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "USER_AUTH_CLASS",
-                "Value": "openhands.server.user_auth.cognito_user_auth.CognitoUserAuth",
+                "Value": "openhands.app_server.user_auth.cognito_user_auth.CognitoUserAuth",
               },
               {
                 "Name": "LLM_AWS_REGION_NAME",
@@ -1961,7 +1961,7 @@ security_analyzer = "llm"",
         "Name": "/openhands/docker/runtime-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.7-nikolaik",
+        "Value": "latest-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
     },

@@ -37,7 +37,16 @@ const DEFAULT_OPENHANDS_VERSION = '1.7.0';
 // Multi-arch manifest list digest (linux/amd64 + linux/arm64) for openhands/openhands:1.7.0.
 // Refresh: docker buildx imagetools inspect docker.openhands.dev/openhands/openhands:<version>
 const DEFAULT_OPENHANDS_IMAGE_DIGEST = 'sha256:916abcb15cc451d96853bd41c55117bb2ff3de0b9914cdcd861d338055798dc6';
-const DEFAULT_RUNTIME_VERSION = '1.7-nikolaik';
+// Upstream did not publish a `1.7-nikolaik` runtime image — the V0 runtime
+// image is being phased out in favor of V1's agent-server binary (built
+// from source in docker/agent-server-custom/). For Fargate sandboxes the
+// runtime image is still referenced via SANDBOX_RUNTIME_CONTAINER_IMAGE
+// but is not actually launched (RemoteSandboxService uses the agent-server
+// image instead). `latest-nikolaik` is currently identical to `1.6-nikolaik`
+// (same manifest digest), so the bump is a no-op; the version is kept as a
+// recognisable label for future re-pinning if upstream resumes publishing
+// versioned runtime tags.
+const DEFAULT_RUNTIME_VERSION = 'latest-nikolaik';
 
 /**
  * Read OpenHands config.toml from the config directory.
@@ -435,7 +444,11 @@ export class ComputeStack extends cdk.Stack {
       WORKSPACE_BASE: '/data/openhands/workspace',
       LOG_ALL_EVENTS: 'true',
       HIDE_LLM_SETTINGS: 'false',
-      USER_AUTH_CLASS: 'openhands.server.user_auth.cognito_user_auth.CognitoUserAuth',
+      // V1 path (was openhands.server.user_auth.cognito_user_auth.CognitoUserAuth in v1.6).
+      // This env var is read by openhands.server.shared at startup to override
+      // server_config.user_auth_class. It must point at the V1 module our fork
+      // installs into /app/openhands/app_server/user_auth/cognito_user_auth.py.
+      USER_AUTH_CLASS: 'openhands.app_server.user_auth.cognito_user_auth.CognitoUserAuth',
       // LLM_MODEL removed — model is configured via config.toml [llm].model
       // and overridden per-user via Settings.llm_model (saved in S3).
       // Hardcoding LLM_MODEL env var would override user's model selection.
