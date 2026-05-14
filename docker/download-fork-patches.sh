@@ -12,15 +12,13 @@ set -e
 FORK_REPO="${FORK_REPO:-zxkane/openhands}"
 # Pin to commit SHA for reproducible builds (branch: custom/v1.7.0-fargate).
 # v1.7.0 brings the upstream V0 → V1 cleanup: openhands/llm/, openhands/utils/llm.py,
-# openhands/storage/, openhands/core/config/llm_config.py and several
-# openhands/server/config/server_config.py fields are deleted upstream. The fork
-# moves those patches into the SDK fork (see docker/agent-server-custom/apply-sdk-patches.py)
-# or onto V1 paths under openhands/app_server/.
-#
-# TODO(PR #81): pin to the final SHA of custom/v1.7.0-fargate once the fork branch
-# is complete. The current value is the partial cherry-pick checkpoint (17/20
-# commits ported from custom-v1.6.0-fargate-r1).
-FORK_REF="${FORK_REF:-b707ea5cc1a410e9dd26058071a260188da99fc9}"
+# openhands/storage/, openhands/core/config/llm_config.py are deleted upstream.
+# The fork moves the deleted-V0 patches into:
+#   - SDK patches (apply-sdk-patches.py: Patches 28-32 for Bedrock features)
+#   - V1 custom modules COPY'd by Dockerfile (cognito_user_auth.py,
+#     s3_settings_store.py, s3_secrets_store.py — these don't go through this
+#     download because they live in openhands-infra/docker/, not upstream)
+FORK_REF="${FORK_REF:-4e480e79c47fb4c66c94c8176d130abdd6d5d2e9}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
 # Files modified in the v1.7.0 fork branch (verified via GitHub compare API:
@@ -28,28 +26,26 @@ BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 # Do NOT add files here that are not in the fork diff — the base image already has them.
 # Adding unmodified upstream files can break compatibility when the base image updates.
 #
-# Files dropped from v1.6.0 → v1.7.0 (logic moved to SDK fork or removed because
-# the upstream V0 surface no longer exists):
-#   - openhands/server/config/server_config.py     (V0 store-class fields removed upstream)
-#   - openhands/storage/data_models/secrets.py     (storage package collapse — no V1 home needed)
-#   - openhands/llm/bedrock.py                     (entire openhands/llm/ package deleted)
-#   - openhands/llm/llm.py                         (same)
-#   - openhands/core/config/llm_config.py          (deleted; AWS_DEFAULT_REGION moved to SDK Patch 31)
-#   - openhands/utils/llm.py                       (moved upstream to app_server/utils/llm.py;
-#                                                   env-hint detection moved to SDK Patch 32)
+# Files dropped from v1.6.0 (logic moved to SDK fork or removed because the
+# upstream V0 surface no longer exists):
+#   - openhands/storage/data_models/secrets.py     (storage package collapse;
+#                                                   secret-resume validators moved
+#                                                   to SDK patches 23/25/26)
+#   - openhands/llm/bedrock.py                     (entire openhands/llm/ deleted;
+#                                                   logic moved to SDK Patches 28/29)
+#   - openhands/llm/llm.py                         (same; SDK Patch 30)
+#   - openhands/core/config/llm_config.py          (deleted; AWS_DEFAULT_REGION
+#                                                   moved to SDK Patch 31)
+#   - openhands/utils/llm.py                       (moved upstream to
+#                                                   app_server/utils/llm.py;
+#                                                   env-hint detection moved
+#                                                   to SDK Patch 32)
 #
-# Files added net-new for v1.7.0 (V1 ports of V0 Cognito / S3 stores; these don't
-# exist upstream — the fork branch must create them under openhands/app_server/).
-# They are intentionally NOT in FILES yet because the fork branch is still in
-# progress (only 17/20 v1.6.0 commits cherry-picked; V1 store ports pending).
-# Add the lines below once the fork branch creates them and FORK_REF is bumped:
-#
-#   openhands/app_server/user_auth/cognito_user_auth.py
-#   openhands/app_server/settings/cognito_s3_settings_store.py
-#   openhands/app_server/secrets/cognito_s3_secrets_store.py
-#
-# When you add them, also rewrite Patch 21 in apply-startup.sh to grep for the
-# new V1 paths (V0 grep for s3_settings_store.S3SettingsStore would silently pass).
+# Files retained for v1.7.0 (still patched on the fork):
+#   - openhands/server/config/server_config.py     (V0-tagged but the
+#                                                   settings/secret/user_auth
+#                                                   class fields are still active
+#                                                   and drive get_impl())
 FILES="
 openhands/app_server/sandbox/remote_sandbox_service.py
 openhands/app_server/app_conversation/app_conversation_service.py
@@ -59,6 +55,8 @@ openhands/app_server/event_callback/webhook_router.py
 openhands/app_server/services/db_session_injector.py
 openhands/app_server/config.py
 openhands/app_server/event_callback/sql_event_callback_service.py
+openhands/app_server/secrets/secrets_models.py
+openhands/server/config/server_config.py
 "
 
 FAILED=""

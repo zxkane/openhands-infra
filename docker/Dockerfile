@@ -37,31 +37,34 @@ RUN pip install --no-cache-dir boto3 openhands-tools==1.19.1
 # The fork (zxkane/openhands) has clean per-feature commits against the release tag.
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
 # Pin to commit SHA for reproducible builds (branch: custom/v1.7.0-fargate).
-# Fargate branch: RemoteSandboxService compatible, multi-tenant isolation, Bedrock enhancements.
-# TODO(PR #81): bump to the final SHA once the v1.7.0 fork branch is complete
-# (current value is the partial cherry-pick checkpoint, 17/20 commits ported).
-ARG FORK_REF=b707ea5cc1a410e9dd26058071a260188da99fc9
+# Fargate branch: RemoteSandboxService compatible, multi-tenant isolation, V1 Cognito wiring.
+ARG FORK_REF=4e480e79c47fb4c66c94c8176d130abdd6d5d2e9
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
 # ─── Custom modules (NEW files, not upstream modifications) ──────────────────
+#
+# v1.7.0: COPY destinations migrated to V1 paths (openhands.app_server.*).
+# Upstream deleted openhands/server/user_auth/ and openhands/storage/{settings,
+# secrets,conversation}/ in v1.7.0. The custom modules now extend the V1 ABCs
+# (UserAuth / SettingsStore / SecretsStore) and live alongside the upstream
+# defaults under openhands/app_server/{user_auth,settings,secrets}/.
+# cognito_file_conversation_store.py is dropped — there is no V1 equivalent;
+# multi-tenant conversation isolation runs through CognitoSQLAppConversationInfoService.
 
 # Patched auth_user_context.py for webhook authentication from Docker internal network
 COPY patched/ /app/patched/
 
-# Cognito user authentication (Lambda@Edge header-based identity)
-COPY cognito_user_auth.py /app/openhands/server/user_auth/
-
-# User-scoped conversation storage (S3 path: users/{user_id}/conversations/{sid}/)
-COPY cognito_file_conversation_store.py /app/openhands/storage/conversation/
+# Cognito user authentication (Lambda@Edge header-based identity) — V1 path
+COPY cognito_user_auth.py /app/openhands/app_server/user_auth/
 
 # User config loader for MCP configurations from S3
 COPY user_config_loader.py /app/openhands/server/user_config_loader.py
 
 # User-scoped settings and secrets stores for multi-tenancy (CRITICAL SECURITY)
 # Store data at users/{user_id}/settings.json and users/{user_id}/secrets.json
-COPY s3_settings_store.py /app/openhands/storage/settings/
-COPY s3_secrets_store.py /app/openhands/storage/secrets/
+COPY s3_settings_store.py /app/openhands/app_server/settings/
+COPY s3_secrets_store.py /app/openhands/app_server/secrets/
 
 # Multi-tenant conversation isolation (user_id-based filtering)
 COPY cognito_sql_conversation_info_service.py /app/openhands/app_server/app_conversation/
