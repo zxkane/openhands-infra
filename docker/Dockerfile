@@ -20,9 +20,9 @@
 # To update: docker manifest inspect docker.openhands.dev/openhands/openhands:<version>
 # and use the top-level digest (sha256:...) from the manifest list.
 ARG OPENHANDS_VERSION=1.7.0
-# TODO(PR #81): replace with the actual sha256 of openhands/openhands:1.7.0 once
-# the image is pulled in CI / staging — see lib/compute-stack.ts for the same TODO.
-ARG OPENHANDS_IMAGE_DIGEST=sha256:5c0dc26f467bf8e47a6e76308edb7a30af4084b17e23a3460b5467008b12111b
+# Multi-arch manifest list digest (linux/amd64 + linux/arm64) for openhands/openhands:1.7.0.
+# Refresh: docker buildx imagetools inspect docker.openhands.dev/openhands/openhands:<version>
+ARG OPENHANDS_IMAGE_DIGEST=sha256:916abcb15cc451d96853bd41c55117bb2ff3de0b9914cdcd861d338055798dc6
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}@${OPENHANDS_IMAGE_DIGEST}
 
 # Upgrade system packages to fix CVEs (openssl, gnutls28, etc.)
