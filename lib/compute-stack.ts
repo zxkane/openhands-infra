@@ -32,11 +32,14 @@ import {
  * Default Docker image versions - update these when new stable versions are released.
  * Latest release: https://github.com/OpenHands/OpenHands/releases
  */
-const DEFAULT_OPENHANDS_VERSION = '1.6.0';
+const DEFAULT_OPENHANDS_VERSION = '1.7.0';
 // Pin base image to exact manifest digest to prevent Docker build cache from using stale layers.
 // Update: docker manifest inspect docker.openhands.dev/openhands/openhands:<version> | jq '.digest'
+// TODO(PR #81): replace with the actual sha256 of openhands/openhands:1.7.0 once
+// the image is pulled in CI / staging — placeholder is the v1.6.0 digest so synth
+// keeps producing diffs locally; staging deploy must update this before merge.
 const DEFAULT_OPENHANDS_IMAGE_DIGEST = 'sha256:5c0dc26f467bf8e47a6e76308edb7a30af4084b17e23a3460b5467008b12111b';
-const DEFAULT_RUNTIME_VERSION = '1.6-nikolaik';
+const DEFAULT_RUNTIME_VERSION = '1.7-nikolaik';
 
 /**
  * Read OpenHands config.toml from the config directory.

@@ -1,13 +1,14 @@
 # Custom agent-server build with boto3 included in PyInstaller bundle
 # This builds the agent-server binary from source with boto3/botocore as hidden imports
 #
-# Build-time patches (Patch 23-26) are applied via apply-sdk-patches.py
-# These patches MUST be at build time because PyInstaller creates an immutable binary.
-# Runtime patches are in docker/apply-patch.sh for the OpenHands container.
+# Build-time patches are applied via apply-sdk-patches.py — see that file for the
+# active patch set. These patches MUST be at build time because PyInstaller
+# creates an immutable binary. Runtime patches are in docker/apply-startup.sh
+# for the OpenHands container.
 
 # Stage 1: Build the binary
 # LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
-ARG LAST_UPDATED=2026-04-08
+ARG LAST_UPDATED=2026-05-14
 FROM python:3.12-slim-bookworm AS builder
 
 # Install build dependencies
@@ -20,13 +21,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv for fast package management
 RUN pip install uv
 
-# Clone the OpenHands SDK repository
+# Clone the OpenHands SDK repository.
+# Pinned to v1.19.1 alongside the OpenHands v1.7.0 upgrade (PR #81). The fork
+# patches in apply-sdk-patches.py are anchored against this exact version.
 WORKDIR /build
-RUN git clone --depth 1 --branch v1.15.0 https://github.com/OpenHands/software-agent-sdk.git .
+ARG SDK_VERSION=v1.19.1
+RUN git clone --depth 1 --branch ${SDK_VERSION} https://github.com/OpenHands/software-agent-sdk.git .
 
 # Copy and run SDK patches
-# Patches 23, 25-27: Handle invalid/masked secrets + Bedrock max_output_tokens
-# See apply-sdk-patches.py for detailed documentation
+# Patches 23, 25-26, 28-32: secret-resume validators + Bedrock listing/region/env
+# See apply-sdk-patches.py for detailed documentation.
 COPY apply-sdk-patches.py /build/
 RUN python3 /build/apply-sdk-patches.py /build
 
@@ -194,8 +198,8 @@ RUN id -u openhands 2>/dev/null || useradd -m -s /bin/bash openhands
 # Copy the built binary
 COPY --from=builder /build/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
 
-# Copy VSCode server from official agent-server image
-COPY --from=ghcr.io/openhands/agent-server:1.15.0-python /openhands/.openvscode-server /openhands/.openvscode-server
+# Copy VSCode server from official agent-server image (must track SDK_VERSION above)
+COPY --from=ghcr.io/openhands/agent-server:1.19.1-python /openhands/.openvscode-server /openhands/.openvscode-server
 
 # Set permissions
 RUN chown -R openhands:openhands /openhands && \
