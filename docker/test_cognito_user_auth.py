@@ -28,14 +28,21 @@ class MockDefaultUserAuth(MockUserAuth):
     pass
 
 
-# Set up mock modules before importing
+# Set up mock modules before importing.
+# v1.7.0 moved UserAuth / DefaultUserAuth from openhands.server.user_auth to
+# openhands.app_server.user_auth (still tagged Legacy-V0 but actively wired
+# from V1's AuthUserContext).
 sys.modules['openhands'] = MagicMock()
-sys.modules['openhands.server'] = MagicMock()
-sys.modules['openhands.server.user_auth'] = MagicMock()
-sys.modules['openhands.server.user_auth.user_auth'] = MagicMock()
-sys.modules['openhands.server.user_auth.user_auth'].UserAuth = MockUserAuth
-sys.modules['openhands.server.user_auth.default_user_auth'] = MagicMock()
-sys.modules['openhands.server.user_auth.default_user_auth'].DefaultUserAuth = MockDefaultUserAuth
+sys.modules['openhands.app_server'] = MagicMock()
+sys.modules['openhands.app_server.user_auth'] = MagicMock()
+sys.modules['openhands.app_server.user_auth.user_auth'] = MagicMock()
+sys.modules['openhands.app_server.user_auth.user_auth'].UserAuth = MockUserAuth
+sys.modules['openhands.app_server.user_auth.default_user_auth'] = MagicMock()
+sys.modules['openhands.app_server.user_auth.default_user_auth'].DefaultUserAuth = MockDefaultUserAuth
+# settings_models is imported lazily inside get_user_settings, but mocking it
+# here keeps imports stable if the module under test ever moves the import up.
+sys.modules['openhands.app_server.settings'] = MagicMock()
+sys.modules['openhands.app_server.settings.settings_models'] = MagicMock()
 
 # Also mock fastapi Request
 mock_request_module = MagicMock()
