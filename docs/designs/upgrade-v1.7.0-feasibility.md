@@ -32,7 +32,7 @@ The fork's 14-file patch set therefore breaks down as (after **verifying each LL
 
 **Important correction from initial draft**: I initially marked 4 LLM-related fork patches as "absorbed in SDK v1.19.1" based on closed upstream issues #2198 and #2247. Reading the actual SDK v1.19.1 source contradicts that. **Only the `max_output_tokens` cap** logic is truly absorbed. Default-credential-chain Bedrock listing, cross-region inference profile enumeration, env-hint detection, AWS_DEFAULT_REGION setdefault, and cross-region prefix stripping for model_info — **all still missing in upstream**. These features must move into the SDK fork (which the agent-server custom Dockerfile already builds from a fork branch) via `apply-sdk-patches.py`.
 
-This shifts SDK-side patches from 4 → ~6 (one drop, four new) and OpenHands-side patches from "drop 4, port 3" to "drop 1, port 7".
+This shifts SDK-side patches from 4 → 8 (one drop, five new) and OpenHands-side patches from "drop 4, port 3" to "drop 1, port 7".
 
 ---
 
@@ -83,7 +83,7 @@ The corresponding upstream **files are deleted**, but the **logic is also missin
 - `openhands/llm/llm.py` patch → port to SDK fork (`openhands-sdk/openhands/sdk/llm/llm.py` and `openhands-sdk/openhands/sdk/llm/utils/model_info.py`); **not patchable in OpenHands repo anymore**
 - `openhands/core/config/llm_config.py` patch (`AWS_DEFAULT_REGION`) → port to SDK fork (`openhands-sdk/openhands/sdk/llm/llm.py:_set_env_side_effects`); **not patchable in OpenHands repo anymore**
 
-This expands SDK-side patches from 4 to **6**. The infra repo's `apply-sdk-patches.py` will need 2 new patches (cross-region prefix stripping + AWS_DEFAULT_REGION setdefault + default credential chain for listing).
+This expands SDK-side patches from 4 to **8**. The infra repo's `apply-sdk-patches.py` will need **5 new patches** (default credential chain for listing, cross-region inference profile enumeration, cross-region prefix stripping, AWS_DEFAULT_REGION setdefault, env-hint trigger for Bedrock listing) and will drop Patch 27 (absorbed in SDK v1.19.1). Patches 23/25/26 carry over with re-anchoring.
 
 ---
 
@@ -186,12 +186,12 @@ Recommendation: patch the SDK side (covers both call sites — listing, and `_li
 1. **Drop 1 patch confirmed absorbed**: SDK Patch 27 (Bedrock max_output_tokens cap — covered by SDK PR #2264).
 2. **Drop 1 obsolete-V0 patch**: `openhands/server/config/server_config.py` — V0 store-class fields removed.
 3. **Port 4 OpenHands patches to V1 paths**: Cognito S3 stores + auth + utils/llm.py env-hint detection → `openhands/app_server/{settings,secrets,user_auth,utils}/`.
-4. **Add 4 NEW SDK patches** in `apply-sdk-patches.py` for Bedrock features the fork carried that are NOT in upstream SDK v1.19.1:
-   - Default credential chain in `_list_bedrock_foundation_models`
-   - Cross-region inference profile enumeration
-   - Cross-region prefix stripping in `get_litellm_model_info`
-   - `AWS_DEFAULT_REGION` setdefault
-   - Env-hint trigger for Bedrock listing in `get_supported_llm_models`
+4. **Add 5 NEW SDK patches** in `apply-sdk-patches.py` for Bedrock features the fork carried that are NOT in upstream SDK v1.19.1:
+   - Default credential chain in `_list_bedrock_foundation_models` (Patch 28)
+   - Cross-region inference profile enumeration (Patch 29)
+   - Cross-region prefix stripping in `get_litellm_model_info` (Patch 30)
+   - `AWS_DEFAULT_REGION` setdefault (Patch 31)
+   - Env-hint trigger for Bedrock listing in `get_supported_llm_models` (Patch 32)
 5. **Treat Patch 21 (multi-tenant verification) as security-critical** — grep patterns must be rewritten for V1 paths or it silently allows shared storage.
 6. **Run full E2E** (`./test/select-e2e-tests.sh --all`) on staging; **must** include a Bedrock-with-IAM-role smoke test (the patch we're forced to keep upstream of the SDK).
 
@@ -205,7 +205,7 @@ While porting them as SDK patches, consider opening upstream PRs against `OpenHa
 
 ## Appendix A: Verification plan (runs before merging the upgrade PR)
 
-1. **Build the agent-server custom image** with new SDK v1.19.1 — confirm `apply-sdk-patches.py` reports all 3 (or 4 if Patch 27 retained) patches applied without "WARNING: pattern not found".
+1. **Build the agent-server custom image** with new SDK v1.19.1 — confirm `apply-sdk-patches.py` reports all 6 patches applied (23, 25, 26, 28/29/32 atomic, 30, 31) without "WARNING: pattern not found" or "ERROR: pattern not found".
 2. **Build the openhands custom image** — confirm `download-fork-patches.sh` 200s on every file in the new (smaller) FILES list and that `apply-startup.sh` reports every "Patch X: ... applied correctly" with no `CRITICAL PATCH FAILURE`.
 3. **Unit tests**: `npm run test`. Expect ~7-8 ARM64 Docker bundling failures (memory: `feedback_deploy_qemu` — install binfmt to skip these).
 4. **Staging deploy**: `./deploy-staging.local.sh`. Confirm sandbox starts, conversation creates.
