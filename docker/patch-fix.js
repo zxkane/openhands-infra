@@ -627,45 +627,62 @@
   function ensureDefaultSettings() {
     if (ensurePromise) return ensurePromise;
 
-    ensurePromise = fetch('/api/options/models')
-      .then(function(r) { return r.json(); })
-      .then(function(models) {
-        var hasModels = Array.isArray(models) ? models.length > 0 : false;
-        if (!hasModels) return false;
+    // v1.7.0: model list moved from /api/options/models -> /api/v1/config/models/search
+    // and settings moved from /api/settings -> /api/v1/settings.
+    // V1 settings POST takes a partial dict; LLM fields nest under agent_settings_diff.
+    ensurePromise = fetch('/api/v1/config/models/search?limit=200', {credentials: 'include'})
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(modelsPage) {
+        // V1 returns { items: [{provider, name, verified}, ...], next_page_id }.
+        // Older callers downstream still expect a flat array of model identifiers
+        // shaped like "<provider>/<name>", so we project for compatibility.
+        var modelList = [];
+        if (modelsPage && Array.isArray(modelsPage.items)) {
+          modelList = modelsPage.items.map(function(m) {
+            if (m && typeof m.name === 'string') {
+              return m.provider ? m.provider + '/' + m.name : m.name;
+            }
+            return null;
+          }).filter(Boolean);
+        }
+        if (modelList.length === 0) return false;
 
-        return fetch('/api/settings').then(function(settingsResp) {
+        return fetch('/api/v1/settings', {credentials: 'include'}).then(function(settingsResp) {
           if (settingsResp.ok) return true;
-          return isSettingsMissingResponse(settingsResp.clone ? settingsResp.clone() : settingsResp).then(function(missing) {
-            if (!missing) return false;
+          // V1 returns 404 + {"error":"Settings not found"} when the user has no settings yet.
+          if (settingsResp.status !== 404) return false;
 
-            console.log("Settings not found, creating default settings...");
-            var defaultModel = pickDefaultModel(models);
-            var bedrockModel = "bedrock/" + defaultModel;
-            console.log("Using Bedrock model:", bedrockModel);
+          console.log("Settings not found (V1), creating default settings...");
+          var defaultModel = pickDefaultModel(modelList);
+          var bedrockModel = "bedrock/" + defaultModel;
+          console.log("Using Bedrock model:", bedrockModel);
 
-            var defaultSettings = {
+          // V1 settings POST: nest LLM fields under agent_settings_diff.
+          var defaultSettings = {
+            agent_settings_diff: {
               llm_provider: "bedrock",
               llm_model: bedrockModel,
               llm_api_key: null,
               aws_region: null
-            };
+            }
+          };
 
-            return fetch('/api/settings', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(defaultSettings)
-            }).then(function(createResp) {
-              if (createResp.ok) {
-                console.log("Default settings created successfully");
-                return true;
-              }
-              return parseJsonSafe(createResp).then(function(body) {
-                console.warn("Failed to create settings:", createResp.status, body);
-                return false;
-              }).catch(function() {
-                console.warn("Failed to create settings:", createResp.status);
-                return false;
-              });
+          return fetch('/api/v1/settings', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(defaultSettings)
+          }).then(function(createResp) {
+            if (createResp.ok) {
+              console.log("Default settings created successfully (V1)");
+              return true;
+            }
+            return parseJsonSafe(createResp).then(function(body) {
+              console.warn("Failed to create V1 settings:", createResp.status, body);
+              return false;
+            }).catch(function() {
+              console.warn("Failed to create V1 settings:", createResp.status);
+              return false;
             });
           });
         });
