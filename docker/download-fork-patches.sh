@@ -18,7 +18,7 @@ FORK_REPO="${FORK_REPO:-zxkane/openhands}"
 #   - V1 custom modules COPY'd by Dockerfile (cognito_user_auth.py,
 #     s3_settings_store.py, s3_secrets_store.py — these don't go through this
 #     download because they live in openhands-infra/docker/, not upstream)
-FORK_REF="${FORK_REF:-4e480e79c47fb4c66c94c8176d130abdd6d5d2e9}"
+FORK_REF="${FORK_REF:-bb3fe51c920eec0b51bc7e118e340b582db0649f}"
 BASE_URL="https://raw.githubusercontent.com/${FORK_REPO}/${FORK_REF}"
 
 # Files modified in the v1.7.0 fork branch (verified via GitHub compare API:

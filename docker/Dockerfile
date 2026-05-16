@@ -38,7 +38,7 @@ RUN pip install --no-cache-dir boto3 openhands-tools==1.19.1
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
 # Pin to commit SHA for reproducible builds (branch: custom/v1.7.0-fargate).
 # Fargate branch: RemoteSandboxService compatible, multi-tenant isolation, V1 Cognito wiring.
-ARG FORK_REF=4e480e79c47fb4c66c94c8176d130abdd6d5d2e9
+ARG FORK_REF=bb3fe51c920eec0b51bc7e118e340b582db0649f
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
