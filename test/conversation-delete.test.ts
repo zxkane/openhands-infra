@@ -50,12 +50,18 @@ describe('Conversation Deletion Lambda', () => {
   });
 
   test('deletes conversation data across all storage layers', async () => {
-    s3Mock.on(ListObjectsV2Command).resolves({
-      Contents: [
-        { Key: 'conversations/conv-1/event1.json' },
-        { Key: 'conversations/conv-1/event2.json' },
-      ],
-    });
+    s3Mock.on(ListObjectsV2Command)
+      .resolvesOnce({
+        Contents: [
+          { Key: 'conversations/conv-1/event1.json' },
+          { Key: 'conversations/conv-1/event2.json' },
+        ],
+      })
+      .resolvesOnce({
+        Contents: [
+          { Key: 'users/user-1/v1_conversations/conv-1/event3.json' },
+        ],
+      });
     s3Mock.on(DeleteObjectsCommand).resolves({});
     rdsMock.on(ExecuteStatementCommand).resolves({});
     ddbMock.on(DeleteItemCommand).resolves({});
@@ -69,21 +75,19 @@ describe('Conversation Deletion Lambda', () => {
     const body = JSON.parse(result.body);
     expect(body.deleted).toBe(true);
     expect(body.conversation_id).toBe('conv-1');
-    expect(body.s3_objects_deleted).toBe(2);
+    expect(body.s3_objects_deleted).toBe(3);
 
-    // Verify S3: correct prefix used for listing
+    // Verify S3: both legacy and V1 prefixes are listed
     const listCalls = s3Mock.commandCalls(ListObjectsV2Command);
-    expect(listCalls.length).toBe(1);
-    expect(listCalls[0].args[0].input.Prefix).toBe('conversations/conv-1/');
+    expect(listCalls.length).toBe(2);
+    const prefixes = listCalls.map(c => c.args[0].input.Prefix);
+    expect(prefixes).toContain('conversations/conv-1/');
+    expect(prefixes).toContain('users/user-1/v1_conversations/conv-1/');
     expect(listCalls[0].args[0].input.Bucket).toBe('test-data-bucket');
 
-    // Verify S3: correct keys passed to batch delete, with Quiet mode
+    // Verify S3: deletes happened for both prefixes (Quiet mode)
     const deleteCalls = s3Mock.commandCalls(DeleteObjectsCommand);
-    expect(deleteCalls.length).toBe(1);
-    expect(deleteCalls[0].args[0].input.Delete?.Objects).toEqual([
-      { Key: 'conversations/conv-1/event1.json' },
-      { Key: 'conversations/conv-1/event2.json' },
-    ]);
+    expect(deleteCalls.length).toBe(2);
     expect(deleteCalls[0].args[0].input.Delete?.Quiet).toBe(true);
 
     // Verify EFS: correct path used (mount + conversation_id, not the mount root)
@@ -105,7 +109,22 @@ describe('Conversation Deletion Lambda', () => {
     expect(ddbCalls[0].args[0].input.Key?.conversation_id?.S).toBe('conv-1');
   });
 
-  test('S3 deletion uses correct prefix and does not leak to other conversations', async () => {
+  test('deletes both legacy and V1 S3 prefixes', async () => {
+    s3Mock.on(ListObjectsV2Command).resolves({ Contents: [] });
+    rdsMock.on(ExecuteStatementCommand).resolves({});
+    ddbMock.on(DeleteItemCommand).resolves({});
+
+    await handler({ conversation_id: 'conv-v1', user_id: 'cognito-sub-abc' });
+
+    const listCalls = s3Mock.commandCalls(ListObjectsV2Command);
+    const prefixes = listCalls.map(c => c.args[0].input.Prefix).sort();
+    expect(prefixes).toEqual([
+      'conversations/conv-v1/',
+      'users/cognito-sub-abc/v1_conversations/conv-v1/',
+    ]);
+  });
+
+  test('S3 deletion uses correct prefixes and does not leak to other conversations', async () => {
     s3Mock.on(ListObjectsV2Command).resolves({
       Contents: [
         { Key: 'conversations/target-conv/event1.json' },
@@ -117,12 +136,15 @@ describe('Conversation Deletion Lambda', () => {
 
     await handler({ conversation_id: 'target-conv', user_id: 'user-x' });
 
-    // Verify S3 list is scoped to exactly this conversation's prefix
+    // Each listed prefix must be scoped to this conversation and end with /
+    // to avoid matching siblings like conversations/target-conv-2/.
     const listCalls = s3Mock.commandCalls(ListObjectsV2Command);
-    const prefix = listCalls[0].args[0].input.Prefix;
-    expect(prefix).toBe('conversations/target-conv/');
-    // Must end with / to prevent matching conversations/target-conv-2/
-    expect(prefix!.endsWith('/')).toBe(true);
+    expect(listCalls.length).toBe(2);
+    for (const call of listCalls) {
+      const prefix = call.args[0].input.Prefix!;
+      expect(prefix).toContain('target-conv');
+      expect(prefix.endsWith('/')).toBe(true);
+    }
   });
 
   test('EFS deletion targets exact conversation directory, not mount root', async () => {
@@ -155,6 +177,9 @@ describe('Conversation Deletion Lambda', () => {
       })
       .resolvesOnce({
         Contents: [{ Key: 'conversations/conv-2/event1000.json' }],
+      })
+      .resolvesOnce({
+        Contents: [],
       });
 
     s3Mock.on(DeleteObjectsCommand).resolves({});
@@ -169,8 +194,9 @@ describe('Conversation Deletion Lambda', () => {
     const body = JSON.parse(result.body);
     expect(body.s3_objects_deleted).toBe(1001);
 
+    // 2 paginated calls for legacy prefix + 1 call for V1 prefix
     const listCalls = s3Mock.commandCalls(ListObjectsV2Command);
-    expect(listCalls.length).toBe(2);
+    expect(listCalls.length).toBe(3);
   });
 
   test('handles empty S3 bucket gracefully', async () => {

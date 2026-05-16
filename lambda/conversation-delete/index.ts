@@ -70,16 +70,10 @@ interface DeleteEvent {
 }
 
 /**
- * Delete all S3 objects under the conversation prefix.
+ * Delete all S3 objects under the given prefix.
  * Paginates through ListObjectsV2 and batch-deletes up to 1000 objects per call.
  */
-async function deleteS3Objects(conversationId: string): Promise<number> {
-  if (!DATA_BUCKET) {
-    logger.info('DATA_BUCKET not configured, skipping S3 cleanup');
-    return 0;
-  }
-
-  const prefix = `conversations/${conversationId}/`;
+async function deletePrefix(prefix: string): Promise<number> {
   let deletedCount = 0;
   let continuationToken: string | undefined;
 
@@ -101,14 +95,42 @@ async function deleteS3Objects(conversationId: string): Promise<number> {
         Delete: { Objects: objects, Quiet: true },
       }));
       deletedCount += objects.length;
-      logger.info('Deleted S3 objects batch', { count: objects.length, total: deletedCount });
+      logger.info('Deleted S3 objects batch', { prefix, count: objects.length, total: deletedCount });
     }
 
     continuationToken = listResponse.NextContinuationToken;
   } while (continuationToken);
 
-  logger.info('S3 cleanup complete', { conversationId, deletedCount });
   return deletedCount;
+}
+
+/**
+ * Delete all S3 objects for a conversation.
+ *
+ * Two layouts coexist:
+ * - V0/legacy: `conversations/{conversation_id}/` (older deployments, pre-v1.6)
+ * - V1: `users/{user_id}/v1_conversations/{conversation_id}/` (current AwsEventService layout)
+ *
+ * Both prefixes are cleaned to handle conversations created at any version.
+ */
+async function deleteS3Objects(conversationId: string, userId: string): Promise<number> {
+  if (!DATA_BUCKET) {
+    logger.info('DATA_BUCKET not configured, skipping S3 cleanup');
+    return 0;
+  }
+
+  const prefixes = [
+    `conversations/${conversationId}/`,
+    `users/${userId}/v1_conversations/${conversationId}/`,
+  ];
+
+  let total = 0;
+  for (const prefix of prefixes) {
+    total += await deletePrefix(prefix);
+  }
+
+  logger.info('S3 cleanup complete', { conversationId, userId, deletedCount: total });
+  return total;
 }
 
 /**
@@ -202,7 +224,7 @@ export async function handler(event: DeleteEvent): Promise<{ statusCode: number;
 
   // Execute all cleanup steps — continue even if individual steps fail
   const [s3Count] = await Promise.all([
-    deleteS3Objects(conversation_id),
+    deleteS3Objects(conversation_id, user_id),
   ]);
 
   deleteEfsWorkspace(conversation_id);
