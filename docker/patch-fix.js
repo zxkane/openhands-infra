@@ -248,45 +248,17 @@
     } catch (e) {}
 
     if (!isCreateConversation || alreadyRetried) {
-      return origFetch.call(this, newUrl, opts).then(function(resp) {
-        // Detect auth redirect: iOS Safari ITP silently blocks SameSite=None cookies,
-        // causing API calls to return HTML (Cognito login page) instead of JSON.
-        //
-        // v1.7.0 NOTE: We can't rely on "200 + text/html + same-origin" alone — the
-        // V0 SPAStaticFiles fallback returns index.html (HTML) for any unrecognized
-        // path under /api/, and v1.7 frontend may legitimately request a route that
-        // upstream renamed/removed. To avoid the false-positive logout loop we
-        // observed in PR #81 staging E2E, we additionally inspect the response body
-        // for an unambiguous Cognito sign-in marker before triggering /_logout.
-        if (resp.ok && typeof newUrl === "string" && newUrl.indexOf('/api/') !== -1) {
-          var respUrl = resp.url || '';
-          var sameOrigin = respUrl.indexOf(window.location.origin) === 0 || respUrl === '';
-          if (sameOrigin) {
-            var ct = resp.headers.get('content-type') || '';
-            if (ct.indexOf('text/html') !== -1 && ct.indexOf('application/json') === -1) {
-              // Clone so we can inspect the body without consuming the original.
-              return resp.clone().text().then(function(bodyText) {
-                // Cognito hosted UI HTML always contains <title>Sign-in</title>.
-                // The OpenHands SPA index.html contains <title>OpenHands</title>.
-                var isCognitoLoginPage = bodyText.indexOf('<title>Sign-in</title>') !== -1;
-                if (isCognitoLoginPage) {
-                  console.warn('[Auth redirect] API returned Cognito sign-in page, redirecting to /_logout:', newUrl);
-                  window.location.href = '/_logout';
-                  return new Response(JSON.stringify({ error: 'auth_redirect', message: 'Session expired' }), {
-                    status: 401,
-                    headers: { 'Content-Type': 'application/json' }
-                  });
-                }
-                // Legitimate SPA fallback (index.html for an unknown /api/ path).
-                // Pass through unchanged — the caller's JSON parser will fail and
-                // surface as a normal application error, not an auth loop.
-                return resp;
-              });
-            }
-          }
-        }
-        return resp;
-      });
+      // The previous auth-redirect detector (logout-on-html) caused a redirect
+      // loop on v1.7.0: the V0 SPAStaticFiles fallback serves index.html for any
+      // unknown /api/ path, and v1.7 frontend requests several paths that don't
+      // exist server-side (renamed in V0 -> V1 cleanup). Hitting any one of
+      // those triggered an automatic /_logout, killing the freshly-set Cognito
+      // session and leaving the user stuck on the login page.
+      //
+      // Removed the auto-logout. If the session is genuinely expired, the
+      // caller's JSON parser will throw and the app's existing 401 handlers
+      // will surface a normal auth error — without nuking a valid session.
+      return origFetch.call(this, newUrl, opts);
     }
 
     return origFetch.call(this, newUrl, opts).then(function(resp) {
