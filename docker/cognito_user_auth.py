@@ -175,10 +175,14 @@ class CognitoUserAuth(DefaultUserAuth):
         merge it with per-user S3 overlays.
 
         Merge order (later wins on name collision):
-          1. Global ``[mcp]`` from ``/app/config.toml``
-          2. User-disabled global servers are removed
-          3. Per-user custom servers from S3
-          4. auto_mcp servers from user integrations
+          1. Global ``[mcp]`` servers from ``/app/config.toml`` are merged.
+          2. ``disabled_global_servers`` removes the named entries from the
+             merged map. This is intentionally scoped to globals — disabling
+             a name is applied BEFORE per-user/integration servers are added,
+             so a user's own server with the same name will still be present
+             in the final config.
+          3. Per-user custom shttp/stdio servers from S3 are merged in.
+          4. auto_mcp servers from user integrations are merged in last.
         """
         # Get base settings from parent
         settings = await super().get_user_settings()
@@ -273,7 +277,8 @@ class CognitoUserAuth(DefaultUserAuth):
         """Merge ``servers`` into ``settings.agent_settings.mcp_config.mcpServers``.
 
         Creates the ``mcp_config`` if it's missing. Existing servers with the
-        same name are overwritten — caller orders the merge accordingly.
+        same name are overwritten — caller orders the merge accordingly. Logs
+        a warning on overwrite so silent shadowing is visible in operator logs.
         """
         if settings is None or settings.agent_settings is None:
             return settings
@@ -283,6 +288,8 @@ class CognitoUserAuth(DefaultUserAuth):
         existing = agent_settings.mcp_config
         existing_dict = existing.model_dump(exclude_none=True) if existing else {}
         existing_servers = dict(existing_dict.get('mcpServers') or {})
+        for name in servers.keys() & existing_servers.keys():
+            logger.warning(f'MCP server name collision — overwriting existing: {name}')
         existing_servers.update(servers)
         existing_dict['mcpServers'] = existing_servers
         agent_settings.mcp_config = MCPConfig.from_dict(existing_dict)
