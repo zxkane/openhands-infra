@@ -85,10 +85,11 @@ describe('Conversation Deletion Lambda', () => {
     expect(prefixes).toContain('users/user-1/v1_conversations/conv-1/');
     expect(listCalls[0].args[0].input.Bucket).toBe('test-data-bucket');
 
-    // Verify S3: deletes happened for both prefixes (Quiet mode)
+    // Verify S3: deletes happened for both prefixes; Quiet=false so per-key
+    // failures (e.g. IAM AccessDenied) are surfaced to the Lambda.
     const deleteCalls = s3Mock.commandCalls(DeleteObjectsCommand);
     expect(deleteCalls.length).toBe(2);
-    expect(deleteCalls[0].args[0].input.Delete?.Quiet).toBe(true);
+    expect(deleteCalls[0].args[0].input.Delete?.Quiet).toBe(false);
 
     // Verify EFS: correct path used (mount + conversation_id, not the mount root)
     expect(fs.rmSync).toHaveBeenCalledTimes(1);
@@ -245,6 +246,29 @@ describe('Conversation Deletion Lambda', () => {
 
     // All storage layers should still be attempted (S3 gracefully handles empty results)
     expect(ddbMock.commandCalls(DeleteItemCommand).length).toBe(1);
+  });
+
+  test('counts only successfully deleted objects when batch returns errors', async () => {
+    // Simulate IAM AccessDenied on one of two objects (e.g. missing perms on
+    // a sub-prefix) — Lambda should NOT count failed keys as deleted.
+    s3Mock.on(ListObjectsV2Command).resolves({
+      Contents: [
+        { Key: 'conversations/conv-err/event1.json' },
+        { Key: 'conversations/conv-err/event2.json' },
+      ],
+    });
+    s3Mock.on(DeleteObjectsCommand).resolves({
+      Errors: [{ Key: 'conversations/conv-err/event2.json', Code: 'AccessDenied', Message: 'denied' }],
+    });
+    rdsMock.on(ExecuteStatementCommand).resolves({});
+    ddbMock.on(DeleteItemCommand).resolves({});
+
+    const result = await handler({ conversation_id: 'conv-err', user_id: 'user-err' });
+    const body = JSON.parse(result.body);
+    // 2 objects each prefix * 2 prefixes = 4 listed; each batch reports 1 error.
+    // Lambda lists both prefixes; here both list resolves return the same 2
+    // objects, with 1 error per batch ⇒ deletedCount = (2-1) + (2-1) = 2.
+    expect(body.s3_objects_deleted).toBe(2);
   });
 
   test('rejects invalid event payload', async () => {

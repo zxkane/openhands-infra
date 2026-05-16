@@ -822,10 +822,16 @@ export class SandboxStack extends cdk.Stack {
 
     registryTable.grantReadWriteData(deletionLambda);
 
-    // S3 permissions for conversation data cleanup
+    // S3 permissions for conversation data cleanup.
+    // Two layouts coexist:
+    //   - V0/legacy: conversations/{conversation_id}/
+    //   - V1: users/{user_id}/v1_conversations/{conversation_id}/  (AwsEventService since 1.6.0)
+    // The Lambda lists/deletes both prefixes; both must be writable.
     if (props.dataBucket) {
       props.dataBucket.grantRead(deletionLambda, 'conversations/*');
       props.dataBucket.grantDelete(deletionLambda, 'conversations/*');
+      props.dataBucket.grantRead(deletionLambda, 'users/*/v1_conversations/*');
+      props.dataBucket.grantDelete(deletionLambda, 'users/*/v1_conversations/*');
     }
 
     // RDS Data API + Secrets Manager for Aurora conversation cleanup

@@ -90,12 +90,23 @@ async function deletePrefix(prefix: string): Promise<number> {
       .map((obj: _Object) => ({ Key: obj.Key! }));
 
     if (objects.length > 0) {
-      await s3.send(new DeleteObjectsCommand({
+      // Quiet=false so per-key Errors are returned (e.g. AccessDenied) — without
+      // this, IAM misconfigurations look like successes and orphan S3 objects.
+      const deleteResponse = await s3.send(new DeleteObjectsCommand({
         Bucket: DATA_BUCKET,
-        Delete: { Objects: objects, Quiet: true },
+        Delete: { Objects: objects, Quiet: false },
       }));
-      deletedCount += objects.length;
-      logger.info('Deleted S3 objects batch', { prefix, count: objects.length, total: deletedCount });
+      const errors = deleteResponse.Errors || [];
+      const succeeded = objects.length - errors.length;
+      deletedCount += succeeded;
+      if (errors.length > 0) {
+        logger.error('S3 batch delete had errors', {
+          prefix,
+          errorCount: errors.length,
+          firstError: { code: errors[0].Code, key: errors[0].Key, message: errors[0].Message },
+        });
+      }
+      logger.info('Deleted S3 objects batch', { prefix, count: succeeded, total: deletedCount });
     }
 
     continuationToken = listResponse.NextContinuationToken;
