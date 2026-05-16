@@ -630,7 +630,8 @@
     // v1.7.0: model list moved from /api/options/models -> /api/v1/config/models/search
     // and settings moved from /api/settings -> /api/v1/settings.
     // V1 settings POST takes a partial dict; LLM fields nest under agent_settings_diff.
-    ensurePromise = fetch('/api/v1/config/models/search?limit=200', {credentials: 'include'})
+    // V1 enforces limit <= 100 on the models search endpoint.
+    ensurePromise = fetch('/api/v1/config/models/search?limit=100', {credentials: 'include'})
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(modelsPage) {
         // V1 returns { items: [{provider, name, verified}, ...], next_page_id }.
@@ -657,13 +658,20 @@
           var bedrockModel = "bedrock/" + defaultModel;
           console.log("Using Bedrock model:", bedrockModel);
 
-          // V1 settings POST: nest LLM fields under agent_settings_diff.
+          // V1 settings POST: agent_settings_diff uses the nested SDK schema
+          // (matches model_dump shape — `llm` is a sub-object, NOT flat
+          // `llm_provider` / `llm_model` like V0). Sending flat keys is
+          // silently dropped during Pydantic merge and the model falls back
+          // to the default ("claude-sonnet-4-20250514"), which agent then
+          // tries to call as a direct Anthropic API and fails with
+          // "Missing Anthropic API Key".
           var defaultSettings = {
             agent_settings_diff: {
-              llm_provider: "bedrock",
-              llm_model: bedrockModel,
-              llm_api_key: null,
-              aws_region: null
+              llm: {
+                model: bedrockModel,
+                api_key: null,
+                aws_region_name: null
+              }
             }
           };
 
