@@ -73,6 +73,15 @@ export class UserConfigStack extends cdk.Stack {
         assetExcludes: ['.venv', '__pycache__', '*.pyc', 'test_*.py', '.pytest_cache'],
         // Use SOURCE hash to ensure consistent asset hash across environments
         assetHashType: cdk.AssetHashType.SOURCE,
+        // Force uv to use Python 3.12 inside the bundling container so it
+        // matches the Lambda runtime above. Without this, uv defaults to the
+        // lowest Python that satisfies `requires-python` (currently 3.11
+        // inside the CDK bundling image), and pydantic-core 2.41.5 has no
+        // cp311-aarch64 wheel — uv would then try to compile from source and
+        // fail because the bundling container has no Rust toolchain.
+        environment: {
+          UV_PYTHON: '3.12',
+        },
       },
     });
 
