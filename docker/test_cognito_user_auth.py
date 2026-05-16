@@ -340,5 +340,74 @@ class TestUserConfigEnabled:
                 del os.environ['USER_CONFIG_ENABLED']
 
 
+class TestLoadGlobalMcpServers:
+    """Tests for _load_global_mcp_servers() — config.toml [mcp] parser."""
+
+    def test_returns_empty_when_file_missing(self, tmp_path, monkeypatch):
+        missing = tmp_path / 'nope.toml'
+        monkeypatch.setattr('cognito_user_auth.GLOBAL_CONFIG_TOML_PATH', missing)
+        from cognito_user_auth import _load_global_mcp_servers
+        assert _load_global_mcp_servers() == {}
+
+    def test_returns_empty_when_no_mcp_section(self, tmp_path, monkeypatch):
+        toml_path = tmp_path / 'config.toml'
+        toml_path.write_text('[core]\nworkspace_base = "/x"\n')
+        monkeypatch.setattr('cognito_user_auth.GLOBAL_CONFIG_TOML_PATH', toml_path)
+        from cognito_user_auth import _load_global_mcp_servers
+        assert _load_global_mcp_servers() == {}
+
+    def test_parses_shttp_servers_into_fastmcp_shape(self, tmp_path, monkeypatch):
+        toml_path = tmp_path / 'config.toml'
+        toml_path.write_text(
+            '[mcp]\n'
+            'shttp_servers = [\n'
+            '    { url = "https://knowledge-mcp.global.api.aws" },\n'
+            ']\n'
+        )
+        monkeypatch.setattr('cognito_user_auth.GLOBAL_CONFIG_TOML_PATH', toml_path)
+        from cognito_user_auth import _load_global_mcp_servers
+        servers = _load_global_mcp_servers()
+        # Name derived from host's first label since no name given
+        assert servers == {'knowledge-mcp': {'url': 'https://knowledge-mcp.global.api.aws'}}
+
+    def test_parses_stdio_servers_with_args_and_env(self, tmp_path, monkeypatch):
+        toml_path = tmp_path / 'config.toml'
+        toml_path.write_text(
+            '[mcp]\n'
+            'stdio_servers = [\n'
+            '    { name = "chrome-devtools", command = "npx", args = ["-y", "chrome-devtools-mcp@latest"], env = { FOO = "bar" } },\n'
+            ']\n'
+        )
+        monkeypatch.setattr('cognito_user_auth.GLOBAL_CONFIG_TOML_PATH', toml_path)
+        from cognito_user_auth import _load_global_mcp_servers
+        servers = _load_global_mcp_servers()
+        assert servers == {
+            'chrome-devtools': {
+                'command': 'npx',
+                'args': ['-y', 'chrome-devtools-mcp@latest'],
+                'env': {'FOO': 'bar'},
+            }
+        }
+
+    def test_skips_invalid_entries(self, tmp_path, monkeypatch):
+        toml_path = tmp_path / 'config.toml'
+        toml_path.write_text(
+            '[mcp]\n'
+            'shttp_servers = [{ name = "bad" }]\n'  # missing url
+            'stdio_servers = [{ command = "x" }]\n'  # missing name
+        )
+        monkeypatch.setattr('cognito_user_auth.GLOBAL_CONFIG_TOML_PATH', toml_path)
+        from cognito_user_auth import _load_global_mcp_servers
+        assert _load_global_mcp_servers() == {}
+
+    def test_returns_empty_on_malformed_toml(self, tmp_path, monkeypatch):
+        toml_path = tmp_path / 'config.toml'
+        toml_path.write_text('not valid toml = = =')
+        monkeypatch.setattr('cognito_user_auth.GLOBAL_CONFIG_TOML_PATH', toml_path)
+        from cognito_user_auth import _load_global_mcp_servers
+        # Best-effort parsing — must not raise even on broken files
+        assert _load_global_mcp_servers() == {}
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
