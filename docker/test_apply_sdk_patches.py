@@ -145,7 +145,7 @@ class TestPatch33DefaultBedrockSonnet:
             "patch_30_model_info_region_prefix",
             "patch_31_aws_default_region",
         ):
-            monkeypatch.setattr(module, name, lambda _bd: True)
+            monkeypatch.setattr(module, name, lambda _bd, _n=name: True)
 
         monkeypatch.setattr(sys, "argv", ["apply-sdk-patches.py", str(fake_sdk_tree)])
 
