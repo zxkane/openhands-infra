@@ -3,3 +3,8 @@
 
 *.md
 README.md
+
+# Python bytecode caches — excluded so test imports of apply-sdk-patches.py
+# don't pollute the Docker build context and shift the asset hash.
+__pycache__/
+*.pyc
