@@ -1329,7 +1329,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               {
                 "Name": "SANDBOX_RUNTIME_CONTAINER_IMAGE",
                 "Value": {
-                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:6d50db6af4a1010108c5ef8ed623d7114516e939f05e505cbad7c230cea4e744",
+                  "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:bc79f5b244ecc004e45131d0b9b4366aec71cabda6dc7b40b22783f26ae4a033",
                 },
               },
               {
@@ -1350,7 +1350,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "USER_AUTH_CLASS",
-                "Value": "openhands.server.user_auth.cognito_user_auth.CognitoUserAuth",
+                "Value": "openhands.app_server.user_auth.cognito_user_auth.CognitoUserAuth",
               },
               {
                 "Name": "LLM_AWS_REGION_NAME",
@@ -1397,7 +1397,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "AGENT_SERVER_IMAGE_TAG",
-                "Value": "2f8488ba6943116de97881d9999741e4636f108c6df72b5bee8c7e3f55ddd238",
+                "Value": "6be4e331e1c282f14468f88c021486698f219ac096f08ccab7a60eb0cdd713d8",
               },
               {
                 "Name": "AGENT_ENABLE_BROWSING",
@@ -1502,7 +1502,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:f0f2b4cd19d66b006010f0bf4b91e55044057d4a09e1676e5f0cc6b0e25313fc",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:15427f92982a1f1f84a2437b11831d0a0a251f82523a4accb18efdf741a270ce",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
@@ -1721,7 +1721,7 @@ security_analyzer = "llm"",
         "Name": "/openhands/docker/openhands-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.6.0",
+        "Value": "1.7.0",
       },
       "Type": "AWS::SSM::Parameter",
     },
@@ -1961,7 +1961,7 @@ security_analyzer = "llm"",
         "Name": "/openhands/docker/runtime-version",
         "Tier": "Standard",
         "Type": "String",
-        "Value": "1.6-nikolaik",
+        "Value": "latest-nikolaik",
       },
       "Type": "AWS::SSM::Parameter",
     },

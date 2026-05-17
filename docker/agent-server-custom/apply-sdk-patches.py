@@ -6,14 +6,26 @@ This script applies patches to the OpenHands SDK source code before PyInstaller
 bundles it into a binary. These patches MUST be applied at build time because
 the final binary is immutable.
 
-Patches:
+Patches (active):
   - Patch 23: Skip invalid/masked secrets during conversation resume (AgentContext)
   - Patch 25: Filter invalid secrets from JSON before model_validate_json
   - Patch 26: Filter invalid secret_sources from ConversationState
-  - Patch 27: Fix Bedrock max_output_tokens when litellm reports context window as output limit
+  - Patch 28: Default credential chain for _list_bedrock_foundation_models
+              (allows IAM-role / IRSA / AWS_PROFILE Bedrock listing without explicit creds)
+  - Patch 29: Cross-region inference profile listing
+              (adds bedrock/us. / bedrock/eu. / bedrock/apac. / bedrock/global. model IDs)
+  - Patch 30: Cross-region prefix stripping in get_litellm_model_info
+              (lets bedrock/us.anthropic.claude-* find its model_cost entry)
+  - Patch 31: AWS_DEFAULT_REGION setdefault in _set_env_side_effects
+              (boto3 prefers AWS_DEFAULT_REGION over AWS_REGION_NAME for some auth modes)
+  - Patch 32: Env-hint trigger for Bedrock listing in get_supported_llm_models
+              (AWS_PROFILE / AWS_ROLE_ARN / AWS_WEB_IDENTITY_TOKEN_FILE → list Bedrock too)
 
-Removed:
-  - Patch 24: (SDK v1.15.0 already uses model_dump(mode="json"), no longer needed)
+Removed (absorbed in upstream / obsolete):
+  - Patch 24: SDK uses model_dump(mode="json") since v1.15.0
+  - Patch 27: SDK v1.19.1 caps max_output_tokens to half the context window when
+              max_output_tokens >= context_window (llm.py:1273-1287). Same outcome
+              as the fork patch with a different mechanism.
 
 Usage:
   python3 apply-sdk-patches.py /path/to/build/directory
@@ -110,24 +122,21 @@ def patch_23_agent_context(build_dir: Path) -> bool:
 
 '''
 
-    # Find where to insert - after the secrets Field definition, before @field_validator
-    insert_pattern = r'(\s+secrets:.*?\)\n)(\n\s+@field_validator)'
-    insert_match = re.search(insert_pattern, content, re.DOTALL)
+    # Insert immediately before the first @field_validator inside AgentContext.
+    # In SDK v1.19.1 the order is: secrets → current_datetime → @field_validator("skills"),
+    # so anchoring on @field_validator (rather than on the secrets Field's closing paren)
+    # is the stable choice.
+    insert_pattern = r'(\n    @field_validator\("skills"\))'
+    insert_match = re.search(insert_pattern, content)
     if insert_match:
-        insert_pos = insert_match.end(1)
+        insert_pos = insert_match.start()
         content = content[:insert_pos] + patch_code + content[insert_pos:]
-        print("Patch 23: Added secret filter validator to AgentContext")
+        print("Patch 23: Added secret filter validator before @field_validator(\"skills\")")
     else:
-        # Try inserting after the last Field definition
-        insert_pattern2 = r'(load_public_skills:.*?skills repository\..*?"\n\s+\)\n)'
-        insert_match2 = re.search(insert_pattern2, content, re.DOTALL)
-        if insert_match2:
-            insert_pos = insert_match2.end(1)
-            content = content[:insert_pos] + patch_code + content[insert_pos:]
-            print("Patch 23: Added secret filter validator (alternative position)")
-        else:
-            print("ERROR: Could not find insertion point for Patch 23")
-            return False
+        print("ERROR: Could not find insertion point for Patch 23 "
+              "(no @field_validator(\"skills\") in AgentContext — "
+              "SDK structure may have changed again)")
+        return False
 
     agent_context_file.write_text(content)
     print("Patch 23: Successfully patched agent_context.py")
@@ -329,104 +338,270 @@ def patch_26_conversation_state(build_dir: Path) -> bool:
     return True
 
 
-def patch_27_bedrock_max_output_tokens(build_dir: Path) -> bool:
+def patch_28_29_32_bedrock_listing(build_dir: Path) -> bool:
     """
-    Patch 27: Fix Bedrock models where litellm reports max_output_tokens equal
-    to context window size (e.g. Kimi K2.5: max_output_tokens=262144).
+    Replaces SDK ``_list_bedrock_foundation_models`` and ``get_supported_llm_models``
+    in ``unverified_models.py`` with fork variants that:
 
-    When max_output_tokens == max_input_tokens, litellm is reporting the context
-    window size, not the actual output limit. Sending this as max_tokens causes
-    Bedrock to reject when input_tokens + max_tokens > context_window.
+    * Patch 28: drop the requirement that all three creds (region / access_key /
+      secret_key) be present. Pass them only when truthy so boto3 falls through to
+      the default credential chain (IAM role, IRSA, AWS_PROFILE, EC2 metadata).
+    * Patch 29: enumerate cross-region inference profiles via
+      ``list_inference_profiles(typeEquals="SYSTEM_DEFINED")`` and merge the
+      ``bedrock/us.``, ``bedrock/eu.``, ``bedrock/apac.``, ``bedrock/global.``
+      model IDs into the returned list.
+    * Patch 32: trigger ``_list_bedrock_foundation_models`` when
+      ``AWS_PROFILE`` / ``AWS_ROLE_ARN`` / ``AWS_WEB_IDENTITY_TOKEN_FILE`` is set
+      (env-hint mode), even without explicit static creds. Required for IRSA
+      and Cognito-federated EC2 IAM workflows where there are no AWS_* keys.
 
-    This patch:
-    a) Adds detection in llm.py to reset max_output_tokens to None
-    b) Adds a pop in chat_options.py to omit max_completion_tokens=None for Bedrock
+    These three patches are wired together (sharing a rewritten
+    ``_list_bedrock_foundation_models`` signature), so they ship as one atomic
+    rewrite of the file. We rewrite by replacing function bodies via regex
+    rather than full-file replacement so that re-anchoring on future SDK bumps
+    stays mechanical.
     """
-    # Part A: Patch llm.py — detect context-window-as-output-limit
-    llm_file = build_dir / "openhands-sdk/openhands/sdk/llm/llm.py"
-
-    if not llm_file.exists():
-        print(f"ERROR: Patch 27a - File not found: {llm_file}")
+    target = build_dir / "openhands-sdk/openhands/sdk/llm/utils/unverified_models.py"
+    if not target.exists():
+        print(f"ERROR: Patch 28/29/32 - File not found: {target}")
         return False
 
-    content = llm_file.read_text()
+    content = target.read_text()
 
-    # Insert after the max_output_tokens assignment block (after the o3 clamping)
-    # Target: after the "if 'o3' in self.model:" block, before _validate_context_window_size
-    # or the next method definition
-    anchor = '                    "Clamping max_output_tokens to %s for %s",'
+    # Replace the entire _list_bedrock_foundation_models function body.
+    list_pattern = re.compile(
+        r"def _list_bedrock_foundation_models\([^)]*\) -> list\[str\]:\n"
+        r"(?:.*\n)+?(?=\n\ndef get_supported_llm_models)",
+        re.MULTILINE,
+    )
+    list_replacement = (
+        'def _list_bedrock_foundation_models(\n'
+        '    aws_region_name: str | None = None,\n'
+        '    aws_access_key_id: str | None = None,\n'
+        '    aws_secret_access_key: str | None = None,\n'
+        ') -> list[str]:\n'
+        '    """List Bedrock foundation models + cross-region inference profiles.\n'
+        '\n'
+        '    Patch 28 (openhands-infra): all three creds are now optional. boto3\n'
+        '    falls through to the default credential chain when they are omitted,\n'
+        '    which lets IAM-role / IRSA / AWS_PROFILE workflows list Bedrock\n'
+        '    models without explicit access keys.\n'
+        '\n'
+        '    Patch 29 (openhands-infra): also enumerate SYSTEM_DEFINED inference\n'
+        '    profiles (cross-region routing) and surface them as bedrock/<prefix>\n'
+        '    model IDs alongside the foundation models.\n'
+        '    """\n'
+        '    boto3 = _get_boto3()\n'
+        '    if boto3 is None:\n'
+        '        logger.warning(\n'
+        '            "boto3 is not installed. To use Bedrock models,"\n'
+        '            "install with: openhands-sdk[boto3]"\n'
+        '        )\n'
+        '        return []\n'
+        '\n'
+        '    client_kwargs: dict[str, str] = {"service_name": "bedrock"}\n'
+        '    if aws_region_name:\n'
+        '        client_kwargs["region_name"] = aws_region_name\n'
+        '    if aws_access_key_id:\n'
+        '        client_kwargs["aws_access_key_id"] = aws_access_key_id\n'
+        '    if aws_secret_access_key:\n'
+        '        client_kwargs["aws_secret_access_key"] = aws_secret_access_key\n'
+        '\n'
+        '    try:\n'
+        '        client = boto3.client(**client_kwargs)\n'
+        '        foundation_models_list = client.list_foundation_models(\n'
+        '            byOutputModality="TEXT", byInferenceType="ON_DEMAND"\n'
+        '        )\n'
+        '        model_summaries = foundation_models_list["modelSummaries"]\n'
+        '        result = ["bedrock/" + model["modelId"] for model in model_summaries]\n'
+        '\n'
+        '        try:\n'
+        '            paginator = client.get_paginator("list_inference_profiles")\n'
+        '            for page in paginator.paginate(typeEquals="SYSTEM_DEFINED"):\n'
+        '                for profile in page.get("inferenceProfileSummaries", []):\n'
+        '                    profile_id = profile.get("inferenceProfileId")\n'
+        '                    if profile_id:\n'
+        '                        result.append("bedrock/" + profile_id)\n'
+        '        except Exception as profile_err:\n'
+        '            logger.debug(\n'
+        '                "Patch 29: list_inference_profiles failed (%s); "\n'
+        '                "skipping cross-region IDs.",\n'
+        '                profile_err,\n'
+        '            )\n'
+        '\n'
+        '        return result\n'
+        '    except Exception as err:\n'
+        '        logger.warning(\n'
+        '            "%s. Configure AWS_REGION_NAME and either AWS_ACCESS_KEY_ID/"\n'
+        '            "AWS_SECRET_ACCESS_KEY or an IAM-role / AWS_PROFILE if you "\n'
+        '            "want to use Bedrock models.",\n'
+        '            err,\n'
+        '        )\n'
+        '        return []\n'
+    )
+    if not list_pattern.search(content):
+        print("ERROR: Patch 28/29 - Could not locate _list_bedrock_foundation_models")
+        return False
+    content = list_pattern.sub(list_replacement, content, count=1)
+    print("Patch 28/29: Rewrote _list_bedrock_foundation_models (default cred chain + inference profiles)")
+
+    # Replace the gating block inside get_supported_llm_models (Patch 32).
+    gate_pattern = re.compile(
+        r"    bedrock_model_list = \[\]\n"
+        r"    if aws_region_name and aws_access_key_id and aws_secret_access_key:\n"
+        r"        bedrock_model_list = _list_bedrock_foundation_models\(\n"
+        r"            aws_region_name,\n"
+        r"            aws_access_key_id\.get_secret_value\(\),\n"
+        r"            aws_secret_access_key\.get_secret_value\(\),\n"
+        r"        \)\n"
+    )
+    gate_replacement = (
+        '    bedrock_model_list = []\n'
+        '    # Patch 32 (openhands-infra): trigger Bedrock listing when explicit creds\n'
+        '    # are present OR when env hints (AWS_PROFILE / AWS_ROLE_ARN /\n'
+        '    # AWS_WEB_IDENTITY_TOKEN_FILE) suggest the default credential chain can\n'
+        '    # resolve a session — paired with Patch 28 default-cred-chain support.\n'
+        '    _has_static_creds = bool(\n'
+        '        aws_region_name and aws_access_key_id and aws_secret_access_key\n'
+        '    )\n'
+        '    _has_env_hint = bool(\n'
+        '        os.environ.get("AWS_PROFILE")\n'
+        '        or os.environ.get("AWS_ROLE_ARN")\n'
+        '        or os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE")\n'
+        '    )\n'
+        '    if _has_static_creds or _has_env_hint:\n'
+        '        bedrock_model_list = _list_bedrock_foundation_models(\n'
+        '            aws_region_name,\n'
+        '            aws_access_key_id.get_secret_value() if aws_access_key_id else None,\n'
+        '            aws_secret_access_key.get_secret_value() if aws_secret_access_key else None,\n'
+        '        )\n'
+    )
+    if not gate_pattern.search(content):
+        print("ERROR: Patch 32 - Could not locate Bedrock gating block in get_supported_llm_models")
+        return False
+    content = gate_pattern.sub(gate_replacement, content, count=1)
+    print("Patch 32: Added env-hint trigger for Bedrock listing")
+
+    # Add `import os` if not already present (used by Patch 32 env-hint check).
+    if not re.search(r"^import os\b", content, re.MULTILINE):
+        content = re.sub(
+            r"^import importlib\n",
+            "import importlib\nimport os\n",
+            content,
+            count=1,
+        )
+        print("Patch 32: Added 'import os' to unverified_models.py")
+
+    target.write_text(content)
+    print("Patch 28/29/32: Successfully rewrote unverified_models.py")
+    return True
+
+
+def patch_30_model_info_region_prefix(build_dir: Path) -> bool:
+    """
+    Patch 30: Strip cross-region prefix in get_litellm_model_info fallback.
+
+    bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0 doesn't have a litellm
+    model_cost entry, but bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0 does.
+    Add a 3rd fallback that re.subs ``bedrock/(us|eu|apac|global)\\.`` →
+    ``bedrock/`` so cross-region inference profile IDs resolve their cost / context
+    window metadata.
+    """
+    target = build_dir / "openhands-sdk/openhands/sdk/llm/utils/model_info.py"
+    if not target.exists():
+        print(f"ERROR: Patch 30 - File not found: {target}")
+        return False
+
+    content = target.read_text()
+
+    if "bedrock/(us|eu|apac|global)" in content:
+        print("Patch 30: Already applied (skipping)")
+        return True
+
+    # Insert a 3rd fallback before `return None` at the end of get_litellm_model_info.
+    anchor = (
+        "    try:\n"
+        "        model_info = get_model_info(model.split(\"/\")[-1])\n"
+        "        if model_info:\n"
+        "            return model_info\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "\n"
+        "    return None"
+    )
     if anchor not in content:
-        print("ERROR: Patch 27a - Could not find o3 clamping anchor in llm.py")
+        print("ERROR: Patch 30 - Could not find tail anchor in get_litellm_model_info")
         return False
 
-    # Find the end of the o3 block (the closing of the if block)
-    anchor_pos = content.index(anchor)
-    # Find the next blank line after the o3 block
-    search_from = content.index('\n\n', anchor_pos)
+    new_block = (
+        "    try:\n"
+        "        model_info = get_model_info(model.split(\"/\")[-1])\n"
+        "        if model_info:\n"
+        "            return model_info\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "\n"
+        "    # Patch 30 (openhands-infra): strip cross-region inference profile prefix\n"
+        "    # (us. / eu. / apac. / global.) so bedrock/us.anthropic.* resolves to the\n"
+        "    # underlying bedrock/anthropic.* model_cost entry.\n"
+        "    try:\n"
+        "        import re as _re\n"
+        "        stripped = _re.sub(r'^bedrock/(us|eu|apac|global)\\.', 'bedrock/', model)\n"
+        "        if stripped != model:\n"
+        "            model_info = get_model_info(stripped)\n"
+        "            if model_info:\n"
+        "                return model_info\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "\n"
+        "    return None"
+    )
 
-    patch_27a = '''
+    content = content.replace(anchor, new_block, 1)
+    target.write_text(content)
+    print("Patch 30: Added cross-region prefix stripping fallback to get_litellm_model_info")
+    return True
 
-        # Patch 27 (openhands-infra): Bedrock models where litellm reports
-        # max_output_tokens == max_input_tokens are using the context window size,
-        # not the actual output limit. Reset to None so the Bedrock API uses
-        # the model's own default (per AWS docs, omitting maxTokens defaults to
-        # the model's maximum).
-        if self.model.startswith("bedrock/"):
-            _bad_output_limit = (
-                self.max_output_tokens is not None
-                and self.max_input_tokens is not None
-                and self.max_output_tokens == self.max_input_tokens
-            )
-            if self.max_output_tokens is None or _bad_output_limit:
-                if _bad_output_limit:
-                    logger.debug(
-                        "Patch 27: Bedrock model %s has max_output_tokens (%d) "
-                        "equal to max_input_tokens — likely context window. "
-                        "Resetting to None.",
-                        self.model,
-                        self.max_output_tokens,
-                    )
-                self.max_output_tokens = None
-'''
 
-    content = content[:search_from] + patch_27a + content[search_from:]
-    llm_file.write_text(content)
-    print("Patch 27a: Added Bedrock max_output_tokens context-window detection to llm.py")
+def patch_31_aws_default_region(build_dir: Path) -> bool:
+    """
+    Patch 31: Set AWS_DEFAULT_REGION alongside AWS_REGION_NAME.
 
-    # Part B: Patch chat_options.py — omit max_completion_tokens=None for Bedrock
-    chat_options_file = build_dir / "openhands-sdk/openhands/sdk/llm/options/chat_options.py"
-
-    if not chat_options_file.exists():
-        print(f"ERROR: Patch 27b - File not found: {chat_options_file}")
+    boto3 prefers AWS_DEFAULT_REGION for some auth modes (notably IAM Identity
+    Center / SSO and certain metadata-service paths). The SDK only sets
+    AWS_REGION_NAME, leaving boto3 unable to resolve a region in those modes.
+    """
+    target = build_dir / "openhands-sdk/openhands/sdk/llm/llm.py"
+    if not target.exists():
+        print(f"ERROR: Patch 31 - File not found: {target}")
         return False
 
-    opts_content = chat_options_file.read_text()
+    content = target.read_text()
 
-    # Insert after the Azure max_tokens handling block
-    azure_anchor = '            out["max_tokens"] = out.pop("max_completion_tokens")'
-    if azure_anchor not in opts_content:
-        print("ERROR: Patch 27b - Could not find Azure max_tokens anchor in chat_options.py")
+    if 'os.environ.setdefault("AWS_DEFAULT_REGION"' in content:
+        print("Patch 31: Already applied (skipping)")
+        return True
+
+    anchor = (
+        '        if self.aws_region_name:\n'
+        '            os.environ["AWS_REGION_NAME"] = self.aws_region_name\n'
+    )
+    if anchor not in content:
+        print("ERROR: Patch 31 - Could not find AWS_REGION_NAME anchor in _set_env_side_effects")
         return False
 
-    patch_27b = '''
-
-    # Patch 27 (openhands-infra): For Bedrock models with unknown max_output_tokens,
-    # remove max_completion_tokens entirely so the Bedrock API uses the model's own
-    # maximum (safest default for coding agents).
-    if llm.model.startswith("bedrock/") and out.get("max_completion_tokens") is None:
-        out.pop("max_completion_tokens", None)
-'''
-
-    # Find the line after the Azure block
-    azure_end = opts_content.index(azure_anchor) + len(azure_anchor)
-    # Find the next newline
-    next_newline = opts_content.index('\n', azure_end)
-    opts_content = opts_content[:next_newline + 1] + patch_27b + opts_content[next_newline + 1:]
-
-    chat_options_file.write_text(opts_content)
-    print("Patch 27b: Added Bedrock max_completion_tokens=None removal to chat_options.py")
-
-    print("Patch 27: Successfully patched both llm.py and chat_options.py")
+    new_block = (
+        '        if self.aws_region_name:\n'
+        '            os.environ["AWS_REGION_NAME"] = self.aws_region_name\n'
+        '            # Patch 31 (openhands-infra): boto3 prefers AWS_DEFAULT_REGION\n'
+        '            # over AWS_REGION_NAME for some auth modes (IAM Identity\n'
+        '            # Center / SSO, EC2 metadata service in certain configs).\n'
+        '            # Use setdefault so an explicit env var still wins.\n'
+        '            os.environ.setdefault("AWS_DEFAULT_REGION", self.aws_region_name)\n'
+    )
+    content = content.replace(anchor, new_block, 1)
+    target.write_text(content)
+    print("Patch 31: Added AWS_DEFAULT_REGION setdefault in _set_env_side_effects")
     return True
 
 
@@ -451,10 +626,14 @@ def main():
 
     # Apply all patches
     results.append(("Patch 23", patch_23_agent_context(build_dir)))
-    # Patch 24 removed — SDK v1.15.0 already uses model_dump(mode="json")
+    # Patch 24 removed — SDK v1.15.0+ already uses model_dump(mode="json")
     results.append(("Patch 25", patch_25_json_preprocessing(build_dir)))
     results.append(("Patch 26", patch_26_conversation_state(build_dir)))
-    results.append(("Patch 27", patch_27_bedrock_max_output_tokens(build_dir)))
+    # Patch 27 removed — SDK v1.19.1 caps max_output_tokens to half the context
+    # window (llm.py:1273-1287). Same outcome via different mechanism.
+    results.append(("Patch 28/29/32", patch_28_29_32_bedrock_listing(build_dir)))
+    results.append(("Patch 30", patch_30_model_info_region_prefix(build_dir)))
+    results.append(("Patch 31", patch_31_aws_default_region(build_dir)))
 
     print()
     print("=" * 60)

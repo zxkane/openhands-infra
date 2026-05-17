@@ -1,5 +1,5 @@
 """
-Unit tests for S3SettingsStore and S3SecretsStore.
+Unit tests for CognitoS3SettingsStore and CognitoS3SecretsStore.
 
 These tests verify the user-scoped storage functionality including:
 - User-specific path generation (users/{user_id}/settings.json, users/{user_id}/secrets.json)
@@ -19,15 +19,14 @@ import sys
 from dataclasses import dataclass
 
 
-# Mock OpenHands modules before importing the modules under test
+# Mock OpenHands modules before importing the modules under test.
+# v1.7.0 dropped the file_store_web_hook_* fields from OpenHandsConfig (and the
+# matching kwargs from get_file_store), so they're not part of the mock.
 @dataclass
 class MockOpenHandsConfig:
     """Mock OpenHands configuration."""
     file_store: str = 's3'
     file_store_path: str = 'test-bucket'
-    file_store_web_hook_url: str | None = None
-    file_store_web_hook_headers: dict | None = None
-    file_store_web_hook_batch: int = 0
 
 
 @dataclass
@@ -90,25 +89,28 @@ class MockSecrets:
         return json.dumps(result)
 
 
-# Set up mock modules
+# Set up mock modules.
+# v1.7.0 collapsed the V0 openhands.storage.* and openhands.utils.* surfaces
+# into openhands.app_server.{settings,secrets,file_store,utils}.* — mocks
+# follow.
 sys.modules['openhands'] = MagicMock()
 sys.modules['openhands.core'] = MagicMock()
 sys.modules['openhands.core.config'] = MagicMock()
 sys.modules['openhands.core.config.openhands_config'] = MagicMock()
 sys.modules['openhands.core.config.openhands_config'].OpenHandsConfig = MockOpenHandsConfig
-sys.modules['openhands.storage'] = MagicMock()
-sys.modules['openhands.storage.files'] = MagicMock()
-sys.modules['openhands.storage.data_models'] = MagicMock()
-sys.modules['openhands.storage.data_models.settings'] = MagicMock()
-sys.modules['openhands.storage.data_models.settings'].Settings = MockSettings
-sys.modules['openhands.storage.data_models.secrets'] = MagicMock()
-sys.modules['openhands.storage.data_models.secrets'].Secrets = MockSecrets
-sys.modules['openhands.storage.settings'] = MagicMock()
-sys.modules['openhands.storage.settings.settings_store'] = MagicMock()
-sys.modules['openhands.storage.secrets'] = MagicMock()
-sys.modules['openhands.storage.secrets.secrets_store'] = MagicMock()
-sys.modules['openhands.utils'] = MagicMock()
-sys.modules['openhands.utils.async_utils'] = MagicMock()
+sys.modules['openhands.app_server'] = MagicMock()
+sys.modules['openhands.app_server.file_store'] = MagicMock()
+sys.modules['openhands.app_server.file_store.files'] = MagicMock()
+sys.modules['openhands.app_server.settings'] = MagicMock()
+sys.modules['openhands.app_server.settings.settings_models'] = MagicMock()
+sys.modules['openhands.app_server.settings.settings_models'].Settings = MockSettings
+sys.modules['openhands.app_server.settings.settings_store'] = MagicMock()
+sys.modules['openhands.app_server.secrets'] = MagicMock()
+sys.modules['openhands.app_server.secrets.secrets_models'] = MagicMock()
+sys.modules['openhands.app_server.secrets.secrets_models'].Secrets = MockSecrets
+sys.modules['openhands.app_server.secrets.secrets_store'] = MagicMock()
+sys.modules['openhands.app_server.utils'] = MagicMock()
+sys.modules['openhands.app_server.utils.async_utils'] = MagicMock()
 
 # Create mock base classes
 class MockSettingsStore:
@@ -121,34 +123,35 @@ class MockSecretsStore:
     pass
 
 
-sys.modules['openhands.storage.settings.settings_store'].SettingsStore = MockSettingsStore
-sys.modules['openhands.storage.secrets.secrets_store'].SecretsStore = MockSecretsStore
+sys.modules['openhands.app_server.settings.settings_store'].SettingsStore = MockSettingsStore
+sys.modules['openhands.app_server.secrets.secrets_store'].SecretsStore = MockSecretsStore
 
 
-# Now import the modules under test
-from s3_settings_store import S3SettingsStore
-from s3_secrets_store import S3SecretsStore
+# Now import the modules under test (renamed in v1.7.0:
+# CognitoS3SettingsStore -> CognitoS3SettingsStore, CognitoS3SecretsStore -> CognitoS3SecretsStore)
+from s3_settings_store import CognitoS3SettingsStore
+from s3_secrets_store import CognitoS3SecretsStore
 
 
-class TestS3SettingsStorePathGeneration:
-    """Tests for S3SettingsStore path generation."""
+class TestCognitoS3SettingsStorePathGeneration:
+    """Tests for CognitoS3SettingsStore path generation."""
 
     def test_get_path_returns_user_scoped_path(self):
         """Should return users/{user_id}/settings.json."""
-        store = S3SettingsStore(file_store=MagicMock(), user_id="user-123")
+        store = CognitoS3SettingsStore(file_store=MagicMock(), user_id="user-123")
         assert store._get_path() == "users/user-123/settings.json"
 
     def test_different_users_have_different_paths(self):
         """Different user_ids should produce different paths."""
-        store_a = S3SettingsStore(file_store=MagicMock(), user_id="user-aaa")
-        store_b = S3SettingsStore(file_store=MagicMock(), user_id="user-bbb")
+        store_a = CognitoS3SettingsStore(file_store=MagicMock(), user_id="user-aaa")
+        store_b = CognitoS3SettingsStore(file_store=MagicMock(), user_id="user-bbb")
         assert store_a._get_path() != store_b._get_path()
         assert "user-aaa" in store_a._get_path()
         assert "user-bbb" in store_b._get_path()
 
     def test_path_format_matches_conversation_store_pattern(self):
         """Path should follow same pattern as CognitoFileConversationStore."""
-        store = S3SettingsStore(file_store=MagicMock(), user_id="cognito-sub-uuid")
+        store = CognitoS3SettingsStore(file_store=MagicMock(), user_id="cognito-sub-uuid")
         path = store._get_path()
         # Should be: users/{user_id}/settings.json
         assert path.startswith("users/")
@@ -158,27 +161,27 @@ class TestS3SettingsStorePathGeneration:
     def test_path_with_complex_user_id(self):
         """Should handle complex user IDs (UUID format from Cognito)."""
         user_id = "abc12345-def6-7890-ghij-klmnopqrstuv"
-        store = S3SettingsStore(file_store=MagicMock(), user_id=user_id)
+        store = CognitoS3SettingsStore(file_store=MagicMock(), user_id=user_id)
         path = store._get_path()
         assert path == f"users/{user_id}/settings.json"
 
 
-class TestS3SettingsStoreGetInstance:
-    """Tests for S3SettingsStore.get_instance class method."""
+class TestCognitoS3SettingsStoreGetInstance:
+    """Tests for CognitoS3SettingsStore.get_instance class method."""
 
     @pytest.mark.asyncio
     async def test_get_instance_requires_user_id(self):
         """Should raise ValueError when user_id is None."""
         mock_config = MockOpenHandsConfig()
         with pytest.raises(ValueError, match="user_id is required"):
-            await S3SettingsStore.get_instance(mock_config, None)
+            await CognitoS3SettingsStore.get_instance(mock_config, None)
 
     @pytest.mark.asyncio
     async def test_get_instance_requires_user_id_empty_string(self):
         """Should raise ValueError when user_id is empty string."""
         mock_config = MockOpenHandsConfig()
         with pytest.raises(ValueError, match="user_id is required"):
-            await S3SettingsStore.get_instance(mock_config, "")
+            await CognitoS3SettingsStore.get_instance(mock_config, "")
 
     @pytest.mark.asyncio
     @patch('s3_settings_store.get_file_store')
@@ -188,7 +191,7 @@ class TestS3SettingsStoreGetInstance:
         mock_get_file_store.return_value = mock_file_store
         mock_config = MockOpenHandsConfig()
 
-        store = await S3SettingsStore.get_instance(mock_config, "user-xyz")
+        store = await CognitoS3SettingsStore.get_instance(mock_config, "user-xyz")
 
         assert store.user_id == "user-xyz"
         assert store.file_store == mock_file_store
@@ -204,7 +207,7 @@ class TestS3SettingsStoreGetInstance:
             file_store_path='my-bucket'
         )
 
-        await S3SettingsStore.get_instance(mock_config, "user-xyz")
+        await CognitoS3SettingsStore.get_instance(mock_config, "user-xyz")
 
         mock_get_file_store.assert_called_once()
         call_kwargs = mock_get_file_store.call_args
@@ -212,8 +215,8 @@ class TestS3SettingsStoreGetInstance:
         assert call_kwargs[1]['file_store_path'] == 'my-bucket'
 
 
-class TestS3SettingsStoreLoad:
-    """Tests for S3SettingsStore.load method."""
+class TestCognitoS3SettingsStoreLoad:
+    """Tests for CognitoS3SettingsStore.load method."""
 
     @pytest.mark.asyncio
     @patch('s3_settings_store.call_sync_from_async', new_callable=AsyncMock)
@@ -223,7 +226,7 @@ class TestS3SettingsStoreLoad:
         settings_data = {"llm_model": "gpt-4", "language": "en", "v1_enabled": True}
         mock_call_sync.return_value = json.dumps(settings_data)
 
-        store = S3SettingsStore(file_store=mock_file_store, user_id="user-123")
+        store = CognitoS3SettingsStore(file_store=mock_file_store, user_id="user-123")
         result = await store.load()
 
         mock_call_sync.assert_called_once()
@@ -237,7 +240,7 @@ class TestS3SettingsStoreLoad:
         mock_file_store = MagicMock()
         mock_call_sync.side_effect = FileNotFoundError("Not found")
 
-        store = S3SettingsStore(file_store=mock_file_store, user_id="user-123")
+        store = CognitoS3SettingsStore(file_store=mock_file_store, user_id="user-123")
         result = await store.load()
 
         assert result is None
@@ -249,14 +252,14 @@ class TestS3SettingsStoreLoad:
         mock_file_store = MagicMock()
         mock_call_sync.return_value = "not valid json {"
 
-        store = S3SettingsStore(file_store=mock_file_store, user_id="user-123")
+        store = CognitoS3SettingsStore(file_store=mock_file_store, user_id="user-123")
         result = await store.load()
 
         assert result is None
 
 
-class TestS3SettingsStoreStore:
-    """Tests for S3SettingsStore.store method."""
+class TestCognitoS3SettingsStoreStore:
+    """Tests for CognitoS3SettingsStore.store method."""
 
     @pytest.mark.asyncio
     @patch('s3_settings_store.call_sync_from_async', new_callable=AsyncMock)
@@ -265,7 +268,7 @@ class TestS3SettingsStoreStore:
         mock_file_store = MagicMock()
         mock_settings = MockSettings()
 
-        store = S3SettingsStore(file_store=mock_file_store, user_id="user-456")
+        store = CognitoS3SettingsStore(file_store=mock_file_store, user_id="user-456")
         await store.store(mock_settings)
 
         mock_call_sync.assert_called_once()
@@ -273,45 +276,45 @@ class TestS3SettingsStoreStore:
         assert call_args[1] == "users/user-456/settings.json"
 
 
-class TestS3SecretsStorePathGeneration:
-    """Tests for S3SecretsStore path generation."""
+class TestCognitoS3SecretsStorePathGeneration:
+    """Tests for CognitoS3SecretsStore path generation."""
 
     def test_get_path_returns_user_scoped_path(self):
         """Should return users/{user_id}/secrets.json."""
-        store = S3SecretsStore(file_store=MagicMock(), user_id="user-789")
+        store = CognitoS3SecretsStore(file_store=MagicMock(), user_id="user-789")
         assert store._get_path() == "users/user-789/secrets.json"
 
     def test_different_users_have_different_paths(self):
         """Different user_ids should produce different paths."""
-        store_a = S3SecretsStore(file_store=MagicMock(), user_id="user-a")
-        store_b = S3SecretsStore(file_store=MagicMock(), user_id="user-b")
+        store_a = CognitoS3SecretsStore(file_store=MagicMock(), user_id="user-a")
+        store_b = CognitoS3SecretsStore(file_store=MagicMock(), user_id="user-b")
         assert store_a._get_path() != store_b._get_path()
 
     def test_path_format_is_consistent(self):
         """Path should follow consistent format."""
-        store = S3SecretsStore(file_store=MagicMock(), user_id="cognito-sub-uuid")
+        store = CognitoS3SecretsStore(file_store=MagicMock(), user_id="cognito-sub-uuid")
         path = store._get_path()
         assert path.startswith("users/")
         assert path.endswith("/secrets.json")
         assert "cognito-sub-uuid" in path
 
 
-class TestS3SecretsStoreGetInstance:
-    """Tests for S3SecretsStore.get_instance class method."""
+class TestCognitoS3SecretsStoreGetInstance:
+    """Tests for CognitoS3SecretsStore.get_instance class method."""
 
     @pytest.mark.asyncio
     async def test_get_instance_requires_user_id(self):
         """Should raise ValueError when user_id is None."""
         mock_config = MockOpenHandsConfig()
         with pytest.raises(ValueError, match="user_id is required"):
-            await S3SecretsStore.get_instance(mock_config, None)
+            await CognitoS3SecretsStore.get_instance(mock_config, None)
 
     @pytest.mark.asyncio
     async def test_get_instance_requires_user_id_empty_string(self):
         """Should raise ValueError when user_id is empty string."""
         mock_config = MockOpenHandsConfig()
         with pytest.raises(ValueError, match="user_id is required"):
-            await S3SecretsStore.get_instance(mock_config, "")
+            await CognitoS3SecretsStore.get_instance(mock_config, "")
 
     @pytest.mark.asyncio
     @patch('s3_secrets_store.get_file_store')
@@ -321,14 +324,14 @@ class TestS3SecretsStoreGetInstance:
         mock_get_file_store.return_value = mock_file_store
         mock_config = MockOpenHandsConfig()
 
-        store = await S3SecretsStore.get_instance(mock_config, "user-xyz")
+        store = await CognitoS3SecretsStore.get_instance(mock_config, "user-xyz")
 
         assert store.user_id == "user-xyz"
         assert store.file_store == mock_file_store
 
 
-class TestS3SecretsStoreLoad:
-    """Tests for S3SecretsStore.load method."""
+class TestCognitoS3SecretsStoreLoad:
+    """Tests for CognitoS3SecretsStore.load method."""
 
     @pytest.mark.asyncio
     @patch('s3_secrets_store.call_sync_from_async', new_callable=AsyncMock)
@@ -338,7 +341,7 @@ class TestS3SecretsStoreLoad:
         secrets_data = {"custom_secrets": {"api_key": {"secret": "xxx"}}}
         mock_call_sync.return_value = json.dumps(secrets_data)
 
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-123")
+        store = CognitoS3SecretsStore(file_store=mock_file_store, user_id="user-123")
         result = await store.load()
 
         mock_call_sync.assert_called_once()
@@ -352,7 +355,7 @@ class TestS3SecretsStoreLoad:
         mock_file_store = MagicMock()
         mock_call_sync.side_effect = FileNotFoundError("Not found")
 
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-123")
+        store = CognitoS3SecretsStore(file_store=mock_file_store, user_id="user-123")
         result = await store.load()
 
         assert result is None
@@ -364,14 +367,14 @@ class TestS3SecretsStoreLoad:
         mock_file_store = MagicMock()
         mock_call_sync.return_value = "invalid json"
 
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-123")
+        store = CognitoS3SecretsStore(file_store=mock_file_store, user_id="user-123")
         result = await store.load()
 
         assert result is None
 
 
-class TestS3SecretsStoreStore:
-    """Tests for S3SecretsStore.store method."""
+class TestCognitoS3SecretsStoreStore:
+    """Tests for CognitoS3SecretsStore.store method."""
 
     @pytest.mark.asyncio
     @patch('s3_secrets_store.call_sync_from_async', new_callable=AsyncMock)
@@ -381,7 +384,7 @@ class TestS3SecretsStoreStore:
         # Create a MockSecrets object instead of dict
         mock_secrets = MockSecrets(custom_secrets={"my_key": {"secret": "value", "description": ""}})
 
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-456")
+        store = CognitoS3SecretsStore(file_store=mock_file_store, user_id="user-456")
         await store.store(mock_secrets)
 
         mock_call_sync.assert_called_once()
@@ -389,68 +392,10 @@ class TestS3SecretsStoreStore:
         assert call_args[1] == "users/user-456/secrets.json"
 
 
-class TestS3SecretsStoreSecretOperations:
-    """Tests for S3SecretsStore secret operations (get, set, delete, list)."""
-
-    @pytest.mark.asyncio
-    @patch('s3_secrets_store.call_sync_from_async', new_callable=AsyncMock)
-    async def test_get_secret_returns_value(self, mock_call_sync):
-        """Should return secret value by name."""
-        mock_file_store = MagicMock()
-        secrets_data = {
-            "custom_secrets": {
-                "API_KEY": {"secret": "my-api-key", "description": "Test key"}
-            }
-        }
-        mock_call_sync.return_value = json.dumps(secrets_data)
-
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-123")
-        result = await store.get_secret("API_KEY")
-
-        assert result == "my-api-key"
-
-    @pytest.mark.asyncio
-    @patch('s3_secrets_store.call_sync_from_async', new_callable=AsyncMock)
-    async def test_get_secret_returns_none_if_not_found(self, mock_call_sync):
-        """Should return None when secret doesn't exist."""
-        mock_file_store = MagicMock()
-        secrets_data = {"custom_secrets": {}}
-        mock_call_sync.return_value = json.dumps(secrets_data)
-
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-123")
-        result = await store.get_secret("NONEXISTENT")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    @patch('s3_secrets_store.call_sync_from_async', new_callable=AsyncMock)
-    async def test_list_secrets_returns_names(self, mock_call_sync):
-        """Should return list of secret names."""
-        mock_file_store = MagicMock()
-        secrets_data = {
-            "custom_secrets": {
-                "KEY_A": {"secret": "a"},
-                "KEY_B": {"secret": "b"}
-            }
-        }
-        mock_call_sync.return_value = json.dumps(secrets_data)
-
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-123")
-        result = await store.list_secrets()
-
-        assert set(result) == {"KEY_A", "KEY_B"}
-
-    @pytest.mark.asyncio
-    @patch('s3_secrets_store.call_sync_from_async', new_callable=AsyncMock)
-    async def test_list_secrets_returns_empty_when_no_file(self, mock_call_sync):
-        """Should return empty list when no secrets file."""
-        mock_file_store = MagicMock()
-        mock_call_sync.side_effect = FileNotFoundError()
-
-        store = S3SecretsStore(file_store=mock_file_store, user_id="user-123")
-        result = await store.list_secrets()
-
-        assert result == []
+# V0 helper methods (get_secret / set_secret / delete_secret / list_secrets)
+# were dropped in v1.7.0 along with the V0 storage package collapse — they were
+# never part of the SecretsStore ABC and had no callers. Their tests went with
+# them. The load/store path coverage above is sufficient.
 
 
 class TestUserIsolation:
@@ -461,8 +406,8 @@ class TestUserIsolation:
         user_a_id = "user-a-cognito-sub"
         user_b_id = "user-b-cognito-sub"
 
-        store_a = S3SettingsStore(file_store=MagicMock(), user_id=user_a_id)
-        store_b = S3SettingsStore(file_store=MagicMock(), user_id=user_b_id)
+        store_a = CognitoS3SettingsStore(file_store=MagicMock(), user_id=user_a_id)
+        store_b = CognitoS3SettingsStore(file_store=MagicMock(), user_id=user_b_id)
 
         assert user_a_id in store_a._get_path()
         assert user_b_id not in store_a._get_path()
@@ -474,8 +419,8 @@ class TestUserIsolation:
         user_a_id = "user-a-cognito-sub"
         user_b_id = "user-b-cognito-sub"
 
-        store_a = S3SecretsStore(file_store=MagicMock(), user_id=user_a_id)
-        store_b = S3SecretsStore(file_store=MagicMock(), user_id=user_b_id)
+        store_a = CognitoS3SecretsStore(file_store=MagicMock(), user_id=user_a_id)
+        store_b = CognitoS3SecretsStore(file_store=MagicMock(), user_id=user_b_id)
 
         assert user_a_id in store_a._get_path()
         assert user_b_id not in store_a._get_path()
@@ -486,8 +431,8 @@ class TestUserIsolation:
         """Settings and secrets should have different but consistent paths."""
         user_id = "test-user-123"
 
-        settings_store = S3SettingsStore(file_store=MagicMock(), user_id=user_id)
-        secrets_store = S3SecretsStore(file_store=MagicMock(), user_id=user_id)
+        settings_store = CognitoS3SettingsStore(file_store=MagicMock(), user_id=user_id)
+        secrets_store = CognitoS3SecretsStore(file_store=MagicMock(), user_id=user_id)
 
         settings_path = settings_store._get_path()
         secrets_path = secrets_store._get_path()
@@ -508,7 +453,7 @@ class TestPathConsistencyWithConversationStore:
     def test_settings_path_uses_same_user_prefix(self):
         """Settings path should use same 'users/{user_id}/' prefix as conversations."""
         user_id = "cognito-abc-123"
-        store = S3SettingsStore(file_store=MagicMock(), user_id=user_id)
+        store = CognitoS3SettingsStore(file_store=MagicMock(), user_id=user_id)
         path = store._get_path()
 
         # Should match pattern: users/{user_id}/settings.json
@@ -517,7 +462,7 @@ class TestPathConsistencyWithConversationStore:
     def test_secrets_path_uses_same_user_prefix(self):
         """Secrets path should use same 'users/{user_id}/' prefix as conversations."""
         user_id = "cognito-abc-123"
-        store = S3SecretsStore(file_store=MagicMock(), user_id=user_id)
+        store = CognitoS3SecretsStore(file_store=MagicMock(), user_id=user_id)
         path = store._get_path()
 
         # Should match pattern: users/{user_id}/secrets.json
@@ -532,7 +477,7 @@ class TestErrorMessages:
         """Error message should explain why user_id is required."""
         mock_config = MockOpenHandsConfig()
         with pytest.raises(ValueError) as exc_info:
-            await S3SettingsStore.get_instance(mock_config, None)
+            await CognitoS3SettingsStore.get_instance(mock_config, None)
 
         error_msg = str(exc_info.value)
         assert "user_id is required" in error_msg
@@ -543,7 +488,7 @@ class TestErrorMessages:
         """Error message should explain why user_id is required."""
         mock_config = MockOpenHandsConfig()
         with pytest.raises(ValueError) as exc_info:
-            await S3SecretsStore.get_instance(mock_config, None)
+            await CognitoS3SecretsStore.get_instance(mock_config, None)
 
         error_msg = str(exc_info.value)
         assert "user_id is required" in error_msg

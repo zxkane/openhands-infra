@@ -238,30 +238,61 @@ if [ -f "$APP_CONFIG_FILE" ]; then
   fi
 fi
 
-# ─── Patch 21: Verify multi-tenant store configuration ──────────────────────
+# ─── Patch 21: Verify multi-tenant store configuration (V1 paths) ───────────
+#
+# In v1.7.0, the V1 store wiring lives in TWO places:
+#
+#   1. /app/openhands/server/config/server_config.py:
+#      settings_store_class / secret_store_class / user_auth_class string fields
+#      drive get_impl() in openhands.server.shared. The fork patches these to
+#      point at openhands.app_server.{settings,secrets,user_auth}.<cognito_*>.
+#      This file is V0-tagged but its store-class fields are still active.
+#
+#   2. /app/openhands/app_server/config.py:
+#      CognitoSQLAppConversationInfoServiceInjector — multi-tenant conversation
+#      isolation (verified above).
+#
+# This check is FAIL-CLOSED: if any of the three string-class fields are
+# missing the Cognito V1 wiring, the container refuses to start. The previous
+# v1.6.0 grep on s3_settings_store.S3SettingsStore (V0 paths) silently passed
+# when the V0 file was deleted in v1.7.0 — that's the failure mode this
+# rewrite closes.
 
 SERVER_CONFIG_FILE="/app/openhands/server/config/server_config.py"
-if [ -f "$SERVER_CONFIG_FILE" ]; then
+if [ ! -f "$SERVER_CONFIG_FILE" ]; then
+  echo "CRITICAL: $SERVER_CONFIG_FILE not found — required for V1 store wiring" >&2
+  mark_critical_failure "Patch21-server-config-missing"
+else
   MISSING_STORES=""
 
-  if grep -q "s3_settings_store.S3SettingsStore" "$SERVER_CONFIG_FILE"; then
-    echo "Patch 21: S3SettingsStore configured correctly"
+  # Tolerate either filename form (s3_settings_store.py or
+  # cognito_s3_settings_store.py) so a future rename inside the fork doesn't
+  # silently bypass this check.
+  if grep -qE "(cognito_)?s3_settings_store\.CognitoS3SettingsStore" "$SERVER_CONFIG_FILE"; then
+    echo "Patch 21: CognitoS3SettingsStore wired in server_config.py"
   else
-    echo "WARNING: S3SettingsStore not configured - settings may not be user-scoped" >&2
-    MISSING_STORES="${MISSING_STORES} S3SettingsStore"
+    echo "CRITICAL: CognitoS3SettingsStore not wired — settings may not be user-scoped" >&2
+    MISSING_STORES="${MISSING_STORES} CognitoS3SettingsStore"
   fi
 
-  if grep -q "s3_secrets_store.S3SecretsStore" "$SERVER_CONFIG_FILE"; then
-    echo "Patch 21: S3SecretsStore configured correctly"
+  if grep -qE "(cognito_)?s3_secrets_store\.CognitoS3SecretsStore" "$SERVER_CONFIG_FILE"; then
+    echo "Patch 21: CognitoS3SecretsStore wired in server_config.py"
   else
-    echo "WARNING: S3SecretsStore not configured - secrets may not be user-scoped" >&2
-    MISSING_STORES="${MISSING_STORES} S3SecretsStore"
+    echo "CRITICAL: CognitoS3SecretsStore not wired — secrets may not be user-scoped" >&2
+    MISSING_STORES="${MISSING_STORES} CognitoS3SecretsStore"
+  fi
+
+  if grep -qE "cognito_user_auth\.CognitoUserAuth" "$SERVER_CONFIG_FILE"; then
+    echo "Patch 21: CognitoUserAuth wired in server_config.py"
+  else
+    echo "CRITICAL: CognitoUserAuth not wired — auth may fall back to default user" >&2
+    MISSING_STORES="${MISSING_STORES} CognitoUserAuth"
   fi
 
   if [ -z "$MISSING_STORES" ]; then
-    echo "Patch 21: Multi-tenant isolation ENABLED - settings/secrets stored at users/{user_id}/"
+    echo "Patch 21: Multi-tenant isolation ENABLED — settings/secrets stored at users/{user_id}/"
   else
-    mark_critical_failure "Patch21-multi-tenant-isolation"
+    mark_critical_failure "Patch21-multi-tenant-isolation:${MISSING_STORES}"
   fi
 fi
 

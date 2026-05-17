@@ -19,45 +19,52 @@
 # This prevents Docker build cache from silently using a stale base image layer.
 # To update: docker manifest inspect docker.openhands.dev/openhands/openhands:<version>
 # and use the top-level digest (sha256:...) from the manifest list.
-ARG OPENHANDS_VERSION=1.6.0
-ARG OPENHANDS_IMAGE_DIGEST=sha256:5c0dc26f467bf8e47a6e76308edb7a30af4084b17e23a3460b5467008b12111b
+ARG OPENHANDS_VERSION=1.7.0
+# Multi-arch manifest list digest (linux/amd64 + linux/arm64) for openhands/openhands:1.7.0.
+# Refresh: docker buildx imagetools inspect docker.openhands.dev/openhands/openhands:<version>
+ARG OPENHANDS_IMAGE_DIGEST=sha256:916abcb15cc451d96853bd41c55117bb2ff3de0b9914cdcd861d338055798dc6
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}@${OPENHANDS_IMAGE_DIGEST}
 
 # Upgrade system packages to fix CVEs (openssl, gnutls28, etc.)
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 # Install boto3 for AWS Bedrock support (required by litellm for AWS authentication)
-# Upgrade openhands-tools to match agent-server-custom SDK (v1.15.0)
-RUN pip install --no-cache-dir boto3 openhands-tools==1.15.0
+# Upgrade openhands-tools to match agent-server-custom SDK (v1.19.1)
+RUN pip install --no-cache-dir boto3 openhands-tools==1.19.1
 
 # ─── Build-time: Download patched upstream files from fork ───────────────────
 # Replaces the old apply-patch.sh (2000+ line regex patching at startup).
 # The fork (zxkane/openhands) has clean per-feature commits against the release tag.
 # See docker/CLAUDE.md for the full list of patched files and fork branch strategy.
-# Pin to commit SHA for reproducible builds (tag: custom-v1.6.0-fargate-r1)
-# Fargate branch: RemoteSandboxService compatible, multi-tenant isolation, Bedrock enhancements
-ARG FORK_REF=7a481ec3a7ec071851a3a854bd0c76b338c88e7b
+# Pin to commit SHA for reproducible builds (branch: custom/v1.7.0-fargate).
+# Fargate branch: RemoteSandboxService compatible, multi-tenant isolation, V1 Cognito wiring.
+ARG FORK_REF=bb3fe51c920eec0b51bc7e118e340b582db0649f
 COPY download-fork-patches.sh /opt/download-fork-patches.sh
 RUN FORK_REF=${FORK_REF} sh /opt/download-fork-patches.sh
 
 # ─── Custom modules (NEW files, not upstream modifications) ──────────────────
+#
+# v1.7.0: COPY destinations migrated to V1 paths (openhands.app_server.*).
+# Upstream deleted openhands/server/user_auth/ and openhands/storage/{settings,
+# secrets,conversation}/ in v1.7.0. The custom modules now extend the V1 ABCs
+# (UserAuth / SettingsStore / SecretsStore) and live alongside the upstream
+# defaults under openhands/app_server/{user_auth,settings,secrets}/.
+# cognito_file_conversation_store.py is dropped — there is no V1 equivalent;
+# multi-tenant conversation isolation runs through CognitoSQLAppConversationInfoService.
 
 # Patched auth_user_context.py for webhook authentication from Docker internal network
 COPY patched/ /app/patched/
 
-# Cognito user authentication (Lambda@Edge header-based identity)
-COPY cognito_user_auth.py /app/openhands/server/user_auth/
-
-# User-scoped conversation storage (S3 path: users/{user_id}/conversations/{sid}/)
-COPY cognito_file_conversation_store.py /app/openhands/storage/conversation/
+# Cognito user authentication (Lambda@Edge header-based identity) — V1 path
+COPY cognito_user_auth.py /app/openhands/app_server/user_auth/
 
 # User config loader for MCP configurations from S3
 COPY user_config_loader.py /app/openhands/server/user_config_loader.py
 
 # User-scoped settings and secrets stores for multi-tenancy (CRITICAL SECURITY)
 # Store data at users/{user_id}/settings.json and users/{user_id}/secrets.json
-COPY s3_settings_store.py /app/openhands/storage/settings/
-COPY s3_secrets_store.py /app/openhands/storage/secrets/
+COPY s3_settings_store.py /app/openhands/app_server/settings/
+COPY s3_secrets_store.py /app/openhands/app_server/secrets/
 
 # Multi-tenant conversation isolation (user_id-based filtering)
 COPY cognito_sql_conversation_info_service.py /app/openhands/app_server/app_conversation/
