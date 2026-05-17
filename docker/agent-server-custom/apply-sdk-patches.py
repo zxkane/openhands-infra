@@ -20,6 +20,11 @@ Patches (active):
               (boto3 prefers AWS_DEFAULT_REGION over AWS_REGION_NAME for some auth modes)
   - Patch 32: Env-hint trigger for Bedrock listing in get_supported_llm_models
               (AWS_PROFILE / AWS_ROLE_ARN / AWS_WEB_IDENTITY_TOKEN_FILE → list Bedrock too)
+  - Patch 33: Change LLM.model Pydantic default from upstream
+              claude-sonnet-4-20250514 (Anthropic direct API) to
+              bedrock/global.anthropic.claude-sonnet-4-6 (Bedrock cross-region
+              inference profile). Prevents fresh conversations from falling
+              back to a model that requires ANTHROPIC_API_KEY.
 
 Removed (absorbed in upstream / obsolete):
   - Patch 24: SDK uses model_dump(mode="json") since v1.15.0
@@ -605,6 +610,56 @@ def patch_31_aws_default_region(build_dir: Path) -> bool:
     return True
 
 
+def patch_33_default_bedrock_model(build_dir: Path) -> bool:
+    """
+    Patch 33: Change the LLM `model` field default from upstream
+    `claude-sonnet-4-20250514` (Anthropic direct API) to
+    `bedrock/global.anthropic.claude-sonnet-4-6` (Bedrock cross-region
+    inference profile).
+
+    Why: when a fresh conversation has no `agent_settings.llm.model`,
+    `_configure_llm` falls back to this Pydantic default. With the upstream
+    value, litellm routes to Anthropic direct, the call fails with no
+    ANTHROPIC_API_KEY, and the bad model string gets frozen into
+    `base_state.json` on EFS — permanently breaking that conversation.
+    """
+    target = build_dir / "openhands-sdk/openhands/sdk/llm/llm.py"
+
+    if not target.exists():
+        print(f"ERROR: Patch 33 - File not found: {target}")
+        return False
+
+    content = target.read_text()
+
+    if 'default="bedrock/global.anthropic.claude-sonnet-4-6"' in content:
+        print("Patch 33: Already applied (skipping)")
+        return True
+
+    # Match precisely on the `model:` Field block so we don't touch the
+    # docstring example or any other occurrence of the upstream string.
+    field_pattern = re.compile(
+        r'(    model: str = Field\(\s*\n\s*)default="claude-sonnet-4-20250514"',
+    )
+    new_content, n = field_pattern.subn(
+        r'\1default="bedrock/global.anthropic.claude-sonnet-4-6"',
+        content,
+        count=1,
+    )
+    if n == 0:
+        print(
+            "ERROR: Patch 33 - Could not find `model` Field default in llm.py; "
+            "SDK structure may have changed"
+        )
+        return False
+
+    target.write_text(new_content)
+    print(
+        "Patch 33: Set LLM.model default to "
+        "bedrock/global.anthropic.claude-sonnet-4-6"
+    )
+    return True
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} /path/to/build/directory")
@@ -634,6 +689,7 @@ def main():
     results.append(("Patch 28/29/32", patch_28_29_32_bedrock_listing(build_dir)))
     results.append(("Patch 30", patch_30_model_info_region_prefix(build_dir)))
     results.append(("Patch 31", patch_31_aws_default_region(build_dir)))
+    results.append(("Patch 33", patch_33_default_bedrock_model(build_dir)))
 
     print()
     print("=" * 60)
