@@ -25,6 +25,15 @@ Patches (active):
               bedrock/global.anthropic.claude-sonnet-4-6 (Bedrock cross-region
               inference profile). Prevents fresh conversations from falling
               back to a model that requires ANTHROPIC_API_KEY.
+  - Patch 34: Adaptive-thinking support for Claude Opus 4.7 family on Bedrock.
+              Opus 4.7 (and Mythos Preview) only accept thinking.type="adaptive";
+              Bedrock returns 400 for thinking.type="enabled" with budget_tokens.
+              Without this patch, litellm's bedrock translator converts
+              reasoning_effort="high" → thinking={"type":"enabled",...}, which
+              the model rejects. The patch rewrites those parameters into
+              {"thinking":{"type":"adaptive"}, "output_config":{"effort":...}}
+              for matching models. Tracks upstream litellm issues #25957,
+              #27168, #26334.
 
 Removed (absorbed in upstream / obsolete):
   - Patch 24: SDK uses model_dump(mode="json") since v1.15.0
@@ -660,6 +669,110 @@ def patch_33_default_bedrock_model(build_dir: Path) -> bool:
     return True
 
 
+def patch_34_opus_47_adaptive_thinking(build_dir: Path) -> bool:
+    """
+    Patch 34: Adaptive thinking for Claude Opus 4.7 family on Bedrock.
+
+    Why: Bedrock's Anthropic Claude Opus 4.7 (and Mythos Preview) only support
+    `thinking.type = "adaptive"`. They return HTTP 400 for the legacy
+    `thinking.type = "enabled"` shape with `budget_tokens`.
+
+    The bug chain without this patch:
+      1. SDK sees `LLM.reasoning_effort = "high"` and forwards it because
+         litellm reports `reasoning_effort` is supported for `claude-opus-4*`
+         (model_features._supports_reasoning_effort delegates to litellm).
+      2. litellm's bedrock converse translator (`_handle_reasoning_effort_parameter`)
+         converts `reasoning_effort` → `thinking = {"type":"enabled",...}` via
+         `AnthropicConfig._map_reasoning_effort` for any non-Nova/non-GPT-OSS
+         model. There is no Opus 4.7 awareness upstream
+         (litellm issues #25957, #27168, #26334).
+      3. Bedrock rejects the request: "thinking.type.enabled is not supported
+         for this model. Use thinking.type.adaptive ...".
+
+    The fix: in `select_chat_options`, after all existing rules run, detect
+    Opus-4.7-family models and rewrite the kwargs:
+      - drop `reasoning_effort` (so litellm does not generate `thinking.enabled`)
+      - drop any pre-existing `thinking` entry (e.g. from extended-thinking path)
+      - inject `thinking = {"type": "adaptive"}` (passed through litellm
+        line `if param == "thinking": optional_params["thinking"] = value`)
+      - inject top-level `output_config = {"effort": <effort>}` which litellm
+        does not recognize as a converse param and therefore forwards into
+        Bedrock's `additionalModelRequestFields` — exactly where the API
+        expects it (per AWS docs on adaptive thinking).
+      - drop the `interleaved-thinking-2025-05-14` beta header — adaptive
+        thinking enables interleaved thinking implicitly and the legacy header
+        is unnecessary.
+
+    Models matched by substring (case-insensitive): "claude-opus-4-7",
+    "claude-mythos-preview". Bedrock prefixes like
+    `bedrock/global.anthropic.claude-opus-4-7` are matched.
+
+    This is a stop-gap pending upstream litellm support for adaptive thinking.
+    """
+    target = build_dir / "openhands-sdk/openhands/sdk/llm/options/chat_options.py"
+
+    if not target.exists():
+        print(f"ERROR: Patch 34 - File not found: {target}")
+        return False
+
+    content = target.read_text()
+
+    if "OPUS_47_ADAPTIVE_THINKING_MODELS" in content:
+        print("Patch 34: Already applied (skipping)")
+        return True
+
+    # Insert the rewrite block immediately before `return out`.
+    anchor = "    return out\n"
+    if content.count(anchor) != 1:
+        print(
+            "ERROR: Patch 34 - Expected exactly one 'return out' anchor in "
+            "chat_options.py; SDK structure may have changed"
+        )
+        return False
+
+    patch_block = '''\
+    # Patch 34 (openhands-infra): adaptive thinking for Claude Opus 4.7 family.
+    # Bedrock's Opus 4.7 only accepts thinking.type="adaptive"; the legacy
+    # enabled+budget_tokens shape returns HTTP 400. litellm's bedrock translator
+    # currently converts reasoning_effort -> thinking.enabled for any
+    # claude-opus-4* model. Rewrite the kwargs here so the request is shaped
+    # correctly. See docker/agent-server-custom/apply-sdk-patches.py.
+    OPUS_47_ADAPTIVE_THINKING_MODELS = [
+        "claude-opus-4-7",
+        "claude-mythos-preview",
+    ]
+    _model_lower = (llm.model or "").lower()
+    if any(token in _model_lower for token in OPUS_47_ADAPTIVE_THINKING_MODELS):
+        effort = out.pop("reasoning_effort", None)
+        if effort is None:
+            effort = llm.reasoning_effort
+        out.pop("thinking", None)
+        out["thinking"] = {"type": "adaptive"}
+        if effort and effort != "none":
+            out["output_config"] = {"effort": effort}
+        # Adaptive thinking enables interleaved thinking implicitly; the legacy
+        # beta header is unnecessary and Bedrock ignores it.
+        headers = out.get("extra_headers")
+        if isinstance(headers, dict):
+            headers.pop("anthropic-beta", None)
+            if not headers:
+                out.pop("extra_headers", None)
+        # Anthropic thinking models ignore temp/top_p — keep behavior consistent
+        # with the extended-thinking branch above.
+        out.pop("temperature", None)
+        out.pop("top_p", None)
+
+'''
+
+    new_content = content.replace(anchor, patch_block + anchor, 1)
+    target.write_text(new_content)
+    print(
+        "Patch 34: Added Opus 4.7 adaptive-thinking rewrite to "
+        "select_chat_options"
+    )
+    return True
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} /path/to/build/directory")
@@ -690,6 +803,7 @@ def main():
     results.append(("Patch 30", patch_30_model_info_region_prefix(build_dir)))
     results.append(("Patch 31", patch_31_aws_default_region(build_dir)))
     results.append(("Patch 33", patch_33_default_bedrock_model(build_dir)))
+    results.append(("Patch 34", patch_34_opus_47_adaptive_thinking(build_dir)))
 
     print()
     print("=" * 60)
