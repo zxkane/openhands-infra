@@ -79,6 +79,14 @@ LIFECYCLE_TESTS=(
     "TC-029:Conversation Deletion"
 )
 
+# LLM / Bedrock model-routing tests — required whenever the agent-server SDK
+# patches or anything that affects the LLM call shape changes. TC-035 guards
+# against regressions in the chat_options.py rewrite (e.g., Patch 34 for
+# Opus 4.7 adaptive thinking).
+LLM_BEDROCK_TESTS=(
+    "TC-035:Claude Adaptive-Thinking Models on Bedrock"
+)
+
 # Detect change categories
 HAS_AUTH_CHANGES=false
 HAS_RUNTIME_CHANGES=false
@@ -87,6 +95,7 @@ HAS_SANDBOX_AWS_CHANGES=false
 HAS_MCP_CHANGES=false
 HAS_USER_CONFIG_CHANGES=false
 HAS_LIFECYCLE_CHANGES=false
+HAS_LLM_BEDROCK_CHANGES=false
 
 # --all flag: select every test category
 if $RUN_ALL; then
@@ -97,6 +106,7 @@ if $RUN_ALL; then
     HAS_MCP_CHANGES=true
     HAS_USER_CONFIG_CHANGES=true
     HAS_LIFECYCLE_CHANGES=true
+    HAS_LLM_BEDROCK_CHANGES=true
 fi
 
 for file in $CHANGED_FILES; do
@@ -133,6 +143,14 @@ for file in $CHANGED_FILES; do
     # Conversation lifecycle changes (archival, deletion)
     if [[ "$file" =~ lambda/conversation-archival/ ]] || [[ "$file" =~ lambda/conversation-delete/ ]] || [[ "$file" =~ conversationRetention ]]; then
         HAS_LIFECYCLE_CHANGES=true
+    fi
+
+    # LLM / Bedrock call-shape changes — anything that rebuilds the
+    # agent-server image or modifies the SDK chat-options rewrite path.
+    # The patches script is the canonical place these regressions land
+    # (Patch 34 = Opus 4.7 adaptive thinking).
+    if [[ "$file" =~ docker/agent-server-custom/ ]] || [[ "$file" =~ docker/test_apply_sdk_patches\.py ]]; then
+        HAS_LLM_BEDROCK_CHANGES=true
     fi
 done
 
@@ -227,6 +245,17 @@ if $HAS_LIFECYCLE_CHANGES; then
     echo ""
     echo "## Conversation lifecycle changes detected:"
     for test in "${LIFECYCLE_TESTS[@]}"; do
+        tc="${test%%:*}"
+        name="${test#*:}"
+        echo "  - $tc: $name"
+        ADDITIONAL_TESTS+=("$test")
+    done
+fi
+
+if $HAS_LLM_BEDROCK_CHANGES; then
+    echo ""
+    echo "## LLM / Bedrock call-shape changes detected:"
+    for test in "${LLM_BEDROCK_TESTS[@]}"; do
         tc="${test%%:*}"
         name="${test#*:}"
         echo "  - $tc: $name"

@@ -3980,3 +3980,206 @@ mcp__chrome-devtools__evaluate_script({
 - Without the fix, the Changes tab showed empty for connected repos because it queried the outer
   `/workspace` repo instead of the nested cloned repo at `/workspace/project/<repo>/`
 - The fix is covered by 19 unit regression tests in `docker/test_patch_fix_git_paths.js`
+
+---
+
+## TC-035: Verify Claude Adaptive-Thinking Models on Bedrock
+
+### Description
+Verify that Claude models which **only** support `thinking.type="adaptive"` (Opus 4.7, Mythos
+Preview) work end-to-end on Bedrock. These models reject the legacy
+`thinking.type="enabled"` shape with HTTP 400 — yet the SDK / litellm pipeline still emits
+that legacy shape for any `claude-opus-4*` model unless `apply-sdk-patches.py:patch_34` is
+applied.
+
+**Bug scenario** (the gap that allowed this through PR #81):
+
+1. User defaults set `reasoning_effort="high"` and `extended_thinking_budget=200000`.
+2. SDK `model_features._supports_reasoning_effort` delegates to litellm, which says
+   `claude-opus-4-7` supports `reasoning_effort` (it matches the `claude-opus-4*` substring).
+3. SDK forwards `out["reasoning_effort"]="high"` to litellm.
+4. litellm's bedrock converse translator rewrites it via
+   `AnthropicConfig._map_reasoning_effort` into
+   `thinking={"type":"enabled","budget_tokens":...}` — Bedrock rejects the request:
+   ```
+   BedrockException - "thinking.type.enabled" is not supported for this model.
+   Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.
+   ```
+5. Existing E2E coverage stops at Sonnet 4.6 (default) and Haiku 4.5 (TC-023 §4) — both
+   accept the legacy shape, so neither catches the regression.
+
+**Fix**: SDK Patch 34 (`apply-sdk-patches.py:patch_34_opus_47_adaptive_thinking`) detects
+the Opus 4.7 family in `select_chat_options` and rewrites kwargs to
+`thinking={"type":"adaptive"}` + top-level `output_config={"effort": <effort>}`.
+
+### Category
+Compute / agent-server changes (triggered by changes to
+`docker/agent-server-custom/apply-sdk-patches.py`,
+`docker/agent-server-custom/Dockerfile`, or anything that rebuilds the agent-server image).
+
+### Prerequisites
+- TC-003 completed (logged in)
+- Sandbox stack deployed with the Patch 34 build of agent-server-custom
+- Bedrock Claude Opus 4.7 cross-region inference profile is callable from the agent-server
+  IAM role in the deploy region
+
+### Models Under Test
+| Model ID | Family | Why it's in this test |
+|---|---|---|
+| `bedrock/global.anthropic.claude-opus-4-7` | Opus 4.7 | Adaptive-only; fails without Patch 34 |
+| `bedrock/global.anthropic.claude-mythos-preview` | Mythos | Adaptive-only; same code path |
+
+> When Anthropic ships future adaptive-only models, append them to this list and rerun.
+
+### Steps
+
+For **each model in the list above**, repeat steps 1–6:
+
+1. Switch the user's model via the settings API
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       const r = await fetch('/api/settings', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ llm_model: '<MODEL_ID_UNDER_TEST>' })
+       });
+       const s = await fetch('/api/settings').then(x => x.json());
+       return { status: r.status, llm_model: s.llm_model };
+     }`
+   })
+   // Expected: { status: 200, llm_model: '<MODEL_ID_UNDER_TEST>' }
+   ```
+
+2. Capture the start time as a millisecond epoch in your **shell** (not the
+   browser) — CloudWatch's `--start-time` flag wants ms-since-epoch, and
+   doing it shell-side keeps the value portable across macOS / Linux.
+   ```bash
+   # Run in the same shell you'll use for step 5 / step 6.
+   TEST_START_MS=$(($(date +%s) * 1000))
+   echo "$TEST_START_MS"
+   ```
+
+3. Start a new conversation
+   ```javascript
+   mcp__chrome-devtools__navigate_page({ url: "https://${FULL_DOMAIN}", type: "url" })
+   mcp__chrome-devtools__wait_for({ text: "New Conversation", timeout: 10000 })
+   mcp__chrome-devtools__click({ uid: "<new-conversation-button>" })
+   mcp__chrome-devtools__wait_for({ text: "What do you want", timeout: 120000 })
+   // Record CONV_ID from URL: /conversations/<CONV_ID>
+   ```
+
+4. Send a prompt that forces a real Bedrock call (cannot be answered from cache)
+   ```javascript
+   mcp__chrome-devtools__fill({
+     uid: "<chat-input>",
+     value: "What is 2+2? Reply with just the number."
+   })
+   mcp__chrome-devtools__press_key({ key: "Enter" })
+   // Wait for the agent to respond — the failure mode of this bug is
+   // either (a) an explicit Bedrock error bubble in the chat, or
+   //        (b) the agent silently retrying then giving up.
+   mcp__chrome-devtools__wait_for({ text: "4", timeout: 90000 })
+   ```
+
+5. **Critical**: Verify the sandbox agent-server logs contain **no** Bedrock
+   thinking-type rejection for this conversation. The sandbox container is
+   what calls Bedrock, so the rejection lands in `/openhands/sandbox`
+   (declared in `lib/sandbox-stack.ts:294`) — *not* the app-server log
+   group.
+   ```bash
+   # Run from a shell with AWS creds for the deploy region.
+   # TEST_START_MS is from step 2. Adjust --region for production.
+   aws logs filter-log-events \
+     --log-group-name /openhands/sandbox \
+     --region us-west-2 \
+     --start-time "$TEST_START_MS" \
+     --filter-pattern '"thinking.type.enabled"' \
+     --query 'events[*].message' --output text
+   # Expected: empty output
+
+   aws logs filter-log-events \
+     --log-group-name /openhands/sandbox \
+     --region us-west-2 \
+     --start-time "$TEST_START_MS" \
+     --filter-pattern 'BedrockException' \
+     --query 'events[*].message' --output text
+   # Expected: empty output
+   ```
+
+   > **Why this is the load-bearing assertion**: OpenHands retries on
+   > `litellm.BadRequestError`, so step 4 ("agent answers correctly") can
+   > pass even when *every* Bedrock call fails — the user just sees a
+   > longer pause. The CloudWatch filter is the only signal that confirms
+   > the Bedrock call actually succeeded on the first attempt with the
+   > right shape. If you query the wrong log group, the filter returns
+   > empty vacuously and the assertion gives false confidence.
+
+6. (Optional) Verify the request actually reached Bedrock with the adaptive
+   shape — only meaningful when `LITELLM_LOG=DEBUG` is enabled in the
+   sandbox container env.
+   ```bash
+   aws logs filter-log-events \
+     --log-group-name /openhands/sandbox \
+     --region us-west-2 \
+     --start-time "$TEST_START_MS" \
+     --filter-pattern '"\"thinking\": {\"type\": \"adaptive\"}"' \
+     --query 'events[*].message' --output text
+   # Expected (when DEBUG logs are on): at least one match showing
+   #   thinking={"type":"adaptive"} and output_config={"effort":"high"}
+   # Skip this assertion if DEBUG logs are not enabled — steps 4–5 are sufficient.
+   ```
+
+After all models pass, **restore the default**:
+   ```javascript
+   mcp__chrome-devtools__evaluate_script({
+     function: `async () => {
+       await fetch('/api/settings', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ llm_model: 'bedrock/global.anthropic.claude-sonnet-4-6' })
+       });
+       return 'restored';
+     }`
+   })
+   ```
+
+### Acceptance Criteria
+
+| # | Criteria | Verification |
+|---|----------|--------------|
+| 1 | Model switch persists | `GET /api/settings` returns the model under test |
+| 2 | New conversation starts | Status reaches "What do you want to build?" within 120s |
+| 3 | Agent answers correctly | Response contains "4" for the `2+2` prompt within 90s |
+| 4 | **No `thinking.type.enabled` in `/openhands/sandbox`** | First `filter-log-events` query in step 5 returns empty |
+| 5 | **No `BedrockException` in `/openhands/sandbox`** | Second `filter-log-events` query in step 5 returns empty |
+| 6 | (Optional) Adaptive shape in DEBUG logs | Step 6 returns at least one match when `LITELLM_LOG=DEBUG` |
+| 7 | Default model restored | Final `/api/settings` shows `bedrock/global.anthropic.claude-sonnet-4-6` |
+
+### When to Run This Test
+
+**Run TC-035 whenever any of these change:**
+- `docker/agent-server-custom/apply-sdk-patches.py` (especially patches touching
+  `chat_options.py`, `model_features.py`, or anything around `reasoning_effort` /
+  `thinking`)
+- `docker/agent-server-custom/Dockerfile` (`SDK_VERSION` bump → re-verify Patch 34
+  anchors still match)
+- The OpenHands SDK version pinned in the Dockerfile changes
+- The litellm version transitively pulled in via `uv sync` changes
+
+**Skip TC-035 only when**: the deploy is config-only (no agent-server image rebuild) and
+the existing image already contains a verified Patch 34 build.
+
+### Notes
+
+- Patch 34's unit tests (`docker/test_apply_sdk_patches.py::TestPatch34Opus47AdaptiveThinking`)
+  cover the build-time rewrite contract — TC-035 is the runtime end-to-end check that the
+  rewritten kwargs survive litellm + reach Bedrock correctly.
+- This test is intentionally generic ("Claude adaptive-thinking models") so the same case
+  covers Mythos Preview today and any future adaptive-only models without rewriting the
+  test case. Just append the new model ID to the table above.
+- Tracks upstream litellm issues
+  [#25957](https://github.com/BerriAI/litellm/issues/25957),
+  [#27168](https://github.com/BerriAI/litellm/issues/27168),
+  [#26334](https://github.com/BerriAI/litellm/issues/26334) — when those land, revisit
+  Patch 34 and decide whether to drop the patch in favor of upstream litellm support.
