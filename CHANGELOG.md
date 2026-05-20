@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-20
+
+### Added
+
+#### Features
+- **Upgrade OpenHands from v1.6.0 to v1.7.0** (#81)
+  - Upgraded OpenHands from v1.6.0 → v1.7.0, incorporating 296 commits and multiple SDK enhancements (v1.15.0 → v1.19.1).
+  - Removed deprecated V0 packages, simplifying deployment structure.
+  - Improved `llm_config` field compatibility for newer Bedrock inference profiles.
+  - Fork updated: `custom/v1.7.0-fargate-r2` (28 cherry-picked commits from v1.6.0).
+- **Adaptive thinking support for Claude Opus 4.7 on Bedrock** (#83)
+  - Adds SDK Patch 34 (`patch_34_opus_47_adaptive_thinking`) which rewrites kwargs in `chat_options.py` for Claude Opus 4.7 / Mythos Preview models so the Bedrock Converse API receives `thinking={"type":"adaptive"}` plus top-level `output_config={"effort": ...}` instead of the rejected legacy `thinking={"type":"enabled","budget_tokens":...}` shape.
+  - Without this fix, switching to `bedrock/global.anthropic.claude-opus-4-7` failed with `BedrockException - "thinking.type.enabled" is not supported for this model`.
+  - Other models (Sonnet 4.6/4.5, Haiku 4.5, Opus 4.5) keep the legacy extended-thinking path.
+  - Stop-gap pending upstream litellm support; tracks BerriAI/litellm #25957, #27168, #26334.
+
+#### Testing
+- **TC-035: Claude Adaptive-Thinking Models on Bedrock** (#83)
+  - New E2E test case in `test/E2E_TEST_CASES.md` covering adaptive-only Claude models. Closes the coverage gap that allowed the Opus 4.7 regression to ship in the v1.7.0 upgrade — TC-006 / TC-023 only ever exercised Sonnet 4.6 (default) and Haiku 4.5, both of which accept the legacy `thinking.type=enabled` shape.
+  - Asserts on `/openhands/sandbox` CloudWatch logs (load-bearing — OpenHands retries `BadRequestError`, so UI alone gives false confidence). Wired into `test/select-e2e-tests.sh` to auto-trigger on any change under `docker/agent-server-custom/`.
+
+#### Developer Experience
+- **Skills Refresh: autonomous-dev-team** (#78)
+  - Re-installed and refreshed all autonomous-dev-team skills (`autonomous-common`, `autonomous-dev`, `autonomous-dispatcher`, `autonomous-review`, `create-issue`) to their latest versions for enhanced workflow automation.
+  - Added new `skillPath` field for future updates using `npx skills update`.
+- **Hooks symlink for autonomous-dev SKILL.md frontmatter resolution** (#75)
+  - Adds the `hooks` → `.claude/skills/autonomous-common/hooks` symlink convention so workflow hooks resolve correctly in both the main checkout and per-feature worktrees.
+
+### Changed
+
+#### Platform Updates
+- **Default LLM model is now `bedrock/global.anthropic.claude-sonnet-4-6`** (#82)
+  - SDK Patch 33 changes the LLM Pydantic default from upstream `claude-sonnet-4-20250514` (Anthropic direct API, requires `ANTHROPIC_API_KEY`) to the Bedrock cross-region inference profile.
+  - Prevents fresh conversations with no `agent_settings.llm.model` from falling back to a model that requires an API key the deployment doesn't have, and from freezing that bad default into `base_state.json` on EFS.
+- **Pin Docker Base Image to Manifest Digest** (#74)
+  - Updated Docker base image references (`openhands:1.6.0`) to specific `sha256` digests, ensuring deterministic builds and avoiding stale cache issues.
+
+#### CI/CD
+- **Upgrade GitHub Actions to Node.js 24 Versions** (#80)
+  - Resolved deprecation warnings by updating GitHub Actions workflows (`checkout`, `setup-node`, `setup-python`, `github-script`, `upload-artifact`) to latest Node.js 24-compatible versions.
+
+#### Security Updates
+- **Upgrade aws-cdk-lib to v2.248.0** (#68)
+  - Bumped `aws-cdk-lib` dependency, resolving npm audit findings:
+    - **High:** ReDoS vulnerabilities in minimatch `<10.2.3`.
+- **Bump non-major dependencies to latest** (#79)
+  - Routine npm dependency refresh.
+
+#### Documentation
+- **Tighten Rule 1 step 3 of `CLAUDE.md`: explicit user instruction required for merge** (#84)
+  - Documents that CI / hook / review signals do not imply merge approval; only the user's explicit `merge` / `merge it` (or equivalent) does.
+
+### Fixed
+
+#### Infrastructure
+- **Alpine Package Upgrades in Dockerfiles** (#76, #77)
+  - Applied `apk upgrade --no-cache` to multiple Dockerfiles, patching critical CVEs in libraries (openssl, zlib, musl).
+- **Force base image re-pull via `LAST_UPDATED` bump** (#73)
+  - Bumps the build-arg sentinel so CDK rebuilds the image and pulls the freshest base layer.
+- **Revert extra fork patches that broke the base image** (#72)
+  - Restores a clean baseline after a regression introduced by a prior patch batch.
+
+#### Developer Tools
+- **Restore Missing Fork Patches** (#70, #71)
+  - Added missing fork-specific files in `download-fork-patches.sh` to resolve `ImportError` issues during container startup (`skills`/`hooks` API endpoints, `settings.py`).
+- **Sync `settings.json` with autonomous-dev-team plugin hooks** (#69)
+  - Aligns the project hooks config with the upstream skills package after refresh.
+
+[1.4.0]: https://github.com/zxkane/openhands-infra/compare/v1.3.0...v1.4.0
+
 ## [1.3.0] - 2026-04-09
 
 ### Changed
