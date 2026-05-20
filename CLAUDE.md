@@ -18,7 +18,7 @@
 Before ANY code changes — features, fixes, refactors, dependency bumps — you MUST:
 1. **Invoke skill**: Use `/autonomous-dev` or read `.claude/skills/autonomous-dev/SKILL.md`
 2. **Follow ALL steps** in order — NO shortcuts, NO skipping steps
-3. **Do NOT merge** - Report status and wait for user decision
+3. **Do NOT merge PRs** — Report status and wait for **explicit** user instruction to merge. A stop hook passing, CI passing, or review completing does NOT imply merge approval. Only merge when the user says "merge", "merge it", or equivalent.
 
 **Common violation**: Skipping skill invocation and jumping straight to coding. This causes missed steps (reviewer bot iteration, PR templates, E2E test selection). The skill is not optional guidance — it is the required process.
 
