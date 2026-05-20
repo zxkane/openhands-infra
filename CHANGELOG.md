@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-20
+
+### Added
+
+#### Features
+- **Upgrade OpenHands from v1.6.0 to v1.7.0** (#81)
+  - Upgraded OpenHands from v1.6.0 → v1.7.0, incorporating 296 commits and multiple SDK enhancements (v1.15.0 → v1.19.1).
+  - Removed deprecated V0 packages, simplifying deployment structure.
+  - Improved `llm_config` field compatibility for newer Bedrock inference profiles.
+  - Fork updated: `custom/v1.7.0-fargate-r2` (28 cherry-picked commits from v1.6.0).
+
+#### Developer Experience
+- **Skills Refresh: autonomous-dev-team** (#78)
+  - Re-installed and refreshed all autonomous-dev-team skills (`autonomous-common`, `autonomous-dev`, `autonomous-dispatcher`, `autonomous-review`, `create-issue`) to their latest versions for enhanced workflow automation.
+  - Added new `skillPath` field for future updates using `npx skills update`.
+
+### Changed
+
+#### Platform Updates
+- **Pin Docker Base Image to Manifest Digest** (#74)
+  - Updated Docker base image references (`openhands:1.6.0`) to specific `sha256` digests, ensuring deterministic builds and avoiding stale cache issues.
+
+#### CI/CD
+- **Upgrade GitHub Actions to Node.js 24 Versions** (#80)
+  - Resolved deprecation warnings by updating GitHub Actions workflows (`checkout`, `setup-node`, `setup-python`, `github-script`, `upload-artifact`) to latest Node.js 24-compatible versions.
+
+#### Security Updates
+- **Upgrade aws-cdk-lib to v2.248.0** (#68)
+  - Bumped `aws-cdk-lib` dependency, resolving npm audit findings:
+    - **High:** ReDoS vulnerabilities in minimatch `<10.2.3`.
+
+### Fixed
+
+#### Infrastructure
+- **Alpine Package Upgrades in Dockerfiles** (#76, #77)
+  - Applied `apk upgrade --no-cache` to multiple Dockerfiles, patching critical CVEs in libraries (openssL, zlib, musl).
+
+#### Developer Tools
+- **Restore Missing Fork Patches** (#70, #71)
+  - Added missing fork-specific files in `download-fork-patches.sh` to resolve `ImportError` issues during container startup.
+
+[1.4.0]: https://github.com/zxkane/openhands-infra/compare/v1.3.0...v1.4.0
+
 ## [1.3.0] - 2026-04-09
 
 ### Changed
