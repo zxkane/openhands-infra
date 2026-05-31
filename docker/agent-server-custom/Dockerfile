@@ -8,7 +8,7 @@
 
 # Stage 1: Build the binary
 # LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
-ARG LAST_UPDATED=2026-05-14
+ARG LAST_UPDATED=2026-05-31
 FROM python:3.12-slim-bookworm AS builder
 
 # Install build dependencies
