@@ -23,6 +23,11 @@ ARG OPENHANDS_VERSION=1.7.0
 # Multi-arch manifest list digest (linux/amd64 + linux/arm64) for openhands/openhands:1.7.0.
 # Refresh: docker buildx imagetools inspect docker.openhands.dev/openhands/openhands:<version>
 ARG OPENHANDS_IMAGE_DIGEST=sha256:916abcb15cc451d96853bd41c55117bb2ff3de0b9914cdcd861d338055798dc6
+# LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches).
+# Same pattern as docker/openresty/Dockerfile and docker/agent-server-custom/Dockerfile —
+# bump this before each scheduled CVE refresh so `apt-get upgrade` is re-evaluated against
+# fresh Debian security indices instead of being served from a stale Docker layer cache.
+ARG LAST_UPDATED=2026-05-31
 FROM docker.openhands.dev/openhands/openhands:${OPENHANDS_VERSION}@${OPENHANDS_IMAGE_DIGEST}
 
 # Upgrade system packages to fix CVEs (openssl, gnutls28, etc.)

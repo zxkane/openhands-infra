@@ -1397,7 +1397,7 @@ exports[`OpenHands Infrastructure Stacks ComputeStack matches snapshot 1`] = `
               },
               {
                 "Name": "AGENT_SERVER_IMAGE_TAG",
-                "Value": "f1edd0c7a28a480509e915d3588ffaf83cd855f4c7f5072065c09f57ab827096",
+                "Value": "a37b8e45a39d01d2e2c82b9dcb230e072a54887ceee5c0a1b6c4d7ecd6bc1e22",
               },
               {
                 "Name": "AGENT_ENABLE_BROWSING",
@@ -1502,7 +1502,7 @@ security_analyzer = "llm"",
               "Timeout": 10,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:15427f92982a1f1f84a2437b11831d0a0a251f82523a4accb18efdf741a270ce",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:06722cefe0430ca4e365e298e4a8068c746eea42aeb11b034a9e340518ad9f83",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",
@@ -1867,7 +1867,7 @@ security_analyzer = "llm"",
               "Timeout": 5,
             },
             "Image": {
-              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:a9efe78e4429e3a15e416b2203226fb0c87c4bf16e3b2435817ee24e84f64493",
+              "Fn::Sub": "123456789012.dkr.ecr.us-west-2.\${AWS::URLSuffix}/cdk-hnb659fds-container-assets-123456789012-us-west-2:0f3496a0dd11857b26832bda564686693597ae5c198da92cadaa422315791b87",
             },
             "LogConfiguration": {
               "LogDriver": "awslogs",

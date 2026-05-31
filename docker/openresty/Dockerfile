@@ -2,7 +2,7 @@
 # Routes /runtime/{conversation_id}/{port}/... to sandbox Fargate task IP:port
 # Discovers sandbox IPs via the Sandbox Orchestrator API (Cloud Map DNS)
 # LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
-ARG LAST_UPDATED=2026-05-13
+ARG LAST_UPDATED=2026-05-31
 FROM openresty/openresty:1.29.2.3-alpine-fat
 
 # Upgrade Alpine packages to pick up latest security patches
