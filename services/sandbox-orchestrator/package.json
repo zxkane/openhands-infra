@@ -4,6 +4,9 @@
   "description": "Sandbox Orchestrator - translates OpenHands remote runtime API calls to ECS Fargate operations",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -16,17 +19,18 @@
     "@aws-sdk/client-lambda": "^3.1000.0",
     "@aws-sdk/lib-dynamodb": "^3.1000.0",
     "@smithy/node-http-handler": "^3.3.3",
-    "fastify": "^5.3.3"
+    "fastify": "^5.12.1"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "jest": "^30.2.0",
     "ts-jest": "^29.4.0",
     "typescript": "~5.9.3"
   },
   "overrides": {
-    "fast-xml-parser": "5.4.1"
+    "fast-uri": "3.1.6",
+    "fast-xml-parser": "5.11.1"
   },
   "jest": {
     "extensionsToTreatAsEsm": [".ts"],

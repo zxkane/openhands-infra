@@ -20,7 +20,7 @@ export interface DatabaseStackProps extends cdk.StackProps {
   appTaskRoleArn: string;
 }
 
-export { DatabaseStackOutput };
+export type { DatabaseStackOutput };
 
 /**
  * DatabaseStack - Aurora Serverless v2 PostgreSQL with RDS Proxy

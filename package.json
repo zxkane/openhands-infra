@@ -5,13 +5,13 @@
     "openhands-infra": "bin/openhands-infra.js"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=24"
   },
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
-    "test": "npm run build && npm run test:ts && npm run test:py",
-    "test:ts": "jest --passWithNoTests",
+    "test": "npm run test:ts && npm run test:py",
+    "test:ts": "npm run build && jest --passWithNoTests",
     "test:py": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest docker/test_*.py -v",
     "cdk": "cdk"
   },
@@ -21,35 +21,38 @@
     "@aws-sdk/client-ecs": "^3.1045.0",
     "@aws-sdk/client-efs": "^3.1045.0",
     "@types/jest": "^30.0.0",
-    "@types/node": "^22.19.3",
+    "@types/node": "^24.0.0",
     "@types/pg": "^8.20.0",
-    "aws-cdk": "^2.1121.0",
+    "aws-cdk": "^2.1139.0",
     "aws-sdk-client-mock": "^4.1.0",
-    "jest": "^30.4.2",
+    "jest": "^30.5.0",
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
     "typescript": "~5.9.3"
   },
   "dependencies": {
-    "@aws-cdk/aws-lambda-python-alpha": "^2.253.1-alpha.0",
+    "@aws-cdk/aws-lambda-python-alpha": "^2.267.0-alpha.0",
     "@aws-lambda-powertools/logger": "^2.33.0",
     "@aws-sdk/client-rds-data": "^3.1045.0",
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/client-secrets-manager": "^3.1045.0",
     "@types/source-map-support": "^0.5.10",
-    "aws-cdk-lib": "^2.253.1",
+    "aws-cdk-lib": "^2.267.0",
     "constructs": "^10.6.0",
-    "esbuild": "^0.27.7",
+    "esbuild": "^0.28.2",
     "pg": "^8.20.0",
     "source-map-support": "^0.5.21"
   },
   "overrides": {
     "fast-xml-parser": "^5.7.0",
-    "fast-uri": "^3.1.2",
+    "fast-uri": "^3.1.5",
     "minimatch": "10.2.5",
     "handlebars": "4.7.9",
     "picomatch": "4.0.4",
     "path-to-regexp": "8.4.2",
-    "brace-expansion": "5.0.5"
+    "brace-expansion": "5.0.9",
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "^3.15.2"
+    }
   }
 }

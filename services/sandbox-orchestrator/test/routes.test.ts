@@ -17,6 +17,7 @@ jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
   GetCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'GetCommand' })),
   UpdateCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'UpdateCommand' })),
   QueryCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'QueryCommand' })),
+  DeleteCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'DeleteCommand' })),
 }));
 
 const mockEcsSend = jest.fn<any>();

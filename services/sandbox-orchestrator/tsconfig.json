@@ -11,6 +11,7 @@
     "noImplicitAny": true,
     "strictNullChecks": true,
     "noImplicitReturns": true,
+    "isolatedModules": true,
     "skipLibCheck": true,
     "inlineSourceMap": true,
     "inlineSources": true

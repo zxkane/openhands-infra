@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as efs from 'aws-cdk-lib/aws-efs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -25,6 +26,34 @@ import {
   ClusterStackOutput,
   SandboxStackOutput,
 } from './interfaces.js';
+
+interface EcrImageReference {
+  account: string;
+  region: string;
+  repositoryName: string;
+  imageTag: string;
+}
+
+export function parseEcrImageReference(imageUri: string): EcrImageReference {
+  const match = imageUri.match(
+    /^(\d{12})\.dkr\.ecr\.([a-z]{2}(?:-[a-z0-9]+)+-\d+)\.amazonaws\.com\/((?:[a-z0-9]+(?:[._-][a-z0-9]+)*\/)*[a-z0-9]+(?:[._-][a-z0-9]+)*):([A-Za-z0-9_][A-Za-z0-9_.-]{0,127})$/,
+  );
+
+  if (!match) {
+    throw new Error(
+      'sandboxSociImageUri must be a tagged private ECR image URI',
+    );
+  }
+
+  const [, account, region, repositoryName, imageTag] = match;
+  if (repositoryName.length < 2 || repositoryName.length > 256) {
+    throw new Error(
+      'sandboxSociImageUri must be a tagged private ECR image URI',
+    );
+  }
+
+  return { account, region, repositoryName, imageTag };
+}
 
 export interface SandboxStackProps extends cdk.StackProps {
   config: OpenHandsConfig;
@@ -190,9 +219,6 @@ export class SandboxStack extends cdk.Stack {
     const sandboxExecutionRole = new iam.Role(this, 'SandboxExecutionRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       description: 'Execution role for sandbox Fargate tasks (image pull, logs)',
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
-      ],
     });
 
     // Grant access to sandbox secret key
@@ -295,6 +321,7 @@ export class SandboxStack extends cdk.Stack {
       retention: logs.RetentionDays.TWO_WEEKS,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+    sandboxLogGroup.grantWrite(sandboxExecutionRole);
 
     // ========================================
     // Sandbox Fargate Task Definition
@@ -333,9 +360,35 @@ export class SandboxStack extends cdk.Stack {
     // Use SOCI-enabled image when provided (overrides CDK-built image for Fargate lazy loading).
     // The SOCI image is generated post-deploy by scripts/generate-soci-index.sh and passed
     // via --context sandboxSociImageUri on subsequent deploys.
-    const sandboxContainerImage = props.sandboxSociImageUri
-      ? ecs.ContainerImage.fromRegistry(props.sandboxSociImageUri)
-      : ecs.ContainerImage.fromDockerImageAsset(sandboxImageAsset);
+    let sandboxContainerImage: ecs.ContainerImage;
+    if (props.sandboxSociImageUri) {
+      const sociImage = parseEcrImageReference(props.sandboxSociImageUri);
+      if (sociImage.account !== this.account || sociImage.region !== this.region) {
+        throw new Error(
+          'sandboxSociImageUri must reference ECR in the Sandbox stack account and region',
+        );
+      }
+      const sociRepository = ecr.Repository.fromRepositoryAttributes(
+        this,
+        'SandboxSociImageRepository',
+        {
+          repositoryName: sociImage.repositoryName,
+          repositoryArn: this.formatArn({
+            service: 'ecr',
+            region: sociImage.region,
+            account: sociImage.account,
+            resource: 'repository',
+            resourceName: sociImage.repositoryName,
+          }),
+        },
+      );
+      sandboxContainerImage = ecs.ContainerImage.fromEcrRepository(
+        sociRepository,
+        sociImage.imageTag,
+      );
+    } else {
+      sandboxContainerImage = ecs.ContainerImage.fromDockerImageAsset(sandboxImageAsset);
+    }
 
     // Agent-server container (main sandbox container)
     const agentServerContainer = sandboxTaskDefinition.addContainer('agent-server', {

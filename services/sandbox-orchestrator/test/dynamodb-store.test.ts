@@ -16,6 +16,7 @@ jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
   GetCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'GetCommand' })),
   UpdateCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'UpdateCommand' })),
   QueryCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'QueryCommand' })),
+  DeleteCommand: jest.fn().mockImplementation((input: any) => ({ input, _type: 'DeleteCommand' })),
 }));
 
 jest.unstable_mockModule('@smithy/node-http-handler', () => ({
@@ -32,7 +33,7 @@ describe('DynamoDBStore', () => {
     store = new DynamoDBStore('test-table', 'us-west-2');
   });
 
-  test('putSandbox sends PutCommand with TTL', async () => {
+  test('putSandbox sends PutCommand with current timestamps', async () => {
     mockSend.mockResolvedValueOnce({});
 
     await store.putSandbox({
@@ -52,8 +53,9 @@ describe('DynamoDBStore', () => {
     const cmd = mockSend.mock.calls[0][0] as any;
     expect(cmd.input.TableName).toBe('test-table');
     expect(cmd.input.Item.conversation_id).toBe('conv-1');
-    expect(cmd.input.Item.ttl).toBeGreaterThan(0);
+    expect(cmd.input.Item.created_at).toBeGreaterThan(0);
     expect(cmd.input.Item.last_activity_at).toBeGreaterThan(0);
+    expect(cmd.input.Item.ttl).toBeUndefined();
   });
 
   test('getSandbox returns record when found', async () => {
@@ -82,6 +84,19 @@ describe('DynamoDBStore', () => {
     mockSend.mockResolvedValueOnce({});
     const record = await store.getSandbox('nonexistent');
     expect(record).toBeNull();
+  });
+
+  test('deleteSandbox sends DeleteCommand with the conversation key', async () => {
+    mockSend.mockResolvedValueOnce({});
+
+    await store.deleteSandbox('conv-1');
+
+    const cmd = mockSend.mock.calls[0][0] as any;
+    expect(cmd._type).toBe('DeleteCommand');
+    expect(cmd.input).toEqual({
+      TableName: 'test-table',
+      Key: { conversation_id: 'conv-1' },
+    });
   });
 
   test('updateStatus sends UpdateCommand with status', async () => {

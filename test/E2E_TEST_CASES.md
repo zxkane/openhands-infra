@@ -6,7 +6,7 @@ This document defines the end-to-end test cases for validating the OpenHands inf
 
 - AWS CLI configured with appropriate credentials
 - Chrome browser with DevTools MCP server connected
-- Node.js 22+ installed
+- Node.js 24 LTS installed
 - CDK bootstrapped in deployment regions
 
 ## Important: Browser Tab Cleanup
@@ -2649,7 +2649,7 @@ Phase 4: Verify via CloudWatch logs (Patches 22/23/28/29 applied)
 2. **Phase 2: Stop ECS app task and wait for replacement**
 
    ```bash
-   CLUSTER_NAME="<cluster-name>"  # e.g., openhands-test-kane-mx
+   CLUSTER_NAME="<cluster-name>"  # e.g., openhands-staging
    DEPLOY_REGION="<region>"
 
    # Find the running app task

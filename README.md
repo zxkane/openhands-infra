@@ -69,7 +69,7 @@ Runtime Apps:
 ### Prerequisites
 
 - AWS CLI configured with appropriate credentials
-- Node.js 22+ and npm
+- Node.js 24 LTS and npm
 - Existing VPC with private subnets and NAT Gateway
 - Existing Route 53 Hosted Zone
 

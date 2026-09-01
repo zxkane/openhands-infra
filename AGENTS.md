@@ -250,11 +250,13 @@ SOCI (Seekable OCI) v2 enables Fargate lazy loading — containers start before 
 ### Prerequisites
 
 - `containerd` >= 1.7 (running)
+- `nerdctl`
 - `soci` CLI >= 0.10 ([releases](https://github.com/awslabs/soci-snapshotter/releases))
 
 ### Usage
 
-The deploy scripts (`deploy-staging.local.sh`, `deploy-production.local.sh`) automatically generate SOCI indexes and redeploy when `soci` CLI is available. For manual use:
+Generate the SOCI index after deploying a new sandbox image, then redeploy the
+Sandbox stack with the generated image URI:
 
 ```bash
 # Generate SOCI v2 index
@@ -336,7 +338,9 @@ aws cognito-idp admin-set-user-password \
 
 ### SOCI v2 Index Generation (Post-Deploy)
 
-After deploying the Sandbox stack, generate a SOCI v2 index to enable Fargate lazy loading (~62% faster sandbox startup). Requires `containerd` and `soci` CLI >= v0.10.
+After deploying the Sandbox stack, generate a SOCI v2 index to enable Fargate
+lazy loading (~62% faster sandbox startup). Requires `containerd` >= 1.7,
+`nerdctl`, and `soci` CLI >= v0.10.
 
 ```bash
 # 1. Get the sandbox image URI from CloudFormation output
@@ -358,7 +362,8 @@ npx cdk deploy OpenHands-Sandbox \
   --require-approval never
 ```
 
-**Note**: The deploy scripts (`deploy-staging.local.sh`, `deploy-production.local.sh`) automate steps 1-3 when `soci` CLI is available. SOCI generation only needs to run once per image build — subsequent deploys that don't change the Docker image can skip it by passing the existing `sandboxSociImageUri`.
+SOCI generation only needs to run once per image build. Subsequent deploys that
+do not change the Docker image can reuse the existing `sandboxSociImageUri`.
 
 | Scenario | Action |
 |----------|--------|

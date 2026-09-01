@@ -9,7 +9,7 @@ import { DatabaseStack } from '../lib/database-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { UserConfigStack } from '../lib/user-config-stack';
 import { ClusterStack } from '../lib/cluster-stack';
-import { SandboxStack } from '../lib/sandbox-stack';
+import { parseEcrImageReference, SandboxStack } from '../lib/sandbox-stack';
 import { OpenHandsConfig, DatabaseStackOutput, AuthStackOutput, SandboxStackOutput, ClusterStackOutput } from '../lib/interfaces';
 
 // Test configuration
@@ -26,6 +26,49 @@ const testEnv = {
   region: 'us-west-2',
 };
 
+const testVpcContextKey =
+  'vpc-provider:account=123456789012:filter.vpc-id=vpc-12345678:region=us-west-2:returnAsymmetricSubnets=true';
+
+const testVpcContext = {
+  vpcId: testConfig.vpcId,
+  vpcCidrBlock: '10.0.0.0/16',
+  availabilityZones: ['us-west-2a', 'us-west-2b'],
+  subnetGroups: [
+    {
+      name: 'Public',
+      type: 'Public',
+      subnets: [
+        {
+          subnetId: 'subnet-11111111',
+          availabilityZone: 'us-west-2a',
+          routeTableId: 'rtb-11111111',
+        },
+        {
+          subnetId: 'subnet-22222222',
+          availabilityZone: 'us-west-2b',
+          routeTableId: 'rtb-22222222',
+        },
+      ],
+    },
+    {
+      name: 'Private',
+      type: 'Private',
+      subnets: [
+        {
+          subnetId: 'subnet-33333333',
+          availabilityZone: 'us-west-2a',
+          routeTableId: 'rtb-33333333',
+        },
+        {
+          subnetId: 'subnet-44444444',
+          availabilityZone: 'us-west-2b',
+          routeTableId: 'rtb-44444444',
+        },
+      ],
+    },
+  ],
+};
+
 // Mock database output for tests (required for self-healing architecture)
 const mockDatabaseOutput: DatabaseStackOutput = {
   clusterEndpoint: 'mock-cluster.cluster-abc123.us-west-2.rds.amazonaws.com',
@@ -33,7 +76,7 @@ const mockDatabaseOutput: DatabaseStackOutput = {
   clusterResourceId: 'cluster-ABC123DEF456',
   databaseName: 'openhands',
   databaseUser: 'openhands_proxy',
-  securityGroupId: 'sg-mock123',
+  securityGroupId: 'sg-0123456789abcdef0',
   proxyEndpoint: 'mock-proxy.proxy-abc123.us-west-2.rds.amazonaws.com',
   clusterArn: 'arn:aws:rds:us-west-2:123456789012:cluster:openhands-aurora',
   adminSecretArn: 'arn:aws:secretsmanager:us-west-2:123456789012:secret:openhands/database/admin-AbCdEf',
@@ -46,10 +89,10 @@ const mockSandboxOutput: SandboxStackOutput = {
   registryTableName: 'openhands-sandbox-registry',
   registryTableArn: 'arn:aws:dynamodb:us-west-2:123456789012:table/openhands-sandbox-registry',
   taskDefinitionFamily: 'openhands-sandbox',
-  sandboxTaskSecurityGroupId: 'sg-sandbox123',
+  sandboxTaskSecurityGroupId: 'sg-11111111111111111',
   orchestratorApiUrl: 'http://orchestrator.openhands.local:8081',
   orchestratorDnsName: 'orchestrator.openhands.local',
-  orchestratorSecurityGroupId: 'sg-orchestrator123',
+  orchestratorSecurityGroupId: 'sg-22222222222222222',
   sandboxLogGroupName: '/openhands/sandbox',
   warmPoolSize: 2,
   warmPoolServiceName: 'openhands-example-com-sandbox-warm-pool',
@@ -73,7 +116,11 @@ describe('OpenHands Infrastructure Stacks', () => {
   let app: cdk.App;
 
   beforeEach(() => {
-    app = new cdk.App();
+    app = new cdk.App({
+      context: {
+        [testVpcContextKey]: testVpcContext,
+      },
+    });
   });
 
   describe('NetworkStack', () => {
@@ -949,6 +996,139 @@ describe('OpenHands Infrastructure Stacks', () => {
         Namespace: 'OpenHands/Sandbox',
         MetricName: 'SandboxCreationFailures',
       });
+    });
+
+    test('SOCI image retains ECR pull permissions on the execution role', () => {
+      const stack = new SandboxStack(app, 'TestSandboxSociStack', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+        sandboxSociImageUri:
+          '123456789012.dkr.ecr.us-west-2.amazonaws.com/sandbox-images:agent-soci',
+      });
+
+      const template = Template.fromStack(stack);
+      const taskDefinitions = template.findResources('AWS::ECS::TaskDefinition');
+      const sandboxTaskDefinition = Object.values(taskDefinitions).find(
+        (resource) => resource.Properties?.Family === 'openhands-sandbox',
+      );
+      const agentServer = sandboxTaskDefinition?.Properties?.ContainerDefinitions.find(
+        (container: { Name: string }) => container.Name === 'agent-server',
+      );
+
+      expect(agentServer?.Image).toEqual({
+        'Fn::Join': [
+          '',
+          [
+            '123456789012.dkr.ecr.us-west-2.',
+            { Ref: 'AWS::URLSuffix' },
+            '/sandbox-images:agent-soci',
+          ],
+        ],
+      });
+
+      const policies = template.findResources('AWS::IAM::Policy');
+      const roles = template.findResources('AWS::IAM::Role');
+      const executionRole = Object.values(roles).find(
+        (resource) =>
+          resource.Properties?.Description ===
+          'Execution role for sandbox Fargate tasks (image pull, logs)',
+      );
+      const executionRolePolicy = Object.values(policies).find((resource) =>
+        JSON.stringify(resource.Properties?.Roles).includes('SandboxExecutionRole'),
+      );
+      const statements = executionRolePolicy?.Properties?.PolicyDocument.Statement;
+      const repositoryPullStatement = statements?.find((statement: { Action: string[] }) =>
+        Array.isArray(statement.Action) && statement.Action.includes('ecr:BatchGetImage'),
+      );
+      const authorizationStatement = statements?.find(
+        (statement: { Action: string }) => statement.Action === 'ecr:GetAuthorizationToken',
+      );
+
+      expect(repositoryPullStatement?.Action).toEqual(expect.arrayContaining([
+        'ecr:BatchCheckLayerAvailability',
+        'ecr:BatchGetImage',
+        'ecr:GetDownloadUrlForLayer',
+      ]));
+      expect(repositoryPullStatement?.Resource).toEqual({
+        'Fn::Join': [
+          '',
+          [
+            'arn:',
+            { Ref: 'AWS::Partition' },
+            ':ecr:us-west-2:123456789012:repository/sandbox-images',
+          ],
+        ],
+      });
+      expect(executionRole?.Properties?.ManagedPolicyArns).toBeUndefined();
+      expect(authorizationStatement).toEqual(expect.objectContaining({
+        Effect: 'Allow',
+        Resource: '*',
+      }));
+    });
+
+    test.each([
+      [
+        'untagged image',
+        '123456789012.dkr.ecr.us-west-2.amazonaws.com/sandbox-images',
+      ],
+      [
+        'digest reference',
+        '123456789012.dkr.ecr.us-west-2.amazonaws.com/sandbox-images@sha256:abc123',
+      ],
+      ['public registry', 'public.ecr.aws/example/sandbox-images:agent-soci'],
+      [
+        'malformed account',
+        '1234.dkr.ecr.us-west-2.amazonaws.com/sandbox-images:agent-soci',
+      ],
+      [
+        'invalid repository name',
+        '123456789012.dkr.ecr.us-west-2.amazonaws.com/SandboxImages:agent-soci',
+      ],
+      [
+        'one-character repository name',
+        '123456789012.dkr.ecr.us-west-2.amazonaws.com/a:agent-soci',
+      ],
+      [
+        'overlong repository name',
+        `123456789012.dkr.ecr.us-west-2.amazonaws.com/${'a'.repeat(257)}:agent-soci`,
+      ],
+      [
+        'invalid region',
+        '123456789012.dkr.ecr.not-a-region.amazonaws.com/sandbox-images:agent-soci',
+      ],
+      [
+        'invalid tag',
+        '123456789012.dkr.ecr.us-west-2.amazonaws.com/sandbox-images:.agent-soci',
+      ],
+    ])('rejects a SOCI %s', (_description, sandboxSociImageUri) => {
+      expect(() => parseEcrImageReference(sandboxSociImageUri)).toThrow(
+        'sandboxSociImageUri must be a tagged private ECR image URI',
+      );
+    });
+
+    test.each([
+      [
+        'another account',
+        '210987654321.dkr.ecr.us-west-2.amazonaws.com/sandbox-images:agent-soci',
+      ],
+      [
+        'another region',
+        '123456789012.dkr.ecr.us-east-1.amazonaws.com/sandbox-images:agent-soci',
+      ],
+    ])('rejects a SOCI image from %s', (_description, sandboxSociImageUri) => {
+      expect(() => new SandboxStack(app, 'TestSandboxInvalidSociLocation', {
+        env: testEnv,
+        config: testConfig,
+        networkOutput: networkStack.output,
+        monitoringOutput: monitoringStack.output,
+        clusterOutput: clusterStack.output,
+        sandboxSociImageUri,
+      })).toThrow(
+        'sandboxSociImageUri must reference ECR in the Sandbox stack account and region',
+      );
     });
 
     test('sandbox task SG has no self-referencing ingress rule', () => {

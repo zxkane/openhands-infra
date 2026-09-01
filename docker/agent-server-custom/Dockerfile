@@ -8,12 +8,20 @@
 
 # Stage 1: Build the binary
 # LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
-ARG LAST_UPDATED=2026-05-31
-FROM python:3.12-slim-bookworm AS builder
+ARG PYTHON_VERSION=3.12.14
+ARG PYTHON_IMAGE_DIGEST=sha256:f2431a8cca8c5c6b04bc1309ab7ce99cc36bda0e1787e88a7fac21d9b450a923
+ARG PYTHON_NODEJS_IMAGE=python3.12-nodejs24
+ARG PYTHON_NODEJS_IMAGE_DIGEST=sha256:fd8aec5fe30255946c256309770c6376bf28342e10fce2a3e44dcd9dbf58492d
+ARG LAST_UPDATED=2026-09-01
+FROM python:${PYTHON_VERSION}-slim-bookworm@${PYTHON_IMAGE_DIGEST} AS builder
 
 # Install build dependencies
 # binutils provides objdump required by PyInstaller on Linux
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG LAST_UPDATED
+RUN echo "Refreshing Debian packages as of ${LAST_UPDATED}" && \
+    apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
     git \
     binutils \
     && rm -rf /var/lib/apt/lists/*
@@ -148,12 +156,16 @@ SPEC
 RUN uv run pyinstaller agent-server-boto3.spec
 
 # Stage 2: Create the runtime image
-FROM nikolaik/python-nodejs:python3.12-nodejs22
+FROM nikolaik/python-nodejs:${PYTHON_NODEJS_IMAGE}@${PYTHON_NODEJS_IMAGE_DIGEST}
 
 # Install runtime dependencies including Chromium for browser tool preloading
 # Note: OpenHands preload service requires Chromium even if enable_browsing=false (bug in OpenHands)
 # Also upgrade all packages to fix CVEs (openssl, libpng, imagemagick, chromium, postgresql, etc.)
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+ARG LAST_UPDATED
+RUN echo "Refreshing Debian packages as of ${LAST_UPDATED}" && \
+    apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
     tmux \
     git \
     curl \
@@ -199,7 +211,7 @@ RUN id -u openhands 2>/dev/null || useradd -m -s /bin/bash openhands
 COPY --from=builder /build/dist/openhands-agent-server /usr/local/bin/openhands-agent-server
 
 # Copy VSCode server from official agent-server image (must track SDK_VERSION above)
-COPY --from=ghcr.io/openhands/agent-server:1.19.1-python /openhands/.openvscode-server /openhands/.openvscode-server
+COPY --from=ghcr.io/openhands/agent-server:1.19.1-python@sha256:c80c8b0108392f7457bd4cf33bb9917fd9e3bc09f45eeb01fb9ac0822468ffe6 /openhands/.openvscode-server /openhands/.openvscode-server
 
 # Set permissions
 RUN chown -R openhands:openhands /openhands && \
