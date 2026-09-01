@@ -2,11 +2,17 @@
 # Routes /runtime/{conversation_id}/{port}/... to sandbox Fargate task IP:port
 # Discovers sandbox IPs via the Sandbox Orchestrator API (Cloud Map DNS)
 # LAST_UPDATED forces CDK to rebuild when bumped (picks up base image security patches)
-ARG LAST_UPDATED=2026-05-31
-FROM openresty/openresty:1.29.2.3-alpine-fat
+ARG OPENRESTY_VERSION=1.29.2.5
+ARG OPENRESTY_IMAGE_DIGEST=sha256:6359d16c2cefedc216861e7092d486bb1ff19548abd1aa71e6dc094c82477aee
+ARG LAST_UPDATED=2026-09-01
+FROM openresty/openresty:${OPENRESTY_VERSION}-alpine-fat@${OPENRESTY_IMAGE_DIGEST}
 
 # Upgrade Alpine packages to pick up latest security patches
-RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
+ARG LAST_UPDATED
+RUN echo "Refreshing Alpine packages as of ${LAST_UPDATED}" && \
+    apk update && \
+    apk upgrade --no-cache && \
+    rm -rf /var/cache/apk/*
 
 # Install lua-resty-http for Orchestrator API communication
 # alpine-fat image includes opm (OpenResty Package Manager)

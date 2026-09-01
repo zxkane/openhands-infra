@@ -19,8 +19,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            services/sandbox-orchestrator/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -42,5 +45,13 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -r requirements-test.txt
 
+      - name: Install sandbox orchestrator dependencies
+        working-directory: services/sandbox-orchestrator
+        run: npm ci
+
       - name: Run all tests
         run: npm run test
+
+      - name: Build and test sandbox orchestrator
+        working-directory: services/sandbox-orchestrator
+        run: npm run build && npm test -- --runInBand
